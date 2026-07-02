@@ -353,6 +353,39 @@ export function EditorToolbar() {
             )}
           </>
         )}
+        {app.selectedField && (
+          <>
+            <Input
+              key={`efname-${app.selectedField.key}`}
+              defaultValue={
+                app.fieldOps[app.selectedField.key]?.newName ??
+                app.selectedField.fieldName
+              }
+              aria-label="Existing field name"
+              placeholder="field name"
+              className="h-7 w-32 px-2 text-xs"
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                app.upsertFieldOp(app.selectedField!, {
+                  newName:
+                    v && v !== app.selectedField!.fieldName ? v : undefined,
+                });
+              }}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 text-xs text-destructive hover:text-destructive"
+              onClick={() => {
+                app.upsertFieldOp(app.selectedField!, { deleted: true });
+                app.setSelectedField(null);
+              }}
+            >
+              Delete field
+            </Button>
+          </>
+        )}
       </div>
 
       <div className="mx-1 h-5 w-px bg-border" />

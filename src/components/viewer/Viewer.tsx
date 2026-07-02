@@ -766,7 +766,10 @@ function PageView({
       className="relative shrink-0 bg-white shadow-shell ring-1 ring-border/60"
       style={{ width: w, height: h, scrollMarginTop: 16 }}
       onPointerDown={() => {
-        if (app.tool === "select") app.setSelected(null);
+        if (app.tool === "select") {
+          app.setSelected(null);
+          app.setSelectedField(null);
+        }
       }}
     >
       {visible && (
@@ -990,16 +993,36 @@ function FormLayer({
   const inputCls =
     "absolute rounded-[2px] border border-blue-400/50 bg-sky-400/10 text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white disabled:opacity-60";
 
+  // Edit mode: existing fields become selectable designer objects.
+  if (app.editMode) {
+    return (
+      <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
+        {fields.map((f) => (
+          <FieldDesigner key={f.key} field={f} pageIndex={pageIndex} scale={scale} />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
       {fields.map((f) => {
+        const opKey = fieldOpKey(f, pageIndex);
+        const op = app.fieldOps[opKey];
+        if (op?.deleted) return null;
+        const rect = op?.newRect ?? {
+          x: f.left,
+          y: f.top,
+          w: f.width,
+          h: f.height,
+        };
         const style: React.CSSProperties = {
-          left: f.left * scale,
-          top: f.top * scale,
-          width: f.width * scale,
-          height: f.height * scale,
+          left: rect.x * scale,
+          top: rect.y * scale,
+          width: rect.w * scale,
+          height: rect.h * scale,
           pointerEvents: "auto",
-          fontSize: Math.min(24, Math.max(9, f.height * scale * 0.55)),
+          fontSize: Math.min(24, Math.max(9, rect.h * scale * 0.55)),
         };
         const current = app.formValues[f.name];
 
@@ -1079,6 +1102,121 @@ function FormLayer({
           />
         );
       })}
+    </div>
+  );
+}
+
+function fieldOpKey(f: FormFieldSpec, pageIndex: number): string {
+  return `${f.name}|${pageIndex}|${Math.round(f.left)},${Math.round(f.top)}`;
+}
+
+/** Selectable/movable/deletable overlay for an EXISTING form field (edit mode). */
+function FieldDesigner({
+  field,
+  pageIndex,
+  scale,
+}: {
+  field: FormFieldSpec;
+  pageIndex: number;
+  scale: number;
+}) {
+  const app = useApp();
+  const key = fieldOpKey(field, pageIndex);
+  const base = {
+    key,
+    fieldName: field.name,
+    pageIndex,
+    origRect: { x: field.left, y: field.top, w: field.width, h: field.height },
+  };
+  const op = app.fieldOps[key];
+  const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  if (op?.deleted) return null;
+
+  const rect = live ?? op?.newRect ?? base.origRect;
+  const isSelected = app.selectedField?.key === key;
+  const displayName = op?.newName ?? field.name;
+
+  const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
+    if (app.tool !== "select") return;
+    e.stopPropagation();
+    e.preventDefault();
+    app.setSelectedField(base);
+    app.setSelected(null);
+    const start = { x: e.clientX, y: e.clientY };
+    const orig = op?.newRect ?? base.origRect;
+    const onMove = (ev: PointerEvent) => {
+      const dx = (ev.clientX - start.x) / scale;
+      const dy = (ev.clientY - start.y) / scale;
+      setLive(
+        mode === "move"
+          ? { ...orig, x: orig.x + dx, y: orig.y + dy }
+          : { ...orig, w: Math.max(10, orig.w + dx), h: Math.max(10, orig.h + dy) },
+      );
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setLive((finalRect) => {
+        if (finalRect) app.upsertFieldOp(base, { newRect: finalRect });
+        return null;
+      });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  // Delete key removes the selected existing field.
+  useEffect(() => {
+    if (!isSelected) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        app.upsertFieldOp(base, { deleted: true });
+        app.setSelectedField(null);
+      }
+      if (e.key === "Escape") app.setSelectedField(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSelected]);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: rect.x * scale,
+        top: rect.y * scale,
+        width: rect.w * scale,
+        height: rect.h * scale,
+        pointerEvents: app.tool === "select" ? "auto" : "none",
+        cursor: app.tool === "select" ? "move" : "default",
+      }}
+      className={cn(
+        isSelected && "ring-2 ring-blue-500 ring-offset-1",
+        !isSelected && app.tool === "select" && "hover:ring-1 hover:ring-blue-400/60",
+      )}
+      onPointerDown={(e) => beginDrag(e, "move")}
+    >
+      <div
+        className={cn(
+          "relative h-full w-full border border-sky-500/70 bg-sky-400/10",
+          field.kind === "radio" ? "rounded-full" : "rounded-[2px]",
+        )}
+      >
+        <span className="absolute -top-[15px] left-0 whitespace-nowrap text-[9px] font-medium leading-none text-sky-600">
+          {displayName}
+          {op?.newName && op.newName !== field.name ? " (renamed)" : ""}
+        </span>
+      </div>
+      {isSelected && (
+        <div
+          className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
+          onPointerDown={(e) => beginDrag(e, "resize")}
+        />
+      )}
     </div>
   );
 }

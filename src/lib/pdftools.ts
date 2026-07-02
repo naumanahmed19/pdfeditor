@@ -13,6 +13,7 @@ import {
 import type {
   Annotation,
   AnnotationMap,
+  ExistingFieldOp,
   FormFieldAnnotation,
   TextAnnotation,
 } from "../types";
@@ -329,6 +330,7 @@ export async function bakeAnnotations(
   bytes: Uint8Array,
   annotations: AnnotationMap,
   formValues?: Record<string, unknown>,
+  fieldOps?: Record<string, ExistingFieldOp>,
 ): Promise<Uint8Array> {
   const doc = await load(bytes);
   const fontCache = new Map<StandardFonts, PDFFont>();
@@ -393,10 +395,70 @@ export async function bakeAnnotations(
 
   if (newFields.length) createFormFields(doc, newFields);
 
+  // Fill values before renames so entered values land in their fields.
   if (formValues && Object.keys(formValues).length) {
     fillFormValues(doc, formValues);
   }
+
+  if (fieldOps && Object.keys(fieldOps).length) applyFieldOps(doc, fieldOps);
+
   return doc.save();
+}
+
+/** Apply move/rename/delete edits to existing AcroForm fields. */
+function applyFieldOps(
+  doc: PDFDocument,
+  fieldOps: Record<string, ExistingFieldOp>,
+) {
+  let form;
+  try {
+    form = doc.getForm();
+  } catch {
+    return;
+  }
+
+  const renamed = new Set<string>();
+  for (const op of Object.values(fieldOps)) {
+    try {
+      const field = form.getField(op.fieldName);
+      if (op.deleted) {
+        form.removeField(field);
+        continue;
+      }
+      if (op.newRect) {
+        const page = doc.getPage(op.pageIndex);
+        const { width: pw, height: ph } = page.getSize();
+        const rotation = page.getRotation().angle;
+        const orig = toPdfRect(op.origRect, pw, ph, rotation);
+        const next = toPdfRect(op.newRect, pw, ph, rotation);
+        // Multi-widget fields (radio groups): move the widget whose current
+        // rect is closest to the original position.
+        const widgets = (field as any).acroField.getWidgets();
+        let best: any = null;
+        let bestDist = Infinity;
+        for (const w of widgets) {
+          const r = w.getRectangle();
+          const dist = Math.hypot(r.x - orig.x, r.y - orig.y);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = w;
+          }
+        }
+        best?.setRectangle({ x: next.x, y: next.y, width: next.w, height: next.h });
+      }
+      if (op.newName && !renamed.has(op.fieldName)) {
+        renamed.add(op.fieldName);
+        (field as any).acroField.setPartialName(op.newName.trim().replace(/[.\s]+/g, "_"));
+      }
+    } catch {
+      /* field vanished or op incompatible — skip */
+    }
+  }
+  try {
+    form.updateFieldAppearances();
+  } catch {
+    /* best-effort */
+  }
 }
 
 interface PlacedField {

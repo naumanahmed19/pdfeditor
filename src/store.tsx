@@ -14,6 +14,7 @@ import type {
   Annotation,
   AnnotationMap,
   AppSettings,
+  ExistingFieldOp,
   FontFamilyKind,
   SavedSignature,
   Screen,
@@ -51,6 +52,8 @@ interface OpenDoc {
   currentPage: number;
   /** AcroForm field values entered by the user, keyed by field name. */
   formValues: Record<string, unknown>;
+  /** Pending move/rename/delete edits to existing AcroForm fields. */
+  fieldOps: Record<string, ExistingFieldOp>;
 }
 
 export interface TabInfo {
@@ -160,6 +163,20 @@ interface AppStore {
   formValues: Record<string, unknown>;
   setFormValue: (name: string, value: unknown) => void;
 
+  /** Pending edits to existing form fields (active tab). */
+  fieldOps: Record<string, ExistingFieldOp>;
+  upsertFieldOp: (
+    base: Pick<ExistingFieldOp, "key" | "fieldName" | "pageIndex" | "origRect">,
+    patch: Partial<ExistingFieldOp>,
+  ) => void;
+  selectedField: Pick<
+    ExistingFieldOp,
+    "key" | "fieldName" | "pageIndex" | "origRect"
+  > | null;
+  setSelectedField: (
+    f: Pick<ExistingFieldOp, "key" | "fieldName" | "pageIndex" | "origRect"> | null,
+  ) => void;
+
   searchQuery: string;
   searchMatches: SearchMatch[];
   activeMatch: number;
@@ -202,7 +219,8 @@ function loadJson<T>(key: string, fallback: T): T {
 function docHasEdits(d: OpenDoc): boolean {
   return (
     Object.values(d.annotations).some((l) => l.length > 0) ||
-    Object.keys(d.formValues).length > 0
+    Object.keys(d.formValues).length > 0 ||
+    Object.keys(d.fieldOps).length > 0
   );
 }
 
@@ -248,6 +266,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [fontItalic, setFontItalic] = useState(false);
 
   const [selected, setSelected] = useState<{ page: number; id: string } | null>(null);
+  const [selectedField, setSelectedField] = useState<Pick<
+    ExistingFieldOp,
+    "key" | "fieldName" | "pageIndex" | "origRect"
+  > | null>(null);
   const [editRequestId, setEditRequestId] = useState<string | null>(null);
   const [pendingStamp, setPendingStamp] = useState<PendingStamp | null>(null);
 
@@ -405,6 +427,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const resetTransient = useCallback(() => {
     setSelected(null);
+    setSelectedField(null);
     setPendingStamp(null);
     setSearchQuery("");
     setSearchMatches([]);
@@ -445,6 +468,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           historyIndex: 0,
           currentPage: 0,
           formValues: {},
+          fieldOps: {},
         };
         setDocs((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
         setActiveTabId(doc.id);
@@ -607,10 +631,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeTabId, updateDoc],
   );
 
+  const upsertFieldOp = useCallback(
+    (
+      base: Pick<ExistingFieldOp, "key" | "fieldName" | "pageIndex" | "origRect">,
+      patch: Partial<ExistingFieldOp>,
+    ) => {
+      if (!activeTabId) return;
+      updateDoc(activeTabId, (d) => {
+        const existing = d.fieldOps[base.key] ?? base;
+        const merged = { ...existing, ...patch };
+        // An op that changes nothing anymore can be dropped.
+        const isNoop = !merged.newRect && !merged.deleted && !merged.newName;
+        const next = { ...d.fieldOps };
+        if (isNoop) delete next[base.key];
+        else next[base.key] = merged as ExistingFieldOp;
+        return { fieldOps: next };
+      });
+    },
+    [activeTabId, updateDoc],
+  );
+
   const bakeToBytes = useCallback(async (): Promise<Uint8Array | null> => {
     if (!active) return null;
     if (!docHasEdits(active)) return active.bytes;
-    return bakeAnnotations(active.bytes, active.annotations, active.formValues);
+    return bakeAnnotations(
+      active.bytes,
+      active.annotations,
+      active.formValues,
+      active.fieldOps,
+    );
   }, [active]);
 
   const applyBytesOp = useCallback(
@@ -620,7 +669,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         let base = active.bytes;
         if (docHasEdits(active)) {
-          base = await bakeAnnotations(active.bytes, active.annotations, active.formValues);
+          base = await bakeAnnotations(
+            active.bytes,
+            active.annotations,
+            active.formValues,
+            active.fieldOps,
+          );
           toast.info("Pending edits were saved into the document first.");
         }
         const nextBytes = await op(base);
@@ -633,6 +687,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           history: [{}],
           historyIndex: 0,
           formValues: {},
+          fieldOps: {},
         });
         setDocVersion((v) => v + 1);
         setSelected(null);
@@ -696,6 +751,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           history: [{}],
           historyIndex: 0,
           formValues: {},
+          fieldOps: {},
         });
         setDocVersion((v) => v + 1);
         setSelected(null);
@@ -879,6 +935,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPendingStamp,
     formValues: active?.formValues ?? {},
     setFormValue,
+    fieldOps: active?.fieldOps ?? {},
+    upsertFieldOp,
+    selectedField,
+    setSelectedField,
     searchQuery,
     searchMatches,
     activeMatch,

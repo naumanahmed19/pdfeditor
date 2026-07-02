@@ -87,6 +87,18 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   optionValue?: string;
 }
 
+/** A pending edit to an EXISTING AcroForm field (move/rename/delete). */
+export interface ExistingFieldOp {
+  key: string;
+  fieldName: string;
+  pageIndex: number;
+  /** Original widget rect in display points (top-left origin, scale 1). */
+  origRect: { x: number; y: number; w: number; h: number };
+  newRect?: { x: number; y: number; w: number; h: number };
+  deleted?: boolean;
+  newName?: string;
+}
+
 export type Annotation =
   | TextAnnotation
   | HighlightAnnotation
