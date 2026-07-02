@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { Info } from "lucide-react";
+import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { PropertiesModal } from "../viewer/PropertiesModal";
@@ -198,6 +199,12 @@ export function TitleBar() {
                 onClick={() => {
                   app.setEditMode(false);
                   app.setScreen("viewer");
+                  const hasNewFields = Object.values(app.annotations)
+                    .flat()
+                    .some((a) => a.kind === "formfield");
+                  if (hasNewFields) {
+                    toast.info("New form fields become fillable after you save the PDF.");
+                  }
                 }}
               >
                 Done

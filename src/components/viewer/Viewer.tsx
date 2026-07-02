@@ -1575,25 +1575,44 @@ function AnnotationItem({
       );
       break;
     case "formfield": {
-      const label =
-        ann.fieldType === "radio"
-          ? `${ann.fieldName} · ${ann.optionValue}`
-          : ann.fieldName;
-      body = (
-        <div className="relative h-full w-full rounded-[3px] border-2 border-dashed border-violet-500/80 bg-violet-500/5">
-          <span className="absolute -top-[15px] left-0 whitespace-nowrap text-[9px] font-medium leading-none text-violet-600">
-            {label}
-          </span>
-          {ann.fieldType === "dropdown" && (
-            <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[9px] text-violet-500">
-              ▾
+      if (app.editMode) {
+        // Designer look while editing: dashed outline + field name.
+        const label =
+          ann.fieldType === "radio"
+            ? `${ann.fieldName} · ${ann.optionValue}`
+            : ann.fieldName;
+        body = (
+          <div className="relative h-full w-full rounded-[3px] border-2 border-dashed border-violet-500/80 bg-violet-500/5">
+            <span className="absolute -top-[15px] left-0 whitespace-nowrap text-[9px] font-medium leading-none text-violet-600">
+              {label}
             </span>
-          )}
-          {ann.fieldType === "radio" && (
-            <span className="absolute inset-1 rounded-full border border-violet-400/60" />
-          )}
-        </div>
-      );
+            {ann.fieldType === "dropdown" && (
+              <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[9px] text-violet-500">
+                ▾
+              </span>
+            )}
+            {ann.fieldType === "radio" && (
+              <span className="absolute inset-1 rounded-full border border-violet-400/60" />
+            )}
+          </div>
+        );
+      } else {
+        // View mode: preview exactly like the fillable field it becomes on save.
+        body = (
+          <div
+            className={cn(
+              "relative h-full w-full border border-blue-400/50 bg-sky-400/10",
+              ann.fieldType === "radio" ? "rounded-full" : "rounded-[2px]",
+            )}
+          >
+            {ann.fieldType === "dropdown" && (
+              <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] text-slate-500">
+                ▾
+              </span>
+            )}
+          </div>
+        );
+      }
       break;
     }
     case "text":
