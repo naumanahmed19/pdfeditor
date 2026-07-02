@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
+import { Select } from "../ui/select";
 import { cn, uid } from "../../lib/utils";
 import { extractAllText } from "../../lib/pdf";
 import { checkConnection, streamChat } from "../../lib/ai";
@@ -24,9 +25,29 @@ interface UiMessage {
   content: string;
 }
 
+const CHAT_KEY = "pdf-workbench-chat";
+
+function loadChat(): UiMessage[] {
+  try {
+    return JSON.parse(localStorage.getItem(CHAT_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
 export function AiPanel() {
   const app = useApp();
-  const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [messages, setMessages] = useState<UiMessage[]>(loadChat);
+  const [models, setModels] = useState<string[]>([]);
+
+  // Persist the conversation across reloads (last 40 messages).
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_KEY, JSON.stringify(messages.slice(-40)));
+    } catch {
+      /* storage full — skip */
+    }
+  }, [messages]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<"unknown" | "ok" | "error">("unknown");
@@ -57,6 +78,7 @@ export function AiPanel() {
     checkConnection(app.settings).then((r) => {
       if (!alive) return;
       setStatus(r.ok ? "ok" : "error");
+      setModels(r.models);
       setStatusDetail(
         r.ok
           ? `${r.models.length} model(s) available`
@@ -212,15 +234,32 @@ export function AiPanel() {
         <span
           title={statusDetail}
           className={cn(
-            "ml-1 h-2 w-2 rounded-full",
+            "ml-1 h-2 w-2 shrink-0 rounded-full",
             status === "ok" && "bg-emerald-500",
             status === "error" && "bg-red-500",
             status === "unknown" && "bg-amber-400",
           )}
         />
-        <span className="max-w-[120px] truncate text-[11px] text-muted-foreground">
-          {app.settings.model}
-        </span>
+        {models.length > 0 ? (
+          <Select
+            value={app.settings.model}
+            onChange={(e) =>
+              app.setSettings({ ...app.settings, model: e.target.value })
+            }
+            aria-label="Model"
+            className="h-6 w-28 border-0 bg-transparent px-1 text-[11px] text-muted-foreground shadow-none"
+          >
+            {[...new Set([...models, app.settings.model])].map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <span className="max-w-[120px] truncate text-[11px] text-muted-foreground">
+            {app.settings.model}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"

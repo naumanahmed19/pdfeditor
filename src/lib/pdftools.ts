@@ -1,5 +1,10 @@
 import {
+  PDFCheckBox,
   PDFDocument,
+  PDFDropdown,
+  PDFOptionList,
+  PDFRadioGroup,
+  PDFTextField,
   StandardFonts,
   degrees,
   rgb,
@@ -77,6 +82,67 @@ export async function insertBlankPage(
   const { width, height } = ref.getSize();
   doc.insertPage(atIndex, [width, height]);
   return doc.save();
+}
+
+export async function duplicatePage(
+  bytes: Uint8Array,
+  pageIndex: number,
+): Promise<Uint8Array> {
+  const doc = await load(bytes);
+  const [copy] = await doc.copyPages(doc, [pageIndex]);
+  doc.insertPage(pageIndex + 1, copy);
+  return doc.save();
+}
+
+/** Insert all pages of another PDF at the given index. */
+export async function insertPdfPages(
+  bytes: Uint8Array,
+  otherBytes: Uint8Array,
+  atIndex: number,
+): Promise<Uint8Array> {
+  const dst = await load(bytes);
+  const src = await load(otherBytes);
+  const pages = await dst.copyPages(src, src.getPageIndices());
+  pages.forEach((p, i) => dst.insertPage(atIndex + i, p));
+  return dst.save();
+}
+
+/** Build a PDF from images (one full-size page per image). */
+export async function imagesToPdfPages(
+  doc: PDFDocument,
+  image: { bytes: Uint8Array; type: string },
+): Promise<void> {
+  const embedded = image.type.includes("png")
+    ? await doc.embedPng(image.bytes)
+    : await doc.embedJpg(image.bytes);
+  const page = doc.addPage([embedded.width, embedded.height]);
+  page.drawImage(embedded, {
+    x: 0,
+    y: 0,
+    width: embedded.width,
+    height: embedded.height,
+  });
+}
+
+export interface MergeInput {
+  bytes: Uint8Array;
+  /** "pdf" or an image mime type. */
+  kind: "pdf" | "image/png" | "image/jpeg";
+}
+
+/** Merge PDFs and images (each image becomes one page) into a single PDF. */
+export async function mergeMixed(inputs: MergeInput[]): Promise<Uint8Array> {
+  const out = await PDFDocument.create();
+  for (const input of inputs) {
+    if (input.kind === "pdf") {
+      const src = await load(input.bytes);
+      const pages = await out.copyPages(src, src.getPageIndices());
+      pages.forEach((p) => out.addPage(p));
+    } else {
+      await imagesToPdfPages(out, { bytes: input.bytes, type: input.kind });
+    }
+  }
+  return out.save();
 }
 
 export async function addWatermark(
@@ -221,10 +287,43 @@ function fetchFontBytes(url: string): Promise<ArrayBuffer> {
   return p;
 }
 
+/** Write user-entered AcroForm values into the document's form fields. */
+function fillFormValues(doc: PDFDocument, formValues: Record<string, unknown>) {
+  let form;
+  try {
+    form = doc.getForm();
+  } catch {
+    return;
+  }
+  for (const [name, value] of Object.entries(formValues)) {
+    try {
+      const field = form.getField(name);
+      if (field instanceof PDFTextField) {
+        field.setText(value == null ? "" : String(value));
+      } else if (field instanceof PDFCheckBox) {
+        if (value) field.check();
+        else field.uncheck();
+      } else if (field instanceof PDFRadioGroup) {
+        if (typeof value === "string" && value) field.select(value);
+      } else if (field instanceof PDFDropdown || field instanceof PDFOptionList) {
+        if (typeof value === "string" && value) field.select(value);
+      }
+    } catch {
+      /* field missing or incompatible — skip */
+    }
+  }
+  try {
+    form.updateFieldAppearances();
+  } catch {
+    /* appearance regeneration is best-effort */
+  }
+}
+
 /** Bake overlay annotations permanently into the PDF. */
 export async function bakeAnnotations(
   bytes: Uint8Array,
   annotations: AnnotationMap,
+  formValues?: Record<string, unknown>,
 ): Promise<Uint8Array> {
   const doc = await load(bytes);
   const fontCache = new Map<StandardFonts, PDFFont>();
@@ -279,6 +378,10 @@ export async function bakeAnnotations(
           : await getFont(StandardFonts.Helvetica);
       await drawAnnotation(doc, page, ann, r, font, rotation);
     }
+  }
+
+  if (formValues && Object.keys(formValues).length) {
+    fillFormValues(doc, formValues);
   }
   return doc.save();
 }

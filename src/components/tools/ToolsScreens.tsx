@@ -4,9 +4,12 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Copy,
   Download,
+  FileImage,
   FilePlus2,
   FolderOpen,
+  Import,
   RotateCcw,
   RotateCw,
   Trash2,
@@ -22,13 +25,23 @@ import {
   addPageNumbers,
   addWatermark,
   deletePages,
+  duplicatePage,
   extractPages,
   insertBlankPage,
-  mergePdfs,
+  insertPdfPages,
+  mergeMixed,
   movePage,
   rotatePage,
+  type MergeInput,
 } from "../../lib/pdftools";
-import { downloadBytes, formatBytes, parsePageRanges } from "../../lib/utils";
+import { renderPageToCanvas } from "../../lib/pdf";
+import {
+  downloadBytes,
+  downloadZip,
+  formatBytes,
+  parsePageRanges,
+} from "../../lib/utils";
+import { cn } from "../../lib/utils";
 
 function ToolShell({
   title,
@@ -62,6 +75,10 @@ function NeedsDocument() {
 
 export function OrganizeScreen() {
   const app = useApp();
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
+  const insertRef = useRef<HTMLInputElement>(null);
+
   if (!app.pdf || !app.docBytes) {
     return (
       <ToolShell title="Organize pages" description="Reorder, rotate, delete and extract pages.">
@@ -69,18 +86,41 @@ export function OrganizeScreen() {
       </ToolShell>
     );
   }
-  const bytes = app.docBytes;
 
   return (
     <ToolShell
       title="Organize pages"
-      description="Reorder, rotate, delete and extract pages. Changes apply to the open document — use Save PDF to download."
+      description="Drag pages to reorder — or use the buttons to rotate, duplicate, delete and insert. Changes apply to the open document."
     >
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
         {Array.from({ length: app.numPages }, (_, i) => (
           <div
             key={`${app.docVersion}-${i}`}
-            className="flex flex-col gap-1.5 rounded-xl border bg-card p-2 shadow-shell"
+            draggable
+            onDragStart={() => setDragFrom(i)}
+            onDragEnd={() => {
+              setDragFrom(null);
+              setDragOver(null);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(i);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragFrom !== null && dragFrom !== i) {
+                void app.applyBytesOp(
+                  (b) => movePage(b, dragFrom, i),
+                  `Moved page ${dragFrom + 1} to position ${i + 1}`,
+                );
+              }
+              setDragFrom(null);
+              setDragOver(null);
+            }}
+            className={cn(
+              "flex cursor-grab flex-col gap-1.5 rounded-xl border bg-card p-2 shadow-shell transition-colors active:cursor-grabbing",
+              dragOver === i && dragFrom !== i && "border-blue-500 ring-1 ring-blue-500/50",
+            )}
           >
             <Thumbnail pdf={app.pdf!} pageIndex={i} width={160} />
             <div className="flex items-center justify-center gap-0.5">
@@ -121,6 +161,17 @@ export function OrganizeScreen() {
                 <FilePlus2 className="h-3.5 w-3.5" />
               </IconBtn>
               <IconBtn
+                title="Duplicate page"
+                onClick={() =>
+                  void app.applyBytesOp(
+                    (b) => duplicatePage(b, i),
+                    `Duplicated page ${i + 1}`,
+                  )
+                }
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </IconBtn>
+              <IconBtn
                 title="Delete page"
                 disabled={app.numPages <= 1}
                 onClick={() =>
@@ -142,10 +193,33 @@ export function OrganizeScreen() {
           </div>
         ))}
       </div>
-      <div className="pt-5">
+      <div className="flex items-center gap-2 pt-5">
         <Button onClick={() => void app.downloadCurrent()} className="gap-2">
           <Download className="h-4 w-4" /> Save PDF
         </Button>
+        <Button
+          variant="outline"
+          className="gap-2"
+          onClick={() => insertRef.current?.click()}
+        >
+          <Import className="h-4 w-4" /> Insert pages from PDF…
+        </Button>
+        <input
+          ref={insertRef}
+          type="file"
+          accept="application/pdf"
+          className="hidden"
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (!f) return;
+            const other = new Uint8Array(await f.arrayBuffer());
+            void app.applyBytesOp(
+              (b) => insertPdfPages(b, other, app.numPages),
+              `Inserted pages from ${f.name}`,
+            );
+          }}
+        />
       </div>
     </ToolShell>
   );
@@ -179,6 +253,7 @@ function IconBtn({
 interface MergeFile {
   name: string;
   bytes: Uint8Array;
+  kind: MergeInput["kind"];
 }
 
 export function MergeScreen() {
@@ -191,7 +266,13 @@ export function MergeScreen() {
     if (!list) return;
     const next: MergeFile[] = [];
     for (const f of Array.from(list)) {
-      next.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+      const kind: MergeInput["kind"] =
+        f.type === "image/png"
+          ? "image/png"
+          : f.type === "image/jpeg"
+            ? "image/jpeg"
+            : "pdf";
+      next.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()), kind });
     }
     setFiles((prev) => [...prev, ...next]);
   };
@@ -207,13 +288,13 @@ export function MergeScreen() {
   };
 
   const doMerge = async (openAfter: boolean) => {
-    if (files.length < 2) {
-      toast.error("Add at least two PDFs to merge");
+    if (files.length < 1 || (files.length < 2 && files[0].kind === "pdf")) {
+      toast.error("Add at least two PDFs, or one or more images");
       return;
     }
     setBusy(true);
     try {
-      const merged = await mergePdfs(files.map((f) => f.bytes));
+      const merged = await mergeMixed(files);
       if (openAfter) {
         await app.openBytes(merged, "merged.pdf");
         toast.success("Merged document opened");
@@ -231,7 +312,7 @@ export function MergeScreen() {
   return (
     <ToolShell
       title="Merge PDFs"
-      description="Combine multiple PDF files into a single document. Drag files in the order you want them."
+      description="Combine PDFs — and PNG/JPG images, each becoming a page — into a single document, in the order listed."
     >
       <div className="flex flex-col gap-2">
         {files.map((f, i) => (
@@ -257,14 +338,14 @@ export function MergeScreen() {
 
       <div className="flex items-center gap-2 pt-4">
         <Button variant="outline" className="gap-2" onClick={() => inputRef.current?.click()}>
-          <FolderOpen className="h-4 w-4" /> Add PDFs
+          <FolderOpen className="h-4 w-4" /> Add PDFs / images
         </Button>
-        <Button disabled={busy || files.length < 2} className="gap-2" onClick={() => void doMerge(false)}>
+        <Button disabled={busy || files.length < 1} className="gap-2" onClick={() => void doMerge(false)}>
           <Download className="h-4 w-4" /> Merge & download
         </Button>
         <Button
           variant="secondary"
-          disabled={busy || files.length < 2}
+          disabled={busy || files.length < 1}
           onClick={() => void doMerge(true)}
         >
           Merge & open here
@@ -273,7 +354,7 @@ export function MergeScreen() {
       <input
         ref={inputRef}
         type="file"
-        accept="application/pdf"
+        accept="application/pdf,image/png,image/jpeg"
         multiple
         className="hidden"
         onChange={(e) => {
@@ -326,13 +407,36 @@ export function SplitScreen() {
   const splitAll = async () => {
     setBusy(true);
     try {
+      const zipFiles: Array<{ name: string; data: Uint8Array }> = [];
       for (let i = 0; i < app.numPages; i++) {
-        const out = await extractPages(bytes, [i]);
-        downloadBytes(out, `${name}-p${i + 1}.pdf`);
-        // Give the browser breathing room between downloads.
-        await new Promise((r) => setTimeout(r, 350));
+        zipFiles.push({
+          name: `${name}-p${i + 1}.pdf`,
+          data: await extractPages(bytes, [i]),
+        });
       }
-      toast.success(`Split into ${app.numPages} files`);
+      await downloadZip(zipFiles, `${name}-pages.zip`);
+      toast.success(`Split into ${app.numPages} files (zip)`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportImages = async () => {
+    setBusy(true);
+    try {
+      const zipFiles: Array<{ name: string; data: Blob }> = [];
+      for (let i = 0; i < app.numPages; i++) {
+        const canvas = document.createElement("canvas");
+        await renderPageToCanvas(app.pdf!, i, canvas, 2);
+        const blob = await new Promise<Blob>((resolve, reject) =>
+          canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("render failed"))), "image/png"),
+        );
+        zipFiles.push({ name: `${name}-p${i + 1}.png`, data: blob });
+      }
+      await downloadZip(zipFiles, `${name}-images.zip`);
+      toast.success(`Exported ${app.numPages} page image(s)`);
+    } catch (err) {
+      toast.error(`Export failed: ${err instanceof Error ? err.message : "error"}`);
     } finally {
       setBusy(false);
     }
@@ -363,10 +467,20 @@ export function SplitScreen() {
       <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
         <p className="pb-1 text-sm font-medium">Split into single pages</p>
         <p className="pb-3 text-xs text-muted-foreground">
-          Downloads one PDF per page ({app.numPages} files).
+          Downloads a zip with one PDF per page ({app.numPages} files).
         </p>
         <Button variant="outline" disabled={busy} onClick={() => void splitAll()}>
-          Split all pages
+          Split all pages (zip)
+        </Button>
+      </div>
+
+      <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
+        <p className="pb-1 text-sm font-medium">Export pages as images</p>
+        <p className="pb-3 text-xs text-muted-foreground">
+          Renders every page as a high-resolution PNG and downloads them as a zip.
+        </p>
+        <Button variant="outline" disabled={busy} className="gap-2" onClick={() => void exportImages()}>
+          <FileImage className="h-4 w-4" /> Export PNGs (zip)
         </Button>
       </div>
     </ToolShell>

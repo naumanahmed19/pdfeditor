@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -23,6 +24,12 @@ import { loadPdf, searchDocument } from "./lib/pdf";
 import { bakeAnnotations } from "./lib/pdftools";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
+import {
+  getStoredDoc,
+  listStoredDocs,
+  markDocClosed,
+  persistDoc,
+} from "./lib/persist";
 
 const SETTINGS_KEY = "pdf-workbench-settings";
 const SIGNATURES_KEY = "pdf-workbench-signatures";
@@ -42,12 +49,21 @@ interface OpenDoc {
   history: AnnotationMap[];
   historyIndex: number;
   currentPage: number;
+  /** AcroForm field values entered by the user, keyed by field name. */
+  formValues: Record<string, unknown>;
 }
 
 export interface TabInfo {
   id: string;
   name: string;
   hasEdits: boolean;
+}
+
+export interface RecentFile {
+  id: string;
+  name: string;
+  lastOpened: number;
+  open: boolean;
 }
 
 interface AppStore {
@@ -70,7 +86,16 @@ interface AppStore {
   docVersion: number;
 
   openFile: (file: File) => Promise<void>;
-  openBytes: (bytes: Uint8Array, name: string) => Promise<void>;
+  openBytes: (bytes: Uint8Array, name: string) => Promise<string | null>;
+  /** Open via the File System Access picker when available (enables save-in-place). */
+  requestOpen: () => Promise<void>;
+  registerFileHandle: (id: string, handle: unknown) => void;
+  /** True when the active tab was opened with a writable file handle. */
+  activeHasHandle: boolean;
+  /** Save in place when a handle exists, otherwise download a copy. */
+  saveCurrent: () => Promise<void>;
+  recentFiles: RecentFile[];
+  openRecent: (id: string) => Promise<void>;
   closeDocument: () => void;
   /** Bake pending annotations, then run a structural pdf-lib op on the bytes. */
   applyBytesOp: (
@@ -131,6 +156,10 @@ interface AppStore {
   pendingStamp: PendingStamp | null;
   setPendingStamp: (s: PendingStamp | null) => void;
 
+  /** AcroForm values of the active tab. */
+  formValues: Record<string, unknown>;
+  setFormValue: (name: string, value: unknown) => void;
+
   searchQuery: string;
   searchMatches: SearchMatch[];
   activeMatch: number;
@@ -171,7 +200,10 @@ function loadJson<T>(key: string, fallback: T): T {
 }
 
 function docHasEdits(d: OpenDoc): boolean {
-  return Object.values(d.annotations).some((l) => l.length > 0);
+  return (
+    Object.values(d.annotations).some((l) => l.length > 0) ||
+    Object.keys(d.formValues).length > 0
+  );
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -379,12 +411,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveMatch(0);
   }, []);
 
-  const openBytes = useCallback(
-    async (bytes: Uint8Array, name: string) => {
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
+  const docHandles = useRef(new Map<string, any>());
+
+  const refreshRecent = useCallback(async () => {
+    const stored = await listStoredDocs();
+    setRecentFiles(
+      stored.map((d) => ({
+        id: d.id,
+        name: d.name,
+        lastOpened: d.lastOpened,
+        open: d.open,
+      })),
+    );
+  }, []);
+
+  const openBytesInternal = useCallback(
+    async (
+      bytes: Uint8Array,
+      name: string,
+      id?: string,
+      persist = true,
+    ): Promise<string | null> => {
       try {
         const pdfDoc = await loadPdf(bytes);
         const doc: OpenDoc = {
-          id: uid(),
+          id: id ?? uid(),
           name,
           bytes,
           pdf: pdfDoc,
@@ -392,19 +444,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
           history: [{}],
           historyIndex: 0,
           currentPage: 0,
+          formValues: {},
         };
-        setDocs((prev) => [...prev, doc]);
+        setDocs((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
         setActiveTabId(doc.id);
         setDocVersion((v) => v + 1);
         resetTransient();
         setScreen("viewer");
+        if (persist) {
+          void persistDoc({
+            id: doc.id,
+            name,
+            bytes,
+            lastOpened: Date.now(),
+            open: true,
+          }).then(refreshRecent);
+        }
+        return doc.id;
       } catch (err) {
-        toast.error(
-          `Could not open PDF: ${err instanceof Error ? err.message : "unknown error"}`,
-        );
+        if ((err as Error)?.message !== "Password required") {
+          toast.error(
+            `Could not open PDF: ${err instanceof Error ? err.message : "unknown error"}`,
+          );
+        }
+        return null;
       }
     },
-    [resetTransient],
+    [resetTransient, refreshRecent],
+  );
+
+  const openBytes = useCallback(
+    (bytes: Uint8Array, name: string) => openBytesInternal(bytes, name),
+    [openBytesInternal],
   );
 
   const openFile = useCallback(
@@ -413,6 +484,74 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await openBytes(buf, file.name);
     },
     [openBytes],
+  );
+
+  const registerFileHandle = useCallback((id: string, handle: unknown) => {
+    docHandles.current.set(id, handle);
+  }, []);
+
+  const requestOpen = useCallback(async () => {
+    const picker = (window as any).showOpenFilePicker;
+    if (!picker) {
+      document.getElementById("global-open-input")?.click();
+      return;
+    }
+    try {
+      const handles = await picker.call(window, {
+        multiple: true,
+        types: [
+          { description: "PDF documents", accept: { "application/pdf": [".pdf"] } },
+        ],
+      });
+      for (const handle of handles) {
+        const file = await handle.getFile();
+        const id = await openBytesInternal(
+          new Uint8Array(await file.arrayBuffer()),
+          file.name,
+        );
+        if (id) docHandles.current.set(id, handle);
+      }
+    } catch {
+      /* user cancelled the picker */
+    }
+  }, [openBytesInternal]);
+
+  // Restore tabs that were open last session; load the recent-files list.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    void (async () => {
+      const stored = await listStoredDocs();
+      const toOpen = stored
+        .filter((d) => d.open)
+        .sort((a, b) => a.lastOpened - b.lastOpened);
+      for (const d of toOpen) {
+        await openBytesInternal(d.bytes, d.name, d.id, true);
+      }
+      await refreshRecent();
+    })();
+  }, [openBytesInternal, refreshRecent]);
+
+  const openRecent = useCallback(
+    async (id: string) => {
+      const existing = docs.find((d) => d.id === id);
+      if (existing) {
+        setActiveTabId(id);
+        setDocVersion((v) => v + 1);
+        resetTransient();
+        setScreen("viewer");
+        return;
+      }
+      const stored = await getStoredDoc(id);
+      if (!stored) {
+        toast.error("File is no longer available");
+        void refreshRecent();
+        return;
+      }
+      await openBytesInternal(stored.bytes, stored.name, stored.id);
+    },
+    [docs, openBytesInternal, resetTransient, refreshRecent],
   );
 
   const switchTab = useCallback(
@@ -448,18 +587,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       setDocVersion((v) => v + 1);
       resetTransient();
+      docHandles.current.delete(id);
+      void markDocClosed(id).then(refreshRecent);
     },
-    [docs, activeTabId, resetTransient],
+    [docs, activeTabId, resetTransient, refreshRecent],
   );
 
   const closeDocument = useCallback(() => {
     if (activeTabId) closeTab(activeTabId);
   }, [activeTabId, closeTab]);
 
+  const setFormValue = useCallback(
+    (name: string, value: unknown) => {
+      if (!activeTabId) return;
+      updateDoc(activeTabId, (d) => ({
+        formValues: { ...d.formValues, [name]: value },
+      }));
+    },
+    [activeTabId, updateDoc],
+  );
+
   const bakeToBytes = useCallback(async (): Promise<Uint8Array | null> => {
     if (!active) return null;
     if (!docHasEdits(active)) return active.bytes;
-    return bakeAnnotations(active.bytes, active.annotations);
+    return bakeAnnotations(active.bytes, active.annotations, active.formValues);
   }, [active]);
 
   const applyBytesOp = useCallback(
@@ -469,7 +620,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         let base = active.bytes;
         if (docHasEdits(active)) {
-          base = await bakeAnnotations(active.bytes, active.annotations);
+          base = await bakeAnnotations(active.bytes, active.annotations, active.formValues);
           toast.info("Pending edits were saved into the document first.");
         }
         const nextBytes = await op(base);
@@ -481,9 +632,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           annotations: {},
           history: [{}],
           historyIndex: 0,
+          formValues: {},
         });
         setDocVersion((v) => v + 1);
         setSelected(null);
+        void persistDoc({
+          id,
+          name: active.name,
+          bytes: nextBytes,
+          lastOpened: Date.now(),
+          open: true,
+        });
         toast.success(label);
       } catch (err) {
         toast.error(
@@ -501,6 +660,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
     downloadBytes(bytes, `${base}-edited.pdf`);
     toast.success("PDF downloaded");
   }, [bakeToBytes, active]);
+
+  /** Save in place via the file handle when available; else download a copy. */
+  const saveCurrent = useCallback(async () => {
+    if (!active) return;
+    const handle = docHandles.current.get(active.id);
+    if (!handle) {
+      await downloadCurrent();
+      return;
+    }
+    try {
+      const baked = await bakeToBytes();
+      if (!baked) return;
+      if (handle.requestPermission) {
+        const perm = await handle.requestPermission({ mode: "readwrite" });
+        if (perm !== "granted") throw new Error("write permission denied");
+      }
+      const writable = await handle.createWritable();
+      await writable.write(baked as unknown as BufferSource);
+      await writable.close();
+      // Sync in-app state to what's now on disk.
+      if (docHasEdits(active)) {
+        const nextPdf = await loadPdf(baked);
+        active.pdf.destroy().catch(() => {});
+        updateDoc(active.id, {
+          bytes: baked,
+          pdf: nextPdf,
+          annotations: {},
+          history: [{}],
+          historyIndex: 0,
+          formValues: {},
+        });
+        setDocVersion((v) => v + 1);
+        setSelected(null);
+      }
+      void persistDoc({
+        id: active.id,
+        name: active.name,
+        bytes: baked,
+        lastOpened: Date.now(),
+        open: true,
+      });
+      toast.success(`Saved to ${active.name}`);
+    } catch (err) {
+      toast.error(
+        `Save failed: ${err instanceof Error ? err.message : "error"} — downloading a copy instead.`,
+      );
+      await downloadCurrent();
+    }
+  }, [active, bakeToBytes, downloadCurrent, updateDoc]);
 
   const printCurrent = useCallback(async () => {
     const bytes = await bakeToBytes();
@@ -613,6 +821,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     docVersion,
     openFile,
     openBytes,
+    requestOpen,
+    registerFileHandle,
+    activeHasHandle: !!(activeTabId && docHandles.current.has(activeTabId)),
+    saveCurrent,
+    recentFiles,
+    openRecent,
     closeDocument,
     applyBytesOp,
     bakeToBytes,
@@ -658,6 +872,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setEditRequestId,
     pendingStamp,
     setPendingStamp,
+    formValues: active?.formValues ?? {},
+    setFormValue,
     searchQuery,
     searchMatches,
     activeMatch,
@@ -674,6 +890,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     signatureModalOpen,
     setSignatureModalOpen,
   };
+
+  // Dev-only hook for driving the app from automated tests.
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      (window as any).__pdfwb = { setScreen, switchTab, setEditMode };
+    }
+  }, [switchTab, setEditMode]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

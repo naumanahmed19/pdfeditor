@@ -77,6 +77,18 @@ export function EditorToolbar() {
             key={t.key}
             title={t.label}
             onClick={() => {
+              // Highlight with an active text selection highlights it directly.
+              if (t.key === "highlight") {
+                const sel = window.getSelection();
+                if (
+                  sel &&
+                  !sel.isCollapsed &&
+                  sel.anchorNode?.parentElement?.closest(".textLayer")
+                ) {
+                  window.dispatchEvent(new CustomEvent("pdfwb:highlight-selection"));
+                  return;
+                }
+              }
               app.setTool(t.key);
               app.setPendingStamp(null);
               if (t.key !== "select") app.setSelected(null);

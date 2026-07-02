@@ -8,11 +8,16 @@ Outreach Workbench shell (same theme, layout and component patterns).
 ## Features
 
 **Reader**
-- Open PDFs via drag & drop or file picker
+- Open PDFs via drag & drop or file picker; multi-document tabs with
+  session restore and a recent-files list (IndexedDB)
+- Password-protected PDFs, clickable links (URLs + internal destinations)
 - Continuous scrolling viewer with lazy page rendering (pdf.js)
 - Selectable text layer, full-document search with highlights & prev/next
-- Page thumbnails, document outline/bookmarks navigation
-- Zoom in/out, fit-width, page jump, print, dark/light theme
+- Page thumbnails, outline navigation, document properties (editable metadata)
+- Zoom, fit-width/fit-page, fullscreen, page jump, print, dark/light theme
+- Keyboard shortcuts: Ctrl+O/F/S/P, +/−, PageUp/PageDown, Home/End
+- **Form filling**: AcroForm text fields, checkboxes, radios and dropdowns,
+  saved into the PDF
 
 **Editor** (annotations are baked into the PDF on save)
 - Edit existing text: click any line with the edit-text tool — it's covered
@@ -29,10 +34,18 @@ Outreach Workbench shell (same theme, layout and component patterns).
 - Correct baking on rotated pages
 
 **Tools**
-- Merge multiple PDFs (with ordering), split into single pages
-- Extract page ranges ("1-3, 5") to a new file or open in place
-- Organize: reorder, rotate, delete, insert blank pages
+- Merge PDFs and PNG/JPG images (each image becomes a page)
+- Split into single pages (zip), extract ranges ("1-3, 5"), export pages
+  as high-res PNGs (zip)
+- Organize: drag-and-drop reorder, rotate, duplicate, delete, insert blank
+  pages or pages from another PDF
 - Watermark (text, opacity, color, diagonal) and page numbering
+
+**Desktop app (Tauri)**
+- `bun tauri build` produces a Windows installer (NSIS `.exe` + `.msi`)
+  in `src-tauri/target/release/bundle/` — requires the Rust toolchain
+- Save-in-place: files opened via the picker (Chromium / desktop app) are
+  saved back to the original file; otherwise an edited copy downloads
 
 **AI assistant** (right-side panel)
 - Chat about the open document (text is extracted and sent as context)

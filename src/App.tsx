@@ -76,7 +76,7 @@ function ContentHeader() {
         <button
           className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           title="Open another PDF"
-          onClick={() => fileRef.current?.click()}
+          onClick={() => void app.requestOpen()}
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -124,7 +124,7 @@ function ContentHeader() {
           <button
             className="-ml-2 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title="Open a PDF"
-            onClick={() => fileRef.current?.click()}
+            onClick={() => void app.requestOpen()}
           >
             <Plus className="h-4 w-4" />
           </button>
@@ -172,7 +172,7 @@ function Shell() {
 
       if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        document.getElementById("global-open-input")?.click();
+        void app.requestOpen();
         return;
       }
       if (mod && e.key.toLowerCase() === "f") {
@@ -184,7 +184,7 @@ function Shell() {
       }
       if (mod && e.key.toLowerCase() === "s" && app.pdf) {
         e.preventDefault();
-        void app.downloadCurrent();
+        void app.saveCurrent();
         return;
       }
       if (mod && e.key.toLowerCase() === "p" && app.pdf) {

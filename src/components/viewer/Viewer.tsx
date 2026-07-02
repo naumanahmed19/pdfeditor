@@ -194,6 +194,71 @@ export function Viewer() {
     }
   }, [dims, effectiveScale, app]);
 
+  // Convert the current text selection into highlight annotations.
+  useEffect(() => {
+    const handler = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return;
+      const pages = Array.from(
+        containerRef.current?.querySelectorAll<HTMLElement>("[data-page-index]") ?? [],
+      );
+      const rects: DOMRect[] = [];
+      for (let i = 0; i < sel.rangeCount; i++) {
+        rects.push(...Array.from(sel.getRangeAt(i).getClientRects()));
+      }
+      // Drop tiny fragments and rects fully contained in another rect.
+      const cleaned = rects.filter(
+        (r, i) =>
+          r.width > 2 &&
+          r.height > 2 &&
+          !rects.some(
+            (o, j) =>
+              j !== i &&
+              o.left <= r.left + 1 &&
+              o.right >= r.right - 1 &&
+              o.top <= r.top + 1 &&
+              o.bottom >= r.bottom - 1 &&
+              (o.width > r.width || o.height > r.height),
+          ),
+      );
+      const groupId = uid();
+      const perPage = new Map<number, Annotation[]>();
+      for (const r of cleaned) {
+        const pageEl = pages.find((p) => {
+          const pr = p.getBoundingClientRect();
+          return (
+            r.left >= pr.left - 1 &&
+            r.right <= pr.right + 1 &&
+            r.top >= pr.top - 1 &&
+            r.bottom <= pr.bottom + 1
+          );
+        });
+        if (!pageEl) continue;
+        const pr = pageEl.getBoundingClientRect();
+        const idx = Number(pageEl.dataset.pageIndex);
+        const list = perPage.get(idx) ?? [];
+        list.push({
+          id: uid(),
+          kind: "highlight",
+          groupId,
+          x: (r.left - pr.left) / effectiveScale,
+          y: (r.top - pr.top) / effectiveScale,
+          w: r.width / effectiveScale,
+          h: r.height / effectiveScale,
+          color: "#facc15",
+        });
+        perPage.set(idx, list);
+      }
+      perPage.forEach((list, page) => app.addAnnotations(page, list));
+      if (perPage.size) {
+        sel.removeAllRanges();
+        toast.success("Selection highlighted");
+      }
+    };
+    window.addEventListener("pdfwb:highlight-selection", handler);
+    return () => window.removeEventListener("pdfwb:highlight-selection", handler);
+  }, [app, effectiveScale]);
+
   // Delete key removes selected annotation
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -205,6 +270,24 @@ export function Viewer() {
       if (inField) return;
       if ((e.key === "Delete" || e.key === "Backspace") && app.selected) {
         app.removeAnnotation(app.selected.page, app.selected.id);
+      }
+      if (
+        app.selected &&
+        app.editMode &&
+        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)
+      ) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const ann = (app.annotations[app.selected.page] ?? []).find(
+          (a) => a.id === app.selected!.id,
+        );
+        if (ann) {
+          app.updateAnnotation(app.selected.page, {
+            ...ann,
+            x: ann.x + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
+            y: ann.y + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0),
+          });
+        }
       }
       if (e.key === "Escape") {
         app.setSelected(null);
@@ -378,11 +461,23 @@ function EmptyState() {
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
+        // Grab file-system handles synchronously (the list is neutered after
+        // the first await) so dropped files support save-in-place.
+        const handlePromises = Array.from(e.dataTransfer.items ?? []).map(
+          (item) => (item as any).getAsFileSystemHandle?.() ?? null,
+        );
+        const files = Array.from(e.dataTransfer.files ?? []);
         void (async () => {
-          for (const f of Array.from(e.dataTransfer.files ?? [])) {
-            if (f.type === "application/pdf" || f.name.endsWith(".pdf")) {
-              await app.openFile(f);
-            }
+          const handles = await Promise.all(handlePromises);
+          for (let i = 0; i < files.length; i++) {
+            const f = files[i];
+            if (f.type !== "application/pdf" && !f.name.endsWith(".pdf")) continue;
+            const id = await app.openBytes(
+              new Uint8Array(await f.arrayBuffer()),
+              f.name,
+            );
+            const h = handles[i];
+            if (id && h?.kind === "file") app.registerFileHandle(id, h);
           }
         })();
       }}
@@ -690,6 +785,7 @@ function PageView({
         onClick={onTextLayerClick}
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
+      <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
     </div>
   );
@@ -794,6 +890,198 @@ function LinkLayer({
 }
 
 /* ------------------------------------------------------------------ */
+
+interface FormFieldSpec {
+  key: string;
+  name: string;
+  kind: "text" | "multiline" | "checkbox" | "radio" | "dropdown";
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  options?: Array<{ value: string; label: string }>;
+  /** Export value of this radio widget. */
+  buttonValue?: string;
+  initial: unknown;
+  readOnly: boolean;
+  maxLen?: number;
+}
+
+/** Renders the PDF's AcroForm fields as fillable inputs. */
+function FormLayer({
+  pdf,
+  pageIndex,
+  scale,
+  visible,
+}: {
+  pdf: PDFDocumentProxy;
+  pageIndex: number;
+  scale: number;
+  visible: boolean;
+}) {
+  const app = useApp();
+  const [fields, setFields] = useState<FormFieldSpec[]>([]);
+
+  useEffect(() => {
+    if (!visible) return;
+    let alive = true;
+    (async () => {
+      try {
+        const page = await pdf.getPage(pageIndex + 1);
+        const annots = await page.getAnnotations();
+        const vp = page.getViewport({ scale: 1 });
+        const out: FormFieldSpec[] = [];
+        for (const a of annots as any[]) {
+          if (a.subtype !== "Widget" || !a.fieldName || a.hidden) continue;
+          const [x1, y1, x2, y2] = vp.convertToViewportRectangle(a.rect);
+          const base = {
+            key: a.id ?? `${a.fieldName}-${out.length}`,
+            name: a.fieldName as string,
+            left: Math.min(x1, x2),
+            top: Math.min(y1, y2),
+            width: Math.abs(x2 - x1),
+            height: Math.abs(y2 - y1),
+            readOnly: !!a.readOnly,
+          };
+          if (a.fieldType === "Tx") {
+            out.push({
+              ...base,
+              kind: a.multiLine ? "multiline" : "text",
+              initial: a.fieldValue ?? "",
+              maxLen: a.maxLen || undefined,
+            });
+          } else if (a.fieldType === "Btn" && a.checkBox) {
+            out.push({
+              ...base,
+              kind: "checkbox",
+              initial: !!a.fieldValue && a.fieldValue !== "Off",
+            });
+          } else if (a.fieldType === "Btn" && a.radioButton) {
+            out.push({
+              ...base,
+              kind: "radio",
+              buttonValue: a.buttonValue ?? "",
+              initial: a.fieldValue ?? "",
+            });
+          } else if (a.fieldType === "Ch") {
+            out.push({
+              ...base,
+              kind: "dropdown",
+              options: (a.options ?? []).map((o: any) => ({
+                value: String(o.exportValue ?? o.displayValue ?? ""),
+                label: String(o.displayValue ?? o.exportValue ?? ""),
+              })),
+              initial: Array.isArray(a.fieldValue) ? a.fieldValue[0] : a.fieldValue ?? "",
+            });
+          }
+        }
+        if (alive) setFields(out);
+      } catch {
+        /* no form */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pdf, pageIndex, visible]);
+
+  if (!fields.length) return null;
+
+  const inputCls =
+    "absolute rounded-[2px] border border-blue-400/50 bg-sky-400/10 text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white disabled:opacity-60";
+
+  return (
+    <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
+      {fields.map((f) => {
+        const style: React.CSSProperties = {
+          left: f.left * scale,
+          top: f.top * scale,
+          width: f.width * scale,
+          height: f.height * scale,
+          pointerEvents: "auto",
+          fontSize: Math.min(24, Math.max(9, f.height * scale * 0.55)),
+        };
+        const current = app.formValues[f.name];
+
+        if (f.kind === "checkbox") {
+          const checked = current !== undefined ? !!current : !!f.initial;
+          return (
+            <input
+              key={f.key}
+              type="checkbox"
+              checked={checked}
+              disabled={f.readOnly}
+              onChange={(e) => app.setFormValue(f.name, e.target.checked)}
+              className={cn(inputCls, "accent-blue-600")}
+              style={style}
+            />
+          );
+        }
+        if (f.kind === "radio") {
+          const groupValue = current !== undefined ? current : f.initial;
+          return (
+            <input
+              key={f.key}
+              type="radio"
+              name={`pdf-radio-${pageIndex}-${f.name}`}
+              checked={groupValue === f.buttonValue}
+              disabled={f.readOnly}
+              onChange={() => app.setFormValue(f.name, f.buttonValue)}
+              className={cn(inputCls, "accent-blue-600")}
+              style={style}
+            />
+          );
+        }
+        if (f.kind === "dropdown") {
+          const value = String(current !== undefined ? current : f.initial ?? "");
+          return (
+            <select
+              key={f.key}
+              value={value}
+              disabled={f.readOnly}
+              onChange={(e) => app.setFormValue(f.name, e.target.value)}
+              className={inputCls}
+              style={style}
+            >
+              <option value="" />
+              {(f.options ?? []).map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          );
+        }
+        const value = String(current !== undefined ? current : f.initial ?? "");
+        if (f.kind === "multiline") {
+          return (
+            <textarea
+              key={f.key}
+              value={value}
+              disabled={f.readOnly}
+              maxLength={f.maxLen}
+              onChange={(e) => app.setFormValue(f.name, e.target.value)}
+              className={cn(inputCls, "resize-none p-1")}
+              style={style}
+            />
+          );
+        }
+        return (
+          <input
+            key={f.key}
+            type="text"
+            value={value}
+            disabled={f.readOnly}
+            maxLength={f.maxLen}
+            onChange={(e) => app.setFormValue(f.name, e.target.value)}
+            className={cn(inputCls, "px-1")}
+            style={style}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 interface DraftShape {
   x0: number;
@@ -1121,6 +1409,10 @@ function AnnotationItem({
       const dy = (ev.clientY - d.startY) / scale;
       if (d.mode === "move") {
         setLive({ ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy });
+      } else if (ann.kind === "image") {
+        // Images keep their aspect ratio while resizing.
+        const w = Math.max(8, d.orig.w + dx);
+        setLive({ ...d.orig, w, h: Math.max(8, w * (d.orig.h / d.orig.w)) });
       } else {
         setLive({
           ...d.orig,

@@ -51,17 +51,33 @@ export function TitleBar() {
         <MenuTrigger className="h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground">
           File
         </MenuTrigger>
-        <MenuContent className="min-w-48">
-          <MenuItem onClick={() => fileRef.current?.click()}>
+        <MenuContent className="min-w-52">
+          <MenuItem onClick={() => void app.requestOpen()}>
             <FolderOpen className="h-4 w-4 text-muted-foreground" />
             Open PDF…
+          </MenuItem>
+          {app.recentFiles.length > 0 && (
+            <>
+              <MenuSeparator />
+              {app.recentFiles.slice(0, 6).map((r) => (
+                <MenuItem key={r.id} onClick={() => void app.openRecent(r.id)}>
+                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{r.name}</span>
+                </MenuItem>
+              ))}
+              <MenuSeparator />
+            </>
+          )}
+          <MenuItem disabled={!app.pdf} onClick={() => void app.saveCurrent()}>
+            <Download className="h-4 w-4 text-muted-foreground" />
+            {app.activeHasHandle ? "Save" : "Save PDF"}
           </MenuItem>
           <MenuItem
             disabled={!app.pdf}
             onClick={() => void app.downloadCurrent()}
           >
             <Download className="h-4 w-4 text-muted-foreground" />
-            Save PDF
+            Download a copy
           </MenuItem>
           <MenuItem disabled={!app.pdf} onClick={() => void app.printCurrent()}>
             <Printer className="h-4 w-4 text-muted-foreground" />
@@ -190,10 +206,10 @@ export function TitleBar() {
                 variant="default"
                 size="sm"
                 className="h-7 gap-1.5"
-                onClick={() => void app.downloadCurrent()}
+                onClick={() => void app.saveCurrent()}
               >
                 <Download className="h-3.5 w-3.5" />
-                Save PDF
+                {app.activeHasHandle ? "Save" : "Save PDF"}
               </Button>
             </>
           ) : (

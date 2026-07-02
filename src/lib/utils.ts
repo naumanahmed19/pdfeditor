@@ -53,6 +53,23 @@ export function hexToRgb01(hex: string): { r: number; g: number; b: number } {
   };
 }
 
+/** Bundle files into a zip and download it (jszip loads lazily). */
+export async function downloadZip(
+  files: Array<{ name: string; data: Uint8Array | Blob }>,
+  zipName: string,
+): Promise<void> {
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+  for (const f of files) zip.file(f.name, f.data);
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = zipName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
