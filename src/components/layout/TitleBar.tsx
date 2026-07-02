@@ -220,18 +220,31 @@ export function TitleBar() {
               </Button>
             </>
           ) : (
-            <Button
-              variant="default"
-              size="sm"
-              className="h-7 gap-1.5"
-              onClick={() => {
-                app.setEditMode(true);
-                app.setScreen("viewer");
-              }}
-            >
-              <SquarePen className="h-3.5 w-3.5" />
-              Edit
-            </Button>
+            <>
+              {app.hasAnnotations && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="h-7 gap-1.5"
+                  onClick={() => void app.saveCurrent()}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {app.activeHasHandle ? "Save" : "Save PDF"}
+                </Button>
+              )}
+              <Button
+                variant={app.hasAnnotations ? "outline" : "default"}
+                size="sm"
+                className="h-7 gap-1.5"
+                onClick={() => {
+                  app.setEditMode(true);
+                  app.setScreen("viewer");
+                }}
+              >
+                <SquarePen className="h-3.5 w-3.5" />
+                Edit
+              </Button>
+            </>
           )}
           <div className="mx-0.5 h-4 w-px bg-sidebar-border" />
         </>

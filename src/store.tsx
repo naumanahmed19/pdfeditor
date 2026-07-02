@@ -661,25 +661,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toast.success("PDF downloaded");
   }, [bakeToBytes, active]);
 
-  /** Save in place via the file handle when available; else download a copy. */
+  /**
+   * Save: write in place via the file handle when available, otherwise
+   * download. Either way the in-app document commits to the baked bytes,
+   * clearing the unsaved-edits state.
+   */
   const saveCurrent = useCallback(async () => {
     if (!active) return;
     const handle = docHandles.current.get(active.id);
-    if (!handle) {
-      await downloadCurrent();
-      return;
-    }
     try {
       const baked = await bakeToBytes();
       if (!baked) return;
-      if (handle.requestPermission) {
-        const perm = await handle.requestPermission({ mode: "readwrite" });
-        if (perm !== "granted") throw new Error("write permission denied");
+      if (handle) {
+        if (handle.requestPermission) {
+          const perm = await handle.requestPermission({ mode: "readwrite" });
+          if (perm !== "granted") throw new Error("write permission denied");
+        }
+        const writable = await handle.createWritable();
+        await writable.write(baked as unknown as BufferSource);
+        await writable.close();
+        toast.success(`Saved to ${active.name}`);
+      } else {
+        downloadBytes(baked, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
+        toast.success("PDF saved (downloaded)");
       }
-      const writable = await handle.createWritable();
-      await writable.write(baked as unknown as BufferSource);
-      await writable.close();
-      // Sync in-app state to what's now on disk.
+      // Commit in-app state to the saved bytes.
       if (docHasEdits(active)) {
         const nextPdf = await loadPdf(baked);
         active.pdf.destroy().catch(() => {});
@@ -701,7 +707,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lastOpened: Date.now(),
         open: true,
       });
-      toast.success(`Saved to ${active.name}`);
     } catch (err) {
       toast.error(
         `Save failed: ${err instanceof Error ? err.message : "error"} — downloading a copy instead.`,
