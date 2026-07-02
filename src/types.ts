@@ -9,7 +9,11 @@ export type ToolKind =
   | "line"
   | "whiteout"
   | "image"
-  | "signature";
+  | "signature"
+  | "formtext"
+  | "formcheckbox"
+  | "formdropdown"
+  | "formradio";
 
 export interface BaseAnnotation {
   id: string;
@@ -72,13 +76,25 @@ export interface ImageAnnotation extends BaseAnnotation {
   dataUrl: string;
 }
 
+/** A form field to be CREATED in the PDF when saving (form designer). */
+export interface FormFieldAnnotation extends BaseAnnotation {
+  kind: "formfield";
+  fieldType: "text" | "checkbox" | "dropdown" | "radio";
+  fieldName: string;
+  /** Dropdown choices. */
+  options?: string[];
+  /** Radio widget export value; widgets sharing a fieldName form one group. */
+  optionValue?: string;
+}
+
 export type Annotation =
   | TextAnnotation
   | HighlightAnnotation
   | WhiteoutAnnotation
   | ShapeAnnotation
   | InkAnnotation
-  | ImageAnnotation;
+  | ImageAnnotation
+  | FormFieldAnnotation;
 
 /** Annotations keyed by 0-based page index. */
 export type AnnotationMap = Record<number, Annotation[]>;

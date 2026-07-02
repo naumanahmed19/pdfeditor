@@ -1106,9 +1106,18 @@ function AnnotationLayer({
   const drawing = useRef(false);
 
   const anns = app.annotations[pageIndex] ?? [];
-  const drawingTool = ["highlight", "rect", "ellipse", "line", "whiteout", "ink"].includes(
-    app.tool,
-  );
+  const drawingTool = [
+    "highlight",
+    "rect",
+    "ellipse",
+    "line",
+    "whiteout",
+    "ink",
+    "formtext",
+    "formcheckbox",
+    "formdropdown",
+    "formradio",
+  ].includes(app.tool);
 
   const toLocal = (e: React.PointerEvent): { x: number; y: number } => {
     const rect = layerRef.current!.getBoundingClientRect();
@@ -1227,6 +1236,47 @@ function AnnotationLayer({
       const y = Math.min(draft.y0, draft.y1);
       const w = Math.abs(draft.x1 - draft.x0);
       const h = Math.abs(draft.y1 - draft.y0);
+
+      // Form-field tools: click places a default-sized field, drag sizes it.
+      if (app.tool.startsWith("form")) {
+        const fieldType =
+          app.tool === "formtext"
+            ? "text"
+            : app.tool === "formcheckbox"
+              ? "checkbox"
+              : app.tool === "formdropdown"
+                ? "dropdown"
+                : "radio";
+        const small = fieldType === "checkbox" || fieldType === "radio";
+        const def = small ? { w: 16, h: 16 } : { w: 150, h: 24 };
+        const count =
+          Object.values(app.annotations)
+            .flat()
+            .filter((a) => a.kind === "formfield").length + 1;
+        const ann: Annotation = {
+          id: uid(),
+          kind: "formfield",
+          fieldType,
+          x: draft.x0,
+          y: draft.y0,
+          w: w > 8 ? w : def.w,
+          h: h > 8 ? h : def.h,
+          fieldName:
+            fieldType === "radio"
+              ? "choice_1"
+              : `${fieldType === "text" ? "text" : fieldType === "checkbox" ? "check" : "select"}_${count}`,
+          options: fieldType === "dropdown" ? ["Option 1", "Option 2"] : undefined,
+          optionValue: fieldType === "radio" ? `option${count}` : undefined,
+        };
+        app.addAnnotation(pageIndex, ann);
+        app.setSelected({ page: pageIndex, id: ann.id });
+        // Radio/checkbox stay armed for placing several in a row.
+        if (!small) app.setTool("select");
+        setDraft(null);
+        setInkPoints([]);
+        return;
+      }
+
       if (w > 3 && h > 3) {
         const base = { id: uid(), x, y, w, h };
         if (app.tool === "highlight") {
@@ -1524,6 +1574,28 @@ function AnnotationItem({
         />
       );
       break;
+    case "formfield": {
+      const label =
+        ann.fieldType === "radio"
+          ? `${ann.fieldName} · ${ann.optionValue}`
+          : ann.fieldName;
+      body = (
+        <div className="relative h-full w-full rounded-[3px] border-2 border-dashed border-violet-500/80 bg-violet-500/5">
+          <span className="absolute -top-[15px] left-0 whitespace-nowrap text-[9px] font-medium leading-none text-violet-600">
+            {label}
+          </span>
+          {ann.fieldType === "dropdown" && (
+            <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[9px] text-violet-500">
+              ▾
+            </span>
+          )}
+          {ann.fieldType === "radio" && (
+            <span className="absolute inset-1 rounded-full border border-violet-400/60" />
+          )}
+        </div>
+      );
+      break;
+    }
     case "text":
       body = editing ? (
         <textarea

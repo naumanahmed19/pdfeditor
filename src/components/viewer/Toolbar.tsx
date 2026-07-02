@@ -2,25 +2,36 @@ import { useRef } from "react";
 import {
   Bold,
   Circle,
+  CircleDot,
   Eraser,
+  FormInput,
   Highlighter,
   Image as ImageIcon,
   Italic,
+  List,
   Minus,
   MousePointer2,
   PenLine,
   Pencil,
   Redo2,
   Square,
+  SquareCheck,
   TextCursorInput,
   Type,
   Undo2,
 } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Select } from "../ui/select";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { cn } from "../../lib/utils";
-import type { FontFamilyKind, TextAnnotation, ToolKind } from "../../types";
+import type {
+  FontFamilyKind,
+  FormFieldAnnotation,
+  TextAnnotation,
+  ToolKind,
+} from "../../types";
 
 const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   { key: "select", icon: MousePointer2, label: "Select / move (text selection)" },
@@ -55,6 +66,23 @@ export function EditorToolbar() {
         ...selectedText,
         ...patch,
       } as TextAnnotation);
+    }
+  };
+
+  const selectedFormField = (() => {
+    if (!app.selected) return null;
+    const ann = (app.annotations[app.selected.page] ?? []).find(
+      (a) => a.id === app.selected!.id,
+    );
+    return ann && ann.kind === "formfield" ? ann : null;
+  })();
+
+  const patchSelectedFormField = (patch: Partial<FormFieldAnnotation>) => {
+    if (selectedFormField && app.selected) {
+      app.updateAnnotation(app.selected.page, {
+        ...selectedFormField,
+        ...patch,
+      } as FormFieldAnnotation);
     }
   };
 
@@ -110,6 +138,37 @@ export function EditorToolbar() {
         >
           <ImageIcon className="h-4 w-4" />
         </button>
+        <Menu>
+          <MenuTrigger
+            className={cn(
+              "flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium transition-colors",
+              app.tool.startsWith("form")
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <FormInput className="h-4 w-4" />
+            Field
+          </MenuTrigger>
+          <MenuContent className="min-w-44">
+            <MenuItem onClick={() => app.setTool("formtext")}>
+              <FormInput className="h-4 w-4 text-muted-foreground" />
+              Text field
+            </MenuItem>
+            <MenuItem onClick={() => app.setTool("formcheckbox")}>
+              <SquareCheck className="h-4 w-4 text-muted-foreground" />
+              Checkbox
+            </MenuItem>
+            <MenuItem onClick={() => app.setTool("formradio")}>
+              <CircleDot className="h-4 w-4 text-muted-foreground" />
+              Radio button
+            </MenuItem>
+            <MenuItem onClick={() => app.setTool("formdropdown")}>
+              <List className="h-4 w-4 text-muted-foreground" />
+              Dropdown
+            </MenuItem>
+          </MenuContent>
+        </Menu>
         <button
           title="Insert signature"
           onClick={() => app.setSignatureModalOpen(true)}
@@ -246,6 +305,53 @@ export function EditorToolbar() {
               </option>
             ))}
           </Select>
+        )}
+        {selectedFormField && (
+          <>
+            <Input
+              key={`name-${selectedFormField.id}`}
+              defaultValue={selectedFormField.fieldName}
+              aria-label="Field name"
+              placeholder="field name"
+              className="h-7 w-32 px-2 text-xs"
+              onBlur={(e) =>
+                patchSelectedFormField({
+                  fieldName: e.target.value.trim() || selectedFormField.fieldName,
+                })
+              }
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+            />
+            {selectedFormField.fieldType === "dropdown" && (
+              <Input
+                key={`opts-${selectedFormField.id}`}
+                defaultValue={(selectedFormField.options ?? []).join(", ")}
+                aria-label="Dropdown options"
+                placeholder="options, comma-separated"
+                className="h-7 w-56 px-2 text-xs"
+                onBlur={(e) =>
+                  patchSelectedFormField({
+                    options: e.target.value.split(",").map((o) => o.trim()).filter(Boolean),
+                  })
+                }
+                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              />
+            )}
+            {selectedFormField.fieldType === "radio" && (
+              <Input
+                key={`val-${selectedFormField.id}`}
+                defaultValue={selectedFormField.optionValue ?? ""}
+                aria-label="Radio option value"
+                placeholder="option value"
+                className="h-7 w-28 px-2 text-xs"
+                onBlur={(e) =>
+                  patchSelectedFormField({
+                    optionValue: e.target.value.trim() || selectedFormField.optionValue,
+                  })
+                }
+                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              />
+            )}
+          </>
         )}
       </div>
 

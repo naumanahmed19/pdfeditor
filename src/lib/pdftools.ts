@@ -10,7 +10,12 @@ import {
   rgb,
   type PDFFont,
 } from "pdf-lib";
-import type { Annotation, AnnotationMap, TextAnnotation } from "../types";
+import type {
+  Annotation,
+  AnnotationMap,
+  FormFieldAnnotation,
+  TextAnnotation,
+} from "../types";
 import { hexToRgb01 } from "./utils";
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
@@ -363,6 +368,8 @@ export async function bakeAnnotations(
     return getFont(fontVariantFor(ann));
   };
 
+  const newFields: PlacedField[] = [];
+
   for (const [pageIndexStr, list] of Object.entries(annotations)) {
     const pageIndex = Number(pageIndexStr);
     if (pageIndex < 0 || pageIndex >= doc.getPageCount() || !list.length) continue;
@@ -372,6 +379,10 @@ export async function bakeAnnotations(
 
     for (const ann of list) {
       const r = toPdfRect(ann, pw, ph, rotation);
+      if (ann.kind === "formfield") {
+        newFields.push({ ann, r, pageIndex });
+        continue;
+      }
       const font =
         ann.kind === "text"
           ? await getTextFont(ann)
@@ -380,10 +391,85 @@ export async function bakeAnnotations(
     }
   }
 
+  if (newFields.length) createFormFields(doc, newFields);
+
   if (formValues && Object.keys(formValues).length) {
     fillFormValues(doc, formValues);
   }
   return doc.save();
+}
+
+interface PlacedField {
+  ann: FormFieldAnnotation;
+  r: { x: number; y: number; w: number; h: number };
+  pageIndex: number;
+}
+
+/** Turn form-designer placeholders into real AcroForm fields. */
+function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
+  let form;
+  try {
+    form = doc.getForm();
+  } catch {
+    return;
+  }
+  const used = new Set(form.getFields().map((f) => f.getName()));
+  const uniqueName = (raw: string): string => {
+    let base = raw.trim().replace(/[.\s]+/g, "_") || "field";
+    let name = base;
+    let n = 2;
+    while (used.has(name)) name = `${base}_${n++}`;
+    used.add(name);
+    return name;
+  };
+
+  const radioGroups = new Map<string, ReturnType<typeof form.createRadioGroup>>();
+  const radioCounts = new Map<string, number>();
+  const border = { borderColor: rgb(0.62, 0.68, 0.78), borderWidth: 1 };
+
+  for (const { ann, r, pageIndex } of placed) {
+    const page = doc.getPage(pageIndex);
+    const rect = { x: r.x, y: r.y, width: r.w, height: r.h };
+    try {
+      switch (ann.fieldType) {
+        case "text": {
+          const f = form.createTextField(uniqueName(ann.fieldName));
+          if (ann.h >= 45) f.enableMultiline();
+          f.addToPage(page, { ...rect, ...border });
+          break;
+        }
+        case "checkbox": {
+          const f = form.createCheckBox(uniqueName(ann.fieldName));
+          f.addToPage(page, { ...rect, ...border });
+          break;
+        }
+        case "dropdown": {
+          const f = form.createDropdown(uniqueName(ann.fieldName));
+          f.setOptions((ann.options ?? []).map((o) => o.trim()).filter(Boolean));
+          f.addToPage(page, { ...rect, ...border });
+          break;
+        }
+        case "radio": {
+          // Widgets sharing a field name become one radio group.
+          let group = radioGroups.get(ann.fieldName);
+          if (!group) {
+            group = form.createRadioGroup(uniqueName(ann.fieldName));
+            radioGroups.set(ann.fieldName, group);
+          }
+          const n = (radioCounts.get(ann.fieldName) ?? 0) + 1;
+          radioCounts.set(ann.fieldName, n);
+          group.addOptionToPage(
+            ann.optionValue?.trim() || `option${n}`,
+            page,
+            { ...rect, ...border },
+          );
+          break;
+        }
+      }
+    } catch {
+      /* invalid field spec — skip */
+    }
+  }
 }
 
 async function drawAnnotation(

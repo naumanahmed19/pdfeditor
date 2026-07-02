@@ -894,7 +894,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Dev-only hook for driving the app from automated tests.
   useEffect(() => {
     if (import.meta.env.DEV) {
-      (window as any).__pdfwb = { setScreen, switchTab, setEditMode };
+      (window as any).__pdfwb = { setScreen, switchTab, setEditMode, setTool };
     }
   }, [switchTab, setEditMode]);
 
