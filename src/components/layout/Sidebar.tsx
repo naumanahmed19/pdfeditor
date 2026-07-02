@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, SlidersHorizontal } from "lucide-react";
+import { BookOpen, FileText, History, SlidersHorizontal } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
@@ -8,11 +8,11 @@ import type { OutlineNode, Screen } from "../../types";
 
 export function Sidebar() {
   const app = useApp();
-  const [tab, setTab] = useState<"pages" | "outline">("pages");
+  const [tab, setTab] = useState<"pages" | "outline" | "recent">("pages");
 
   return (
     <aside className="flex w-[288px] shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground">
-      {app.pdf && (
+      {app.pdf ? (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center gap-1 px-3 pt-2">
             <TabButton
@@ -27,15 +27,78 @@ export function Sidebar() {
               icon={<BookOpen className="h-3.5 w-3.5" />}
               label="Outline"
             />
+            <TabButton
+              active={tab === "recent"}
+              onClick={() => setTab("recent")}
+              icon={<History className="h-3.5 w-3.5" />}
+              label="Recent"
+            />
           </div>
           {tab === "pages" ? (
             <ThumbnailList />
-          ) : (
+          ) : tab === "outline" ? (
             <OutlinePanel pdf={app.pdf} />
+          ) : (
+            <RecentList />
           )}
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <p className="flex items-center gap-1.5 px-4 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <History className="h-3.5 w-3.5" /> Recent
+          </p>
+          <RecentList />
         </div>
       )}
     </aside>
+  );
+}
+
+function timeAgo(ts: number): string {
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function RecentList() {
+  const app = useApp();
+
+  if (!app.recentFiles.length) {
+    return (
+      <p className="px-4 py-3 text-xs text-muted-foreground">
+        No recent files yet.
+      </p>
+    );
+  }
+
+  return (
+    <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div className="flex flex-col gap-0.5">
+        {app.recentFiles.map((r) => (
+          <button
+            key={r.id}
+            onClick={() => void app.openRecent(r.id)}
+            title={r.name}
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent"
+          >
+            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">{r.name}</span>
+            {r.open ? (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+                title="Currently open"
+              />
+            ) : (
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {timeAgo(r.lastOpened)}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
