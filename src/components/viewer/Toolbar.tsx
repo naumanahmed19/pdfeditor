@@ -124,11 +124,11 @@ export function EditorToolbar() {
   return (
     <div className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
       {/* tools */}
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
         <ToggleGroup
           value={toolValue}
           onValueChange={handleToolChange}
-          className="gap-0.5"
+          className="bg-transparent p-0"
           aria-label="Annotation tools"
         >
           {TOOLS.map((t) => (
@@ -137,7 +137,6 @@ export function EditorToolbar() {
               value={t.key}
               title={t.label}
               aria-label={t.label}
-              className="h-7 min-w-7 px-0"
             >
               <t.icon className="h-4 w-4" />
             </ToggleGroupItem>
@@ -146,17 +145,17 @@ export function EditorToolbar() {
         <button
           title="Insert image"
           onClick={() => imageRef.current?.click()}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ImageIcon className="h-4 w-4" />
         </button>
         <Menu>
           <MenuTrigger
             className={cn(
-              "flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium transition-colors",
+              "flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium transition-colors",
               app.tool.startsWith("form")
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <FormInput className="h-4 w-4" />
@@ -185,10 +184,10 @@ export function EditorToolbar() {
           title="Insert signature"
           onClick={() => app.setSignatureModalOpen(true)}
           className={cn(
-            "flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium transition-colors",
+            "flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium transition-colors",
             app.pendingStamp
-              ? "bg-accent text-accent-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
           )}
         >
           <PenLine className="h-4 w-4" />
