@@ -904,11 +904,13 @@ function ColorChip({
   label,
   hex,
   disabled,
+  onPreview,
   onPick,
 }: {
   label: string;
   hex: string;
   disabled: boolean;
+  onPreview: (hex: string) => void;
   onPick: (hex: string) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -938,7 +940,10 @@ function ColorChip({
           defaultValue={hex}
           disabled={disabled}
           className="absolute -inset-2 cursor-pointer opacity-0"
-          onInput={(e) => setPreview(e.currentTarget.value)}
+          onInput={(e) => {
+            setPreview(e.currentTarget.value);
+            onPreview(e.currentTarget.value);
+          }}
         />
       </label>
     </div>
@@ -972,6 +977,9 @@ function ObjectLayer({
   const [objects, setObjects] = useState<ScreenObj[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Live color while the picker is open (overlay only — the real recolor is
+  // committed once on picker close to avoid a PDFium reload per input event).
+  const [previewHex, setPreviewHex] = useState<string | null>(null);
   // Live drag state: the moving/resizing box + a ghost image of the content.
   const [drag, setDrag] = useState<null | {
     orig: ScreenObj["rect"];
@@ -1277,6 +1285,20 @@ function ObjectLayer({
         />
       ))}
 
+      {/* Live color preview while the picker is open (shape fills only). */}
+      {previewHex && selObj && selObj.kind === "path" && (
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: selObj.rect.left,
+            top: selObj.rect.top,
+            width: selObj.rect.width,
+            height: selObj.rect.height,
+            backgroundColor: previewHex,
+          }}
+        />
+      )}
+
       {/* Resize handles for a selected image or shape. */}
       {selObj &&
         (selObj.kind === "image" || selObj.kind === "path") &&
@@ -1318,7 +1340,9 @@ function ObjectLayer({
                 label={selObj.kind === "text" ? "Text color" : useFill ? "Fill" : "Stroke"}
                 hex={hex}
                 disabled={busy}
+                onPreview={(h) => setPreviewHex(h)}
                 onPick={(h) => {
+                  setPreviewHex(null);
                   if (h.toLowerCase() === hex.toLowerCase()) return;
                   const rgb: [number, number, number, number] = [
                     parseInt(h.slice(1, 3), 16),
