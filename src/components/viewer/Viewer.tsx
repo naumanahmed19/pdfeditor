@@ -812,9 +812,12 @@ function InlineTextEditor({
   const done = useRef(false);
 
   useEffect(() => {
+    // Clear any text selection the opening click left behind, and focus without
+    // letting the browser scroll the container to the editor (the "jump").
+    window.getSelection()?.removeAllRanges();
     const t = ref.current;
     if (t) {
-      t.focus();
+      t.focus({ preventScroll: true });
       t.select();
     }
   }, []);

@@ -131,6 +131,17 @@ canvas.hiddenCanvasElement {
   background: rgba(59, 130, 246, 0.35);
 }
 
+/* Edit-text is click-to-edit, not select-to-highlight: suppress native text
+   selection so clicking a line doesn't highlight it (and scroll-jump on focus). */
+.textLayer.edit-mode {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.textLayer.edit-mode span {
+  cursor: pointer;
+}
+
 .textLayer.edit-mode span:hover {
   background: rgba(59, 130, 246, 0.18);
   outline: 1.5px dashed rgba(59, 130, 246, 0.7);

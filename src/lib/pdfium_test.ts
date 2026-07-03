@@ -40,6 +40,24 @@ export async function makeEditablePdf(): Promise<Uint8Array> {
   return doc.save();
 }
 
+/** A multi-page text PDF so the viewer scrolls — for testing focus-jump. */
+export async function makeMultiPagePdf(pages = 5): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let p = 0; p < pages; p++) {
+    const page = doc.addPage([420, 600]);
+    for (let i = 0; i < 12; i++) {
+      page.drawText(`Page ${p + 1} line ${i + 1}: editable text here`, {
+        x: 40,
+        y: 560 - i * 40,
+        size: 14,
+        font,
+      });
+    }
+  }
+  return doc.save();
+}
+
 async function extractText(bytes: Uint8Array): Promise<string> {
   GlobalWorkerOptions.workerSrc = workerUrl;
   const pdf = await getDocument({ data: bytes.slice() }).promise;
