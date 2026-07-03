@@ -7,9 +7,11 @@ import {
   useState,
 } from "react";
 import {
+  Bold,
   ChevronLeft,
   ChevronRight,
   FileText,
+  Italic,
   Maximize,
   Minimize,
   Trash2,
@@ -2571,6 +2573,188 @@ function FieldProperties({
   );
 }
 
+const ANN_KIND_LABEL: Record<string, string> = {
+  text: "Text",
+  highlight: "Highlight",
+  whiteout: "Whiteout",
+  rect: "Rectangle",
+  ellipse: "Ellipse",
+  line: "Line",
+  ink: "Drawing",
+  image: "Image",
+};
+
+const ANN_FONTS: Array<{ v: string; label: string }> = [
+  { v: "helvetica", label: "Helvetica" },
+  { v: "times", label: "Times" },
+  { v: "courier", label: "Courier" },
+  { v: "carlito", label: "Carlito" },
+  { v: "caladea", label: "Caladea" },
+];
+
+/**
+ * Contextual properties popover for a selected annotation (everything except
+ * form fields, which have their own richer panel). Shows the controls relevant
+ * to the kind — color, fill, stroke width, font — plus delete.
+ */
+function AnnotationProperties({
+  ann,
+  onPatch,
+  onDelete,
+}: {
+  ann: Annotation;
+  onPatch: (p: Partial<Annotation>) => void;
+  onDelete: () => void;
+}) {
+  const a = ann as any;
+  const k = ann.kind;
+  const isShape = k === "rect" || k === "ellipse" || k === "line";
+  const isFillable = k === "rect" || k === "ellipse";
+  const hasStroke = isShape || k === "ink";
+  const isText = k === "text";
+  const hasColor =
+    isText || isShape || k === "ink" || k === "highlight" || k === "whiteout";
+  const colorLabel = k === "highlight"
+    ? "Color"
+    : k === "whiteout"
+      ? "Patch"
+      : isShape || k === "ink"
+        ? "Stroke"
+        : "Color";
+  const lbl = "flex items-center gap-1 text-[10px] font-medium text-muted-foreground";
+  const swatch = "h-6 w-6 cursor-pointer rounded border border-input bg-background p-0.5";
+
+  return (
+    <>
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {ANN_KIND_LABEL[k] ?? k}
+      </span>
+
+      {hasColor && (
+        <label className={lbl}>
+          {colorLabel}
+          <input
+            type="color"
+            value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
+            onChange={(e) => onPatch({ color: e.target.value } as Partial<Annotation>)}
+            className={swatch}
+          />
+        </label>
+      )}
+
+      {isFillable && (
+        <label className={lbl}>
+          Fill
+          {a.fill ? (
+            <>
+              <input
+                type="color"
+                value={a.fill}
+                onChange={(e) => onPatch({ fill: e.target.value } as Partial<Annotation>)}
+                className={swatch}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-1.5 text-[10px]"
+                onClick={() => onPatch({ fill: undefined } as Partial<Annotation>)}
+              >
+                None
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-1.5 text-[10px]"
+              onClick={() => onPatch({ fill: "#3b82f6" } as Partial<Annotation>)}
+            >
+              Add
+            </Button>
+          )}
+        </label>
+      )}
+
+      {hasStroke && (
+        <label className={lbl}>
+          Width
+          <Select
+            className="h-6 w-14 px-1.5 text-xs"
+            value={String(a.strokeWidth ?? 2)}
+            onChange={(e) => onPatch({ strokeWidth: Number(e.target.value) } as Partial<Annotation>)}
+          >
+            {[0, 1, 2, 3, 4, 6, 8].map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </Select>
+        </label>
+      )}
+
+      {isText && (
+        <>
+          <Select
+            className="h-6 w-24 px-1.5 text-xs"
+            value={a.fontFamily ?? "helvetica"}
+            onChange={(e) =>
+              onPatch({ fontFamily: e.target.value, displayFontCss: undefined } as Partial<Annotation>)
+            }
+          >
+            {ANN_FONTS.map((f) => (
+              <option key={f.v} value={f.v}>
+                {f.label}
+              </option>
+            ))}
+          </Select>
+          <Select
+            className="h-6 w-16 px-1.5 text-xs"
+            value={String(a.fontSize)}
+            onChange={(e) => onPatch({ fontSize: Number(e.target.value) } as Partial<Annotation>)}
+          >
+            {[...new Set([10, 12, 14, 16, 18, 22, 28, 36, a.fontSize])]
+              .sort((x, y) => x - y)
+              .map((s) => (
+                <option key={s} value={s}>
+                  {s}pt
+                </option>
+              ))}
+          </Select>
+          <Button
+            variant={a.bold ? "subtle" : "ghost"}
+            size="icon"
+            className="h-6 w-6"
+            title="Bold"
+            onClick={() => onPatch({ bold: !a.bold } as Partial<Annotation>)}
+          >
+            <Bold className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant={a.italic ? "subtle" : "ghost"}
+            size="icon"
+            className="h-6 w-6"
+            title="Italic"
+            onClick={() => onPatch({ italic: !a.italic } as Partial<Annotation>)}
+          >
+            <Italic className="h-3.5 w-3.5" />
+          </Button>
+        </>
+      )}
+
+      <div className="h-4 w-px bg-border" />
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+        title="Delete"
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </Button>
+    </>
+  );
+}
+
 function AnnotationItem({
   ann,
   pageIndex,
@@ -2933,6 +3117,31 @@ function AnnotationItem({
               onPatch={(p) =>
                 app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
               }
+            />
+          </PopoverContent>
+        </Popover>
+      )}
+      {ann.kind !== "formfield" && !ann.locked && (
+        <Popover
+          open={isSelected && !editing}
+          onOpenChange={(o: boolean) => {
+            if (!o) app.setSelected(null);
+          }}
+        >
+          <PopoverContent
+            anchor={wrapRef}
+            side="top"
+            align="start"
+            sideOffset={10}
+            className="flex flex-wrap items-center gap-2 px-2 py-1.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <AnnotationProperties
+              ann={ann}
+              onPatch={(p) =>
+                app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+              }
+              onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
             />
           </PopoverContent>
         </Popover>
