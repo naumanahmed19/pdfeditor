@@ -137,10 +137,10 @@ function RecentRow({ r }: { r: RecentFile }) {
       }}
       title={r.name}
       className={cn(
-        "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+        "flex items-center gap-2 rounded-md border-l-2 px-2 py-1.5 text-left text-xs transition-colors",
         isActive
-          ? "bg-sidebar-accent font-medium text-foreground"
-          : "text-sidebar-foreground hover:bg-sidebar-accent",
+          ? "border-primary bg-sidebar-accent font-medium text-foreground"
+          : "border-transparent text-sidebar-foreground hover:bg-sidebar-accent",
       )}
     >
       <FileText
