@@ -1513,6 +1513,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         runOcrText,
         openBytes,
         setFormValue,
+        addAnnotation,
+        setSelected,
         getPageTextObjects,
         applyTextEdit,
         getPageObjects,

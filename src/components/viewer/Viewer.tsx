@@ -20,7 +20,7 @@ import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { pdfjsLib } from "../../lib/pdf";
 import { toast } from "sonner";
 import { useApp } from "../../store";
-import type { Annotation, TextAnnotation } from "../../types";
+import type { Annotation, FormFieldAnnotation, TextAnnotation } from "../../types";
 import { cn, uid } from "../../lib/utils";
 
 const PAGE_GAP = 24;
@@ -2289,6 +2289,270 @@ function measureTextBox(
   return { w, h: lineCount * a.fontSize * 1.25 + pad * 0.6 };
 }
 
+const FIELD_TYPE_LABEL: Record<FormFieldAnnotation["fieldType"], string> = {
+  text: "Text",
+  checkbox: "Checkbox",
+  dropdown: "Dropdown",
+  radio: "Radio",
+};
+
+const BORDER_STYLES: Array<{ v: NonNullable<FormFieldAnnotation["borderStyle"]>; label: string }> = [
+  { v: "solid", label: "Solid" },
+  { v: "dashed", label: "Dashed" },
+  { v: "beveled", label: "Beveled" },
+  { v: "inset", label: "Inset" },
+  { v: "underline", label: "Underline" },
+];
+
+/**
+ * The form-builder properties panel — anchored beside a selected form field, it
+ * exposes every field property (name, behavior, text, border/background, style,
+ * options) and patches the annotation live. Baked into a real AcroForm field on
+ * save via createFormFields.
+ */
+function FieldProperties({
+  ann,
+  onPatch,
+}: {
+  ann: FormFieldAnnotation;
+  onPatch: (p: Partial<FormFieldAnnotation>) => void;
+}) {
+  const isText = ann.fieldType === "text";
+  const isChoice = ann.fieldType === "dropdown" || ann.fieldType === "radio";
+  const isCheck = ann.fieldType === "checkbox";
+  const input = "h-6 w-full rounded border border-input bg-background px-1.5 text-xs outline-none focus:ring-1 focus:ring-ring";
+  const lbl = "text-[10px] font-medium text-muted-foreground";
+
+  return (
+    <div
+      className="scrollbar-soft absolute left-[calc(100%+10px)] top-0 z-30 max-h-[70vh] w-60 space-y-2 overflow-y-auto rounded-lg border bg-background p-2.5 shadow-xl"
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="text-[11px] font-semibold">{FIELD_TYPE_LABEL[ann.fieldType]} field</div>
+
+      <div>
+        <div className={lbl}>Name</div>
+        <input
+          key={`name-${ann.id}`}
+          className={input}
+          defaultValue={ann.fieldName}
+          onBlur={(e) => onPatch({ fieldName: e.target.value.trim() || ann.fieldName })}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        />
+      </div>
+
+      <div>
+        <div className={lbl}>Tooltip</div>
+        <input
+          key={`tip-${ann.id}`}
+          className={input}
+          defaultValue={ann.tooltip ?? ""}
+          placeholder="shown on hover"
+          onBlur={(e) => onPatch({ tooltip: e.target.value || undefined })}
+        />
+      </div>
+
+      {!isCheck && (
+        <div>
+          <div className={lbl}>{isChoice ? "Default value" : "Default text"}</div>
+          <input
+            key={`def-${ann.id}`}
+            className={input}
+            defaultValue={ann.defaultValue ?? ""}
+            onBlur={(e) => onPatch({ defaultValue: e.target.value || undefined })}
+          />
+        </div>
+      )}
+
+      <div className="flex gap-3">
+        <label className="flex items-center gap-1 text-[11px]">
+          <input
+            type="checkbox"
+            checked={!!ann.required}
+            onChange={(e) => onPatch({ required: e.target.checked })}
+          />
+          Required
+        </label>
+        <label className="flex items-center gap-1 text-[11px]">
+          <input
+            type="checkbox"
+            checked={!!ann.readOnly}
+            onChange={(e) => onPatch({ readOnly: e.target.checked })}
+          />
+          Read-only
+        </label>
+      </div>
+
+      {isCheck && (
+        <label className="flex items-center gap-1 text-[11px]">
+          <input
+            type="checkbox"
+            checked={ann.defaultValue === "true"}
+            onChange={(e) => onPatch({ defaultValue: e.target.checked ? "true" : undefined })}
+          />
+          Checked by default
+        </label>
+      )}
+
+      {(isText || isChoice) && (
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <div className={lbl}>Font size</div>
+            <select
+              className={input}
+              value={String(ann.fontSize ?? 0)}
+              onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
+            >
+              <option value="0">Auto</option>
+              {[8, 9, 10, 11, 12, 14, 16, 18].map((s) => (
+                <option key={s} value={s}>
+                  {s}pt
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-0.5">
+            {(["left", "center", "right"] as const).map((a) => (
+              <button
+                key={a}
+                title={a}
+                onClick={() => onPatch({ align: a })}
+                className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded border text-[10px] capitalize",
+                  (ann.align ?? "left") === a
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-input text-muted-foreground",
+                )}
+              >
+                {a[0].toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {isText && (
+        <div className="flex items-end gap-2">
+          <label className="flex items-center gap-1 text-[11px]">
+            <input
+              type="checkbox"
+              checked={!!ann.multiline}
+              onChange={(e) => onPatch({ multiline: e.target.checked })}
+            />
+            Multiline
+          </label>
+          <div className="flex-1">
+            <div className={lbl}>Max length</div>
+            <input
+              key={`max-${ann.id}`}
+              type="number"
+              min={0}
+              className={input}
+              defaultValue={ann.maxLength ?? ""}
+              placeholder="∞"
+              onBlur={(e) =>
+                onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
+              }
+            />
+          </div>
+        </div>
+      )}
+
+      {isChoice && (
+        <div>
+          <div className={lbl}>{ann.fieldType === "radio" ? "This option's value" : "Options (one per line)"}</div>
+          {ann.fieldType === "dropdown" ? (
+            <textarea
+              key={`opt-${ann.id}`}
+              className={cn(input, "h-16 resize-none py-1")}
+              defaultValue={(ann.options ?? []).join("\n")}
+              onBlur={(e) =>
+                onPatch({
+                  options: e.target.value.split("\n").map((o) => o.trim()).filter(Boolean),
+                })
+              }
+            />
+          ) : (
+            <input
+              key={`rv-${ann.id}`}
+              className={input}
+              defaultValue={ann.optionValue ?? ""}
+              onBlur={(e) => onPatch({ optionValue: e.target.value || undefined })}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Appearance */}
+      <div className="space-y-1.5 border-t pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className={lbl}>Border</span>
+          <div className="flex items-center gap-1">
+            <input
+              type="color"
+              value={ann.borderColor ?? "#9ca8c8"}
+              onChange={(e) => onPatch({ borderColor: e.target.value })}
+              className="h-5 w-5 rounded border border-input bg-background p-0.5"
+              title="Border color"
+            />
+            <select
+              className="h-6 rounded border border-input bg-background px-1 text-xs"
+              value={String(ann.borderWidth ?? 1)}
+              onChange={(e) => onPatch({ borderWidth: Number(e.target.value) })}
+              title="Border width"
+            >
+              {[0, 1, 2, 3].map((w) => (
+                <option key={w} value={w}>
+                  {w}px
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <select
+          className={input}
+          value={ann.borderStyle ?? "solid"}
+          onChange={(e) => onPatch({ borderStyle: e.target.value as FormFieldAnnotation["borderStyle"] })}
+        >
+          {BORDER_STYLES.map((s) => (
+            <option key={s.v} value={s.v}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <div className="flex items-center justify-between gap-2">
+          <span className={lbl}>Background</span>
+          {ann.backgroundColor ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="color"
+                value={ann.backgroundColor}
+                onChange={(e) => onPatch({ backgroundColor: e.target.value })}
+                className="h-5 w-5 rounded border border-input bg-background p-0.5"
+              />
+              <button
+                onClick={() => onPatch({ backgroundColor: undefined })}
+                className="rounded px-1 text-[10px] text-muted-foreground hover:bg-accent"
+              >
+                None
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => onPatch({ backgroundColor: "#eef2fb" })}
+              className="rounded px-1.5 text-[11px] text-muted-foreground hover:bg-accent"
+            >
+              Add fill
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AnnotationItem({
   ann,
   pageIndex,
@@ -2627,6 +2891,14 @@ function AnnotationItem({
         <div
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
           onPointerDown={(e) => beginDrag(e, "resize")}
+        />
+      )}
+      {isSelected && ann.kind === "formfield" && (
+        <FieldProperties
+          ann={ann}
+          onPatch={(p) =>
+            app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+          }
         />
       )}
     </div>

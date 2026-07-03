@@ -117,6 +117,47 @@ export async function testFormAppearance() {
   };
 }
 
+/** Bake a fully-styled form field and confirm it opens with a real field. */
+export async function testFieldBake() {
+  const doc = await PDFDocument.create();
+  doc.addPage([300, 160]);
+  const bytes = await doc.save();
+  const { bakeAnnotations } = await import("./pdftools");
+  const field: any = {
+    id: "f1",
+    kind: "formfield",
+    fieldType: "text",
+    fieldName: "email",
+    x: 20,
+    y: 40,
+    w: 200,
+    h: 24,
+    required: true,
+    readOnly: false,
+    fontSize: 12,
+    align: "center",
+    maxLength: 40,
+    tooltip: "Your email",
+    defaultValue: "you@example.com",
+    borderColor: "#2563eb",
+    backgroundColor: "#eef2fb",
+    borderWidth: 2,
+    borderStyle: "dashed",
+  };
+  const baked = await bakeAnnotations(bytes, { 0: [field] });
+  // Re-open with pdf-lib and inspect the field.
+  const out = await PDFDocument.load(baked);
+  const form = out.getForm();
+  const f = form.getTextField("email");
+  return {
+    baked: baked.length,
+    fieldNames: form.getFields().map((x) => x.getName()),
+    text: f.getText(),
+    maxLen: f.getMaxLength?.() ?? null,
+    isRequired: f.isRequired(),
+  };
+}
+
 async function extractText(bytes: Uint8Array): Promise<string> {
   GlobalWorkerOptions.workerSrc = workerUrl;
   const pdf = await getDocument({ data: bytes.slice() }).promise;
