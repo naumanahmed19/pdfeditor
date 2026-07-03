@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Combine,
   Download,
@@ -9,6 +10,7 @@ import {
   FileText,
   FolderOpen,
   LayoutGrid,
+  Menu as MenuIcon,
   PanelLeft,
   Printer,
   Scissors,
@@ -27,6 +29,8 @@ import {
   MenuContent,
   MenuItem,
   MenuSeparator,
+  MenuSub,
+  MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
 import { cn } from "../../lib/utils";
@@ -42,6 +46,72 @@ export function TitleBar() {
     e.preventDefault();
     void app.runSearch(query);
   };
+
+  const fileItems = (
+    <>
+      <MenuItem onClick={() => void app.requestOpen()}>
+        <FolderOpen className="h-4 w-4 text-muted-foreground" />
+        Open PDF…
+      </MenuItem>
+      {app.recentFiles.length > 0 && (
+        <>
+          <MenuSeparator />
+          {app.recentFiles.slice(0, 6).map((r) => (
+            <MenuItem key={r.id} onClick={() => void app.openRecent(r.id)}>
+              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">{r.name}</span>
+            </MenuItem>
+          ))}
+          <MenuSeparator />
+        </>
+      )}
+      <MenuItem disabled={!app.pdf} onClick={() => void app.saveCurrent()}>
+        <Download className="h-4 w-4 text-muted-foreground" />
+        {app.activeHasHandle ? "Save" : "Save PDF"}
+      </MenuItem>
+      <MenuItem disabled={!app.pdf} onClick={() => void app.downloadCurrent()}>
+        <Download className="h-4 w-4 text-muted-foreground" />
+        Download a copy
+      </MenuItem>
+      <MenuItem disabled={!app.pdf} onClick={() => void app.printCurrent()}>
+        <Printer className="h-4 w-4 text-muted-foreground" />
+        Print…
+      </MenuItem>
+      <MenuItem disabled={!app.pdf} onClick={() => setPropsOpen(true)}>
+        <Info className="h-4 w-4 text-muted-foreground" />
+        Document properties…
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem disabled={!app.pdf} onClick={() => app.closeDocument()}>
+        <X className="h-4 w-4 text-muted-foreground" />
+        Close document
+      </MenuItem>
+    </>
+  );
+
+  const toolsItems = (
+    <>
+      <MenuItem onClick={() => app.setScreen("organize")}>
+        <LayoutGrid className="h-4 w-4 text-muted-foreground" />
+        Organize pages
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("merge")}>
+        <Combine className="h-4 w-4 text-muted-foreground" />
+        Merge PDFs
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("split")}>
+        <Scissors className="h-4 w-4 text-muted-foreground" />
+        Split & extract
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("watermark")}>
+        <Droplets className="h-4 w-4 text-muted-foreground" />
+        Watermark & numbers
+      </MenuItem>
+    </>
+  );
+
+  const triggerCls =
+    "h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground";
 
   return (
     <header className="relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3">
@@ -59,75 +129,50 @@ export function TitleBar() {
         <PanelLeft className="h-4 w-4" />
       </Button>
 
+      {/* Mobile: one overflow menu nesting File + Tools as submenus */}
       <Menu>
-        <MenuTrigger className="h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground">
-          File
-        </MenuTrigger>
-        <MenuContent className="min-w-52">
-          <MenuItem onClick={() => void app.requestOpen()}>
-            <FolderOpen className="h-4 w-4 text-muted-foreground" />
-            Open PDF…
-          </MenuItem>
-          {app.recentFiles.length > 0 && (
-            <>
-              <MenuSeparator />
-              {app.recentFiles.slice(0, 6).map((r) => (
-                <MenuItem key={r.id} onClick={() => void app.openRecent(r.id)}>
-                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">{r.name}</span>
-                </MenuItem>
-              ))}
-              <MenuSeparator />
-            </>
-          )}
-          <MenuItem disabled={!app.pdf} onClick={() => void app.saveCurrent()}>
-            <Download className="h-4 w-4 text-muted-foreground" />
-            {app.activeHasHandle ? "Save" : "Save PDF"}
-          </MenuItem>
-          <MenuItem
-            disabled={!app.pdf}
-            onClick={() => void app.downloadCurrent()}
-          >
-            <Download className="h-4 w-4 text-muted-foreground" />
-            Download a copy
-          </MenuItem>
-          <MenuItem disabled={!app.pdf} onClick={() => void app.printCurrent()}>
-            <Printer className="h-4 w-4 text-muted-foreground" />
-            Print…
-          </MenuItem>
-          <MenuItem disabled={!app.pdf} onClick={() => setPropsOpen(true)}>
-            <Info className="h-4 w-4 text-muted-foreground" />
-            Document properties…
-          </MenuItem>
-          <MenuSeparator />
-          <MenuItem disabled={!app.pdf} onClick={() => app.closeDocument()}>
-            <X className="h-4 w-4 text-muted-foreground" />
-            Close document
-          </MenuItem>
-        </MenuContent>
-      </Menu>
-      <Menu>
-        <MenuTrigger className="h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground">
-          Tools
+        <MenuTrigger
+          className={cn(triggerCls, "flex h-7 w-7 items-center justify-center px-0 sm:hidden")}
+          aria-label="Menu"
+        >
+          <MenuIcon className="h-4 w-4" />
         </MenuTrigger>
         <MenuContent className="min-w-48">
-          <MenuItem onClick={() => app.setScreen("organize")}>
-            <LayoutGrid className="h-4 w-4 text-muted-foreground" />
-            Organize pages
-          </MenuItem>
-          <MenuItem onClick={() => app.setScreen("merge")}>
-            <Combine className="h-4 w-4 text-muted-foreground" />
-            Merge PDFs
-          </MenuItem>
-          <MenuItem onClick={() => app.setScreen("split")}>
-            <Scissors className="h-4 w-4 text-muted-foreground" />
-            Split & extract
-          </MenuItem>
-          <MenuItem onClick={() => app.setScreen("watermark")}>
-            <Droplets className="h-4 w-4 text-muted-foreground" />
-            Watermark & numbers
-          </MenuItem>
+          <MenuSub>
+            <MenuSubTrigger>
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              <span className="flex-1">File</span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </MenuSubTrigger>
+            <MenuContent side="right" align="start" className="min-w-52">
+              {fileItems}
+            </MenuContent>
+          </MenuSub>
+          <MenuSub>
+            <MenuSubTrigger>
+              <LayoutGrid className="h-4 w-4 text-muted-foreground" />
+              <span className="flex-1">Tools</span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </MenuSubTrigger>
+            <MenuContent side="right" align="start" className="min-w-48">
+              {toolsItems}
+            </MenuContent>
+          </MenuSub>
         </MenuContent>
+      </Menu>
+
+      {/* Desktop: separate File / Tools menus */}
+      <Menu>
+        <MenuTrigger className={cn(triggerCls, "hidden sm:inline-flex")}>
+          File
+        </MenuTrigger>
+        <MenuContent className="min-w-52">{fileItems}</MenuContent>
+      </Menu>
+      <Menu>
+        <MenuTrigger className={cn(triggerCls, "hidden sm:inline-flex")}>
+          Tools
+        </MenuTrigger>
+        <MenuContent className="min-w-48">{toolsItems}</MenuContent>
       </Menu>
       <input
         ref={fileRef}
