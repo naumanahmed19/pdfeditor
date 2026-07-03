@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, FileText, History, SlidersHorizontal } from "lucide-react";
+import { BookOpen, Files, FileText, History } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
@@ -8,7 +8,10 @@ import type { OutlineNode, Screen } from "../../types";
 
 export function Sidebar() {
   const app = useApp();
-  const [tab, setTab] = useState<"pages" | "outline" | "recent">("pages");
+  const [tab, setTab] = useState<"pages" | "outline" | "recent">("recent");
+
+  // Pages/Outline only apply to an open document; fall back to Recent otherwise.
+  const activeTab = app.pdf ? tab : "recent";
 
   return (
     <aside
@@ -20,44 +23,41 @@ export function Sidebar() {
         app.sidebarOpen ? "translate-x-0" : "-translate-x-full",
       )}
     >
-      {app.pdf ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center gap-1 px-3 pt-2">
-            <TabButton
-              active={tab === "pages"}
-              onClick={() => setTab("pages")}
-              icon={<SlidersHorizontal className="h-3.5 w-3.5" />}
-              label="Pages"
-            />
-            <TabButton
-              active={tab === "outline"}
-              onClick={() => setTab("outline")}
-              icon={<BookOpen className="h-3.5 w-3.5" />}
-              label="Outline"
-            />
-            <TabButton
-              active={tab === "recent"}
-              onClick={() => setTab("recent")}
-              icon={<History className="h-3.5 w-3.5" />}
-              label="Recent"
-            />
-          </div>
-          {tab === "pages" ? (
-            <ThumbnailList />
-          ) : tab === "outline" ? (
-            <OutlinePanel pdf={app.pdf} />
-          ) : (
-            <RecentList />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center gap-1 px-3 pt-2">
+          <TabButton
+            active={activeTab === "recent"}
+            onClick={() => setTab("recent")}
+            icon={<History className="h-3.5 w-3.5" />}
+            label="Recent"
+          />
+          {app.pdf && (
+            <>
+              <TabButton
+                active={activeTab === "pages"}
+                onClick={() => setTab("pages")}
+                icon={<Files className="h-4 w-4" />}
+                label="Pages"
+                iconOnly
+              />
+              <TabButton
+                active={activeTab === "outline"}
+                onClick={() => setTab("outline")}
+                icon={<BookOpen className="h-4 w-4" />}
+                label="Outline"
+                iconOnly
+              />
+            </>
           )}
         </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <p className="flex items-center gap-1.5 px-4 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            <History className="h-3.5 w-3.5" /> Recent
-          </p>
+        {app.pdf && activeTab === "pages" ? (
+          <ThumbnailList />
+        ) : app.pdf && activeTab === "outline" ? (
+          <OutlinePanel pdf={app.pdf} />
+        ) : (
           <RecentList />
-        </div>
-      )}
+        )}
+      </div>
     </aside>
   );
 }
@@ -118,24 +118,29 @@ function TabButton({
   onClick,
   icon,
   label,
+  iconOnly,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  iconOnly?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      title={iconOnly ? label : undefined}
+      aria-label={label}
       className={cn(
-        "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+        "flex items-center gap-1.5 rounded-md text-xs font-medium transition-colors",
+        iconOnly ? "h-7 w-7 justify-center" : "px-2.5 py-1",
         active
           ? "bg-background text-foreground shadow-sm"
           : "text-muted-foreground hover:text-foreground",
       )}
     >
       {icon}
-      {label}
+      {!iconOnly && label}
     </button>
   );
 }
