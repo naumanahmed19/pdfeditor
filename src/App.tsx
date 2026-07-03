@@ -80,6 +80,7 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
   const app = useApp();
   const doc = app.docById(pane.docId);
   const isFocused = pane.id === app.activePaneId;
+  const hasEdits = app.tabs.find((t) => t.id === pane.docId)?.hasEdits ?? false;
   if (!doc) return null;
 
   return (
@@ -104,6 +105,12 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
       >
         {doc.name}
       </span>
+      {hasEdits && (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+          title="Unsaved edits"
+        />
+      )}
       {isFocused && app.editMode && (
         <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 sm:inline dark:text-blue-400">
           editing
@@ -260,7 +267,7 @@ function ContentHeader() {
         <span className="truncate text-sm font-medium">{app.docName}</span>
         {app.hasAnnotations && (
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
             title="Unsaved edits"
           />
         )}

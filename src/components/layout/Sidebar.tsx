@@ -217,6 +217,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function RecentRow({ r }: { r: RecentFile }) {
   const app = useApp();
   const isActive = r.id === app.activeTabId;
+  const hasEdits = app.tabs.find((t) => t.id === r.id)?.hasEdits ?? false;
   const open = () => {
     void app.openRecent(r.id);
     if (app.isMobile) app.setSidebarOpen(false);
@@ -250,8 +251,11 @@ function RecentRow({ r }: { r: RecentFile }) {
       {r.open ? (
         <>
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500 group-hover:hidden"
-            title="Currently open"
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full group-hover:hidden",
+              hasEdits ? "bg-amber-500" : "bg-emerald-500",
+            )}
+            title={hasEdits ? "Unsaved edits" : "Currently open"}
           />
           <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
             <button

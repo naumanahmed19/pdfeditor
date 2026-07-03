@@ -1485,6 +1485,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setFolderRoot,
         runOcrText,
         openBytes,
+        setFormValue,
         getPageTextObjects,
         applyTextEdit,
         getPageObjects,
