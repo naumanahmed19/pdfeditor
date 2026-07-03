@@ -2,7 +2,6 @@ import { useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   Combine,
   Download,
@@ -10,13 +9,13 @@ import {
   FileText,
   FolderOpen,
   LayoutGrid,
-  Menu as MenuIcon,
   PanelLeft,
   Printer,
   Scissors,
   Search,
   Settings,
   SquarePen,
+  Wrench,
   X,
 } from "lucide-react";
 import { Info } from "lucide-react";
@@ -29,8 +28,6 @@ import {
   MenuContent,
   MenuItem,
   MenuSeparator,
-  MenuSub,
-  MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
 import { cn } from "../../lib/utils";
@@ -111,7 +108,7 @@ export function TitleBar() {
   );
 
   const triggerCls =
-    "h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground";
+    "inline-flex h-7 items-center justify-center rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground sm:px-2.5";
 
   return (
     <header className="relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3">
@@ -129,48 +126,26 @@ export function TitleBar() {
         <PanelLeft className="h-4 w-4" />
       </Button>
 
-      {/* Mobile: one overflow menu nesting File + Tools as submenus */}
-      <Menu>
-        <MenuTrigger
-          className={cn(triggerCls, "flex h-7 w-7 items-center justify-center px-0 sm:hidden")}
-          aria-label="Menu"
-        >
-          <MenuIcon className="h-4 w-4" />
-        </MenuTrigger>
-        <MenuContent className="min-w-48">
-          <MenuSub>
-            <MenuSubTrigger>
-              <FileText className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1">File</span>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </MenuSubTrigger>
-            <MenuContent side="right" align="start" className="min-w-52">
-              {fileItems}
-            </MenuContent>
-          </MenuSub>
-          <MenuSub>
-            <MenuSubTrigger>
-              <LayoutGrid className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1">Tools</span>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </MenuSubTrigger>
-            <MenuContent side="right" align="start" className="min-w-48">
-              {toolsItems}
-            </MenuContent>
-          </MenuSub>
-        </MenuContent>
-      </Menu>
+      {/* Logo — desktop only */}
+      <div
+        className="hidden items-center gap-2 pl-1 pr-1 text-sm font-semibold lg:flex"
+        title="PDF Workbench"
+      >
+        <FileText className="h-4 w-4 shrink-0" />
+      </div>
 
-      {/* Desktop: separate File / Tools menus */}
+      {/* File / Tools — icon-only on mobile, text on desktop */}
       <Menu>
-        <MenuTrigger className={cn(triggerCls, "hidden sm:inline-flex")}>
-          File
+        <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="File menu">
+          <FolderOpen className="h-4 w-4 sm:hidden" />
+          <span className="hidden sm:inline">File</span>
         </MenuTrigger>
         <MenuContent className="min-w-52">{fileItems}</MenuContent>
       </Menu>
       <Menu>
-        <MenuTrigger className={cn(triggerCls, "hidden sm:inline-flex")}>
-          Tools
+        <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="Tools menu">
+          <Wrench className="h-4 w-4 sm:hidden" />
+          <span className="hidden sm:inline">Tools</span>
         </MenuTrigger>
         <MenuContent className="min-w-48">{toolsItems}</MenuContent>
       </Menu>

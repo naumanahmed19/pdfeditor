@@ -83,32 +83,4 @@ const MenuSeparator = React.forwardRef<
 ));
 MenuSeparator.displayName = "MenuSeparator";
 
-const MenuSub = BaseMenu.SubmenuRoot;
-
-const MenuSubTrigger = React.forwardRef<
-  React.ElementRef<typeof BaseMenu.SubmenuTrigger>,
-  React.ComponentPropsWithoutRef<typeof BaseMenu.SubmenuTrigger>
->(({ className, ...props }, ref) => (
-  <BaseMenu.SubmenuTrigger
-    ref={ref}
-    className={cn(
-      "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none",
-      "data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[popup-open]:bg-accent",
-      className,
-    )}
-    {...props}
-  />
-));
-MenuSubTrigger.displayName = "MenuSubTrigger";
-
-export {
-  Menu,
-  MenuContent,
-  MenuGroup,
-  MenuItem,
-  MenuLabel,
-  MenuSeparator,
-  MenuSub,
-  MenuSubTrigger,
-  MenuTrigger,
-};
+export { Menu, MenuContent, MenuGroup, MenuItem, MenuLabel, MenuSeparator, MenuTrigger };
