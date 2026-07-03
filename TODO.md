@@ -27,6 +27,9 @@ viewer framework — v2.14.x as of mid-2026, near-complete PDFium API surface
 - [ ] Short term: lazy-loaded PDFium rasterization for "Export pages as PNG"
       and as a render-fallback for documents pdf.js draws incorrectly
       (~5 MB WASM, load only on demand)
+- [ ] True redaction via PDFium (their redaction plugin proves it works
+      client-side — destructive content removal pdf-lib can't do); replaces
+      the "true redaction" item below
 - [ ] Long term: benchmark their engine + plugins (selection, search,
       annotations, forms) against our pdf.js stack as a potential migration —
       only worth it if fidelity/perf wins are clear, since edit-text font
@@ -37,7 +40,8 @@ viewer framework — v2.14.x as of mid-2026, near-complete PDFium API surface
 ## Other deferred items
 
 - [ ] OCR for scanned PDFs (tesseract.js) — enables search/edit/AI on scans
-- [ ] True redaction (strip text from content stream, not whiteout)
+- [ ] True redaction (strip text from content stream, not whiteout) — see
+      PDFium evaluation above for the likely implementation path
 - [ ] Sticky notes / comments with popups
 - [ ] Search across text-run boundaries, case/whole-word options
 - [ ] Two-page spread view
