@@ -21,12 +21,10 @@ import type { FolderNode, OutlineNode } from "../../types";
 
 export function Sidebar() {
   const app = useApp();
-  const [tab, setTab] = useState<"pages" | "outline" | "recent" | "files">(
-    "recent",
-  );
+  const [tab, setTab] = useState<"pages" | "outline" | "recent">("recent");
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
-  const activeTab = tab === "files" ? "files" : app.pdf ? tab : "recent";
+  const activeTab = app.pdf ? tab : "recent";
 
   return (
     <aside
@@ -46,37 +44,26 @@ export function Sidebar() {
             icon={<History className="h-3.5 w-3.5" />}
             label="Recent"
           />
-          <div className="ml-auto flex items-center gap-1">
-            <TabButton
-              active={activeTab === "files"}
-              onClick={() => setTab("files")}
-              icon={<Folder className="h-4 w-4" />}
-              label="Folder"
-              iconOnly
-            />
-            {app.pdf && (
-              <>
-                <TabButton
-                  active={activeTab === "pages"}
-                  onClick={() => setTab("pages")}
-                  icon={<Files className="h-4 w-4" />}
-                  label="Pages"
-                  iconOnly
-                />
-                <TabButton
-                  active={activeTab === "outline"}
-                  onClick={() => setTab("outline")}
-                  icon={<BookOpen className="h-4 w-4" />}
-                  label="Outline"
-                  iconOnly
-                />
-              </>
-            )}
-          </div>
+          {app.pdf && (
+            <div className="ml-auto flex items-center gap-1">
+              <TabButton
+                active={activeTab === "pages"}
+                onClick={() => setTab("pages")}
+                icon={<Files className="h-4 w-4" />}
+                label="Pages"
+                iconOnly
+              />
+              <TabButton
+                active={activeTab === "outline"}
+                onClick={() => setTab("outline")}
+                icon={<BookOpen className="h-4 w-4" />}
+                label="Outline"
+                iconOnly
+              />
+            </div>
+          )}
         </div>
-        {activeTab === "files" ? (
-          <FolderPanel />
-        ) : app.pdf && activeTab === "pages" ? (
+        {app.pdf && activeTab === "pages" ? (
           <ThumbnailList />
         ) : app.pdf && activeTab === "outline" ? (
           <OutlinePanel pdf={app.pdf} />
@@ -96,42 +83,74 @@ function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+function collectFileNames(
+  node: FolderNode | null | undefined,
+  set = new Set<string>(),
+): Set<string> {
+  if (!node) return set;
+  if (node.kind === "file") set.add(node.name);
+  node.children?.forEach((c) => collectFileNames(c, set));
+  return set;
+}
+
 function RecentList() {
   const app = useApp();
-  const openDocs = app.recentFiles.filter((r) => r.open);
-  const closedDocs = app.recentFiles.filter((r) => !r.open);
-
-  if (!openDocs.length && !closedDocs.length) {
-    return (
-      <p className="px-4 py-3 text-xs text-muted-foreground">
-        No recent files yet.
-      </p>
-    );
-  }
+  // Files that live in the opened folder tree are shown there, not in the
+  // flat Open/Recently-closed lists.
+  const folderNames = collectFileNames(app.folderRoot);
+  const openDocs = app.recentFiles.filter(
+    (r) => r.open && !folderNames.has(r.name),
+  );
+  const closedDocs = app.recentFiles.filter(
+    (r) => !r.open && !folderNames.has(r.name),
+  );
 
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div className="flex items-center justify-between pb-0.5 pr-0.5">
+        <SectionLabel>Open</SectionLabel>
+        <div className="flex items-center gap-0.5">
+          <button
+            title="Open a PDF"
+            onClick={() => void app.requestOpen()}
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            title="Open a folder of PDFs"
+            onClick={() => void app.openFolder()}
+            disabled={app.folderBusy}
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:opacity-50"
+          >
+            {app.folderBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FolderOpen className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {app.folderRoot && <FolderSection root={app.folderRoot} />}
+
       {openDocs.length > 0 && (
-        <div className="pb-1">
-          <div className="flex items-center justify-between pr-0.5">
-            <SectionLabel>Open</SectionLabel>
-            <button
-              title="Open a PDF"
-              onClick={() => void app.requestOpen()}
-              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            {openDocs.map((r) => (
-              <RecentRow key={r.id} r={r} />
-            ))}
-          </div>
+        <div className="flex flex-col gap-0.5 pb-1">
+          {openDocs.map((r) => (
+            <RecentRow key={r.id} r={r} />
+          ))}
         </div>
       )}
+
+      {!openDocs.length && !app.folderRoot && (
+        <p className="px-2 pb-2 text-[11px] text-muted-foreground">
+          No document open. Use + to open a file or the folder icon to browse a
+          folder.
+        </p>
+      )}
+
       {closedDocs.length > 0 && (
-        <div className={openDocs.length ? "pt-2" : ""}>
+        <div className="pt-2">
           <SectionLabel>Recently closed</SectionLabel>
           <div className="flex flex-col gap-0.5">
             {closedDocs.map((r) => (
@@ -140,6 +159,49 @@ function RecentList() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function FolderSection({ root }: { root: FolderNode }) {
+  const app = useApp();
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="pb-1">
+      <div className="group flex items-center gap-1 rounded-md pr-0.5 hover:bg-sidebar-accent/50">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex min-w-0 flex-1 items-center gap-1 py-1 pl-1 text-left"
+        >
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium" title={root.name}>
+            {root.name}
+          </span>
+        </button>
+        <button
+          onClick={() => void app.openFolder()}
+          title="Open another folder"
+          className="rounded p-0.5 text-muted-foreground opacity-0 transition-colors hover:bg-accent hover:text-foreground group-hover:opacity-100"
+        >
+          <FolderOpen className="h-3 w-3" />
+        </button>
+        <button
+          onClick={() => app.closeFolder()}
+          title="Close folder"
+          className="rounded p-0.5 text-muted-foreground opacity-0 transition-colors hover:bg-accent hover:text-foreground group-hover:opacity-100"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      {open &&
+        (root.children ?? []).map((n) => (
+          <FolderTreeNode key={n.path} node={n} depth={1} />
+        ))}
     </div>
   );
 }
@@ -347,66 +409,9 @@ export function Thumbnail({
   );
 }
 
-function FolderPanel() {
-  const app = useApp();
-
-  if (!app.folderRoot) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-start gap-2 px-4 py-4">
-        <button
-          onClick={() => void app.openFolder()}
-          disabled={app.folderBusy}
-          className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
-        >
-          {app.folderBusy ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <FolderOpen className="h-3.5 w-3.5" />
-          )}
-          Open folder
-        </button>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Browse a folder of PDFs — including nested subfolders — and open any
-          file from the tree.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1.5 px-3 pb-1 pt-1">
-        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium" title={app.folderRoot.name}>
-          {app.folderRoot.name}
-        </span>
-        <button
-          onClick={() => void app.openFolder()}
-          title="Open another folder"
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-        >
-          <FolderOpen className="h-3.5 w-3.5" />
-        </button>
-        <button
-          onClick={() => app.closeFolder()}
-          title="Close folder"
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-1 pb-2">
-        {(app.folderRoot.children ?? []).map((n) => (
-          <FolderTreeNode key={n.path} node={n} depth={0} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
   const app = useApp();
-  const [open, setOpen] = useState(depth < 1);
+  const [open, setOpen] = useState(depth < 2);
   const pad = 6 + depth * 12;
 
   if (node.kind === "dir") {
@@ -433,18 +438,42 @@ function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
     );
   }
 
+  // A folder file that is currently open is highlighted; the active one gets
+  // the accent bar too.
+  const openDoc = app.recentFiles.find((r) => r.open && r.name === node.name);
+  const isActive = !!openDoc && openDoc.id === app.activeTabId;
+
   return (
     <button
       onClick={() => {
-        void app.openTreeFile(node);
+        if (openDoc) app.openRecent(openDoc.id);
+        else void app.openTreeFile(node);
         if (app.isMobile) app.setSidebarOpen(false);
       }}
       title={node.name}
       style={{ paddingLeft: pad + 18 }}
-      className="flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-xs text-sidebar-foreground transition-colors hover:bg-sidebar-accent"
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded-md border-l-2 py-1 pr-2 text-left text-xs transition-colors",
+        isActive
+          ? "border-primary bg-sidebar-accent font-medium text-foreground"
+          : openDoc
+            ? "border-transparent text-foreground hover:bg-sidebar-accent"
+            : "border-transparent text-sidebar-foreground hover:bg-sidebar-accent",
+      )}
     >
-      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <FileText
+        className={cn(
+          "h-3.5 w-3.5 shrink-0",
+          openDoc ? "text-foreground" : "text-muted-foreground",
+        )}
+      />
       <span className="min-w-0 flex-1 truncate">{node.name}</span>
+      {openDoc && (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+          title="Open"
+        />
+      )}
     </button>
   );
 }
