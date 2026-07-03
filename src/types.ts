@@ -1,6 +1,5 @@
 export type ToolKind =
   | "select"
-  | "object"
   | "text"
   | "edittext"
   | "highlight"

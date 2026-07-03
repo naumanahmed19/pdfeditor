@@ -649,8 +649,12 @@ function PageView({
     textLayerReady,
   ]);
 
+  // Text is selectable for reading/copy (select tool outside edit mode) and for
+  // click-to-edit (edittext). In edit mode the Select tool grabs page OBJECTS
+  // instead (via ObjectLayer), so text stays non-selectable there.
   const textSelectable =
-    (app.tool === "select" || app.tool === "edittext") && !app.pendingStamp;
+    ((app.tool === "select" && !app.editMode) || app.tool === "edittext") &&
+    !app.pendingStamp;
 
   // "Edit existing text": clicking a text run maps the click to the real
   // PDFium content-stream text object and opens an inline editor over it. On
@@ -767,8 +771,9 @@ function PageView({
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
-      <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
-      {app.tool === "object" && visible && (
+      {/* Object editing lives on the Select tool (in edit mode). Rendered below
+          the annotation layer so your own annotations stay clickable on top. */}
+      {app.editMode && app.tool === "select" && visible && (
         <ObjectLayer
           pdf={pdf}
           pageIndex={pageIndex}
@@ -776,6 +781,7 @@ function PageView({
           canvasRef={canvasRef}
         />
       )}
+      <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
       {inlineEdit && (
         <InlineTextEditor
           edit={inlineEdit}
@@ -889,10 +895,10 @@ type Corner = "nw" | "ne" | "sw" | "se";
 const HANDLE = 9; // px hit radius for resize handles
 
 /**
- * Object editor: in the "object" tool, click any existing text run or image to
- * select it, drag to move, drag a corner (images) to resize, or press Delete to
- * remove it. Everything commits through PDFium (transformObject/removeObject) —
- * true content-stream edits, on the unified undo timeline.
+ * Object editor (active on the Select tool in edit mode): click any existing
+ * text run or image to select it, drag to move, drag a corner (images) to
+ * resize, or press Delete to remove it. Everything commits through PDFium
+ * (transformObject/removeObject) — true content-stream edits, unified undo.
  */
 function ObjectLayer({
   pdf,
@@ -1188,7 +1194,7 @@ function ObjectLayer({
   return (
     <div
       ref={layerRef}
-      className="absolute inset-0 z-20"
+      className="absolute inset-0"
       style={{ cursor: busy ? "wait" : "default", touchAction: "none" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
