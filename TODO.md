@@ -24,12 +24,18 @@ EmbedPDF (embedpdf.com, MIT) is an actively maintained PDFium-WASM binding +
 viewer framework — v2.14.x as of mid-2026, near-complete PDFium API surface
 (text geometry, annotations, forms). Evaluation plan:
 
-- [ ] Short term: lazy-loaded PDFium rasterization for "Export pages as PNG"
-      and as a render-fallback for documents pdf.js draws incorrectly
-      (~5 MB WASM, load only on demand)
-- [ ] True redaction via PDFium (their redaction plugin proves it works
-      client-side — destructive content removal pdf-lib can't do); replaces
-      the "true redaction" item below
+> **Prototype done** on the `pdfium-experiment` branch — see
+> [PDFIUM_EXPERIMENT.md](PDFIUM_EXPERIMENT.md). Rasterization and true redaction
+> both verified working (`src/lib/pdfium.ts`); not yet wired into the UI.
+
+- [x] Proof-of-concept: lazy-loaded PDFium engine (`getPdfium`), page
+      rasterization (`renderPage`/`renderPageToCanvas`) and destructive
+      redaction (`redactRegions` via `EPDFText_RedactInQuads`), wasm bundled
+      locally, ~4.6 MB loaded on demand only
+- [ ] Wire rasterization into "Export pages as PNG" and an opt-in render
+      fallback for documents pdf.js draws incorrectly
+- [ ] Wire `redactRegions` behind a **Redact tool** (draw rects → confirm →
+      apply → swap doc bytes); replaces the "true redaction" item below
 - [ ] Long term: benchmark their engine + plugins (selection, search,
       annotations, forms) against our pdf.js stack as a potential migration —
       only worth it if fidelity/perf wins are clear, since edit-text font
