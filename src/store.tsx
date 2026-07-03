@@ -40,10 +40,12 @@ import {
   markDocClosed,
   persistDoc,
 } from "./lib/persist";
+import { applyAccent, type AccentId } from "./lib/accents";
 
 const SETTINGS_KEY = "pdf-workbench-settings";
 const SIGNATURES_KEY = "pdf-workbench-signatures";
 const THEME_KEY = "pdf-workbench-theme";
+const ACCENT_KEY = "pdf-workbench-accent";
 
 export interface PendingStamp {
   dataUrl: string;
@@ -94,6 +96,8 @@ export interface RecentFile {
 interface AppStore {
   theme: "light" | "dark";
   toggleTheme: () => void;
+  accent: AccentId;
+  setAccent: (a: AccentId) => void;
 
   screen: Screen;
   setScreen: (s: Screen) => void;
@@ -363,6 +367,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  const [accent, setAccent] = useState<AccentId>(
+    () => (localStorage.getItem(ACCENT_KEY) as AccentId) || "neutral",
+  );
+  useEffect(() => {
+    applyAccent(accent, theme);
+    localStorage.setItem(ACCENT_KEY, accent);
+  }, [accent, theme]);
 
   const [screen, setScreen] = useState<Screen>("viewer");
   const [docs, setDocs] = useState<OpenDoc[]>([]);
@@ -1397,6 +1409,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value: AppStore = {
     theme,
     toggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+    accent,
+    setAccent,
     screen,
     setScreen,
     tabs,

@@ -6,13 +6,14 @@ import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { cn } from "../../lib/utils";
 import { checkConnection, DEFAULT_MODEL } from "../../lib/ai";
+import { ACCENTS } from "../../lib/accents";
 import type { ProviderKind } from "../../types";
 
 const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   {
     value: "browser",
-    label: "Built-in (Gemma)",
-    hint: "Runs in your browser — no setup. Downloads once (~1 GB), needs WebGPU (Chrome/Edge/desktop app).",
+    label: "Built-in (Gemma 4)",
+    hint: "Runs in your browser — no setup. Downloads once (~2 GB), needs WebGPU (Chrome/Edge/desktop app).",
   },
   { value: "ollama", label: "Ollama", hint: "Local models via Ollama (default port 11434)" },
   { value: "lmstudio", label: "LM Studio", hint: "Local models via LM Studio server (default port 1234)" },
@@ -74,6 +75,26 @@ export function SettingsScreen() {
                 >
                   {t}
                 </button>
+              ))}
+            </div>
+          </Row>
+          <Row title="Accent color" description="Primary color used across buttons and highlights.">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {ACCENTS.map((a) => (
+                <button
+                  key={a.id}
+                  title={a.label}
+                  aria-label={a.label}
+                  aria-pressed={app.accent === a.id}
+                  onClick={() => app.setAccent(a.id)}
+                  className={cn(
+                    "h-6 w-6 rounded-full border transition",
+                    app.accent === a.id
+                      ? "ring-2 ring-ring ring-offset-2 ring-offset-card"
+                      : "border-border hover:scale-110",
+                  )}
+                  style={{ backgroundColor: a.swatch }}
+                />
               ))}
             </div>
           </Row>
@@ -142,10 +163,10 @@ export function SettingsScreen() {
           {s.provider === "browser" ? (
             <Row
               title="Model"
-              description="Gemma 3 (1B) runs in your browser via WebGPU. It downloads once (~1 GB) on first use, then works offline — no server or API key."
+              description="Gemma 4 (E2B) runs in your browser via WebGPU (Transformers.js). It downloads once (~2 GB) on first use, then works offline — no server or API key."
             >
               <span className="rounded-md border border-input px-2 py-1 text-xs text-muted-foreground">
-                Gemma 3 · built-in
+                Gemma 4 · built-in
               </span>
             </Row>
           ) : (

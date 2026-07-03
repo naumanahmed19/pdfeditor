@@ -1,15 +1,14 @@
-// Zero-config, fully local AI: a Gemma model that downloads once and runs in
-// the browser via WebLLM (WebGPU). No Ollama / LM Studio / API key needed — for
-// users who don't have a local model server. The ~1.4 GB weights are cached by
-// the browser after the first download.
+// Zero-config, fully local AI: Google's Gemma 4 (E2B) running in the browser via
+// Transformers.js on WebGPU. No Ollama / LM Studio / API key needed. The model
+// (ONNX, q4f16) downloads once from the Hugging Face hub and is cached; it then
+// works offline.
 import type { ChatMessage } from "../types";
 
-// Newest Gemma runnable in-browser today: Gemma 3 (1B), instruction-tuned.
-// (There is no "Gemma 4"; Gemma 3 is Google's latest — ai.google.dev/gemma.)
-export const BROWSER_MODEL_ID = "gemma3-1b-it-q4f16_1-MLC";
-export const BROWSER_MODEL_LABEL = "Gemma 3 (in-browser)";
+// Gemma 4 E2B, ONNX build for Transformers.js / WebGPU (Google's latest Gemma).
+export const BROWSER_MODEL_ID = "onnx-community/gemma-4-E2B-it-ONNX";
+export const BROWSER_MODEL_LABEL = "Gemma 4 (in-browser)";
 
-/** WebLLM needs WebGPU (Chrome/Edge, or the desktop app's WebView2). */
+/** Transformers.js WebGPU needs WebGPU (Chrome/Edge, or the desktop WebView2). */
 export function webgpuAvailable(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
@@ -19,41 +18,62 @@ export interface LoadProgress {
   text: string;
 }
 
-let enginePromise: Promise<any> | null = null;
+let enginePromise: Promise<{ processor: any; model: any; tf: any }> | null = null;
 let ready = false;
 
 export function browserModelReady(): boolean {
   return ready;
 }
 
-/** Lazily create (and download, once) the in-browser engine. */
-export async function getBrowserEngine(
-  onProgress?: (p: LoadProgress) => void,
-): Promise<any> {
+/** Lazily load (and download, once) the Gemma 4 processor + model. */
+export async function getBrowserEngine(onProgress?: (p: LoadProgress) => void) {
   if (!webgpuAvailable()) {
     throw new Error(
-      "This browser has no WebGPU support, which the built-in model needs. Use Chrome or Edge (or the desktop app), or switch to Ollama / LM Studio in Settings.",
+      "This browser has no WebGPU support, which the built-in Gemma 4 model needs. Use Chrome or Edge (or the desktop app), or switch to Ollama / LM Studio in Settings.",
     );
   }
   if (!enginePromise) {
     enginePromise = (async () => {
-      const webllm = await import("@mlc-ai/web-llm");
-      const engine = await webllm.CreateMLCEngine(BROWSER_MODEL_ID, {
-        initProgressCallback: (r: { progress: number; text: string }) =>
-          onProgress?.({ progress: r.progress, text: r.text }),
+      const tf = await import("@huggingface/transformers");
+      const progress_callback = (info: any) => {
+        if (info?.status === "progress" && typeof info.progress === "number") {
+          onProgress?.({ progress: info.progress / 100, text: info.file ?? "" });
+        }
+      };
+      const processor = await tf.AutoProcessor.from_pretrained(BROWSER_MODEL_ID, {
+        progress_callback,
       });
+      const model = await tf.Gemma4ForConditionalGeneration.from_pretrained(
+        BROWSER_MODEL_ID,
+        { dtype: "q4f16", device: "webgpu", progress_callback },
+      );
       ready = true;
-      return engine;
+      return { processor, model, tf };
     })();
-    // Allow a retry if the first load fails (e.g. the download was interrupted).
     enginePromise.catch(() => {
-      enginePromise = null;
+      enginePromise = null; // allow retry after a failed / interrupted load
     });
   }
   return enginePromise;
 }
 
-/** Stream a chat completion from the in-browser model (OpenAI-shaped chunks). */
+/** Gemma's chat template has no "system" role — fold it into the first user turn. */
+function foldSystem(messages: ChatMessage[]): ChatMessage[] {
+  const sys = messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .join("\n\n")
+    .trim();
+  const rest = messages.filter((m) => m.role !== "system");
+  if (sys) {
+    const i = rest.findIndex((m) => m.role === "user");
+    if (i >= 0) rest[i] = { ...rest[i], content: `${sys}\n\n${rest[i].content}` };
+    else rest.unshift({ role: "user", content: sys });
+  }
+  return rest;
+}
+
+/** Stream a chat completion from the in-browser Gemma 4 model. */
 export async function streamBrowserChat(
   messages: ChatMessage[],
   temperature: number,
@@ -61,36 +81,51 @@ export async function streamBrowserChat(
   signal?: AbortSignal,
   onStatus?: (status: string) => void,
 ): Promise<string> {
-  const engine = await getBrowserEngine((p) => {
+  onStatus?.("Preparing the in-browser model…");
+  const { processor, model, tf } = await getBrowserEngine((p) => {
     onStatus?.(
       p.progress >= 1
-        ? "Loading the model into memory…"
-        : `Downloading the Gemma model — ${Math.round(p.progress * 100)}% (one-time, then cached)`,
+        ? "Loading Gemma 4 into memory…"
+        : `Downloading Gemma 4 — ${Math.round(p.progress * 100)}% (one-time, then cached)`,
     );
   });
   onStatus?.("");
 
-  const stream = await engine.chat.completions.create({
-    messages,
-    temperature,
-    stream: true,
+  const chat = foldSystem(messages).map((m) => ({
+    role: m.role,
+    content: [{ type: "text", text: m.content }],
+  }));
+  const inputs = await processor.apply_chat_template(chat, {
+    add_generation_prompt: true,
+    tokenize: true,
+    return_dict: true,
   });
 
+  const stopper = new tf.InterruptableStoppingCriteria();
+  const onAbort = () => stopper.interrupt();
+  signal?.addEventListener("abort", onAbort);
+
   let full = "";
-  for await (const chunk of stream) {
-    if (signal?.aborted) {
-      try {
-        await engine.interruptGenerate();
-      } catch {
-        /* best-effort */
-      }
-      break;
-    }
-    const delta: string = chunk.choices?.[0]?.delta?.content ?? "";
-    if (delta) {
-      full += delta;
-      onToken(delta);
-    }
+  const streamer = new tf.TextStreamer(processor.tokenizer, {
+    skip_prompt: true,
+    skip_special_tokens: true,
+    callback_function: (text: string) => {
+      full += text;
+      onToken(text);
+    },
+  });
+
+  try {
+    await model.generate({
+      ...inputs,
+      max_new_tokens: 1024,
+      do_sample: temperature > 0,
+      temperature: temperature > 0 ? temperature : undefined,
+      streamer,
+      stopping_criteria: stopper,
+    });
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
   return full;
 }
