@@ -437,6 +437,8 @@ export interface PageObject {
   stroke: Rgba;
   /** Stroke width in points (paths). */
   strokeWidth: number;
+  /** Base font name for text objects ("" otherwise). */
+  fontName: string;
 }
 
 /** A 2x3 affine matrix { a b c d e f } in PDF page space. */
@@ -501,6 +503,19 @@ export async function getPageObjects(
           mod.FPDFTextObj_GetFontSize(obj, fs);
           fontSize = rt.getValue(fs, "float");
         }
+        let fontName = "";
+        if (type === FPDF_PAGEOBJ_TEXT) {
+          const font = mod.FPDFTextObj_GetFont(obj);
+          if (font) {
+            const n = mod.FPDFFont_GetBaseFontName(font, 0, 0);
+            if (n > 0) {
+              const nb = rt.wasmExports.malloc(n);
+              mod.FPDFFont_GetBaseFontName(font, nb, n);
+              fontName = readUtf8(mod, nb, n);
+              rt.wasmExports.free(nb);
+            }
+          }
+        }
         out.push({
           index: i,
           kind:
@@ -521,6 +536,7 @@ export async function getPageObjects(
             type === FPDF_PAGEOBJ_PATH && mod.FPDFPageObj_GetStrokeWidth(obj, fs)
               ? rt.getValue(fs, "float")
               : 0,
+          fontName,
         });
       }
       return out;
@@ -541,13 +557,30 @@ export interface ObjectStyle {
   strokeWidth?: number;
 }
 
-/** Combined in-place text edit: change the string, ink color and/or size. */
+const FPDF_FONT_TRUETYPE = 2;
+
+/** A replacement font for the recreate path (changing font family/weight). */
+export interface TextFont {
+  /** One of the 14 standard PDF font names, e.g. "Helvetica-Bold". */
+  standardName?: string;
+  /** Or a TrueType font to embed. */
+  bytes?: Uint8Array;
+}
+
+/** Combined in-place text edit: change the string, ink color, size and/or font. */
 export interface TextStyle {
   text?: string;
   /** New ink (fill) color, RGBA 0–255. */
   fill?: [number, number, number, number];
   /** Multiply the current font size by this factor (via a scale transform). */
   fontScale?: number;
+  /**
+   * Changing the font can't be done on the existing object, so it recreates the
+   * run with this font at `fontSize` and the original position/color.
+   */
+  font?: TextFont;
+  /** Absolute size (pt) for the recreate path. */
+  fontSize?: number;
 }
 
 export async function styleTextObject(
@@ -556,12 +589,58 @@ export async function styleTextObject(
   objectIndex: number,
   style: TextStyle,
 ): Promise<Uint8Array> {
-  return editPage(bytes, pageIndex, (mod, page) => {
+  return editPage(bytes, pageIndex, (mod, page, doc) => {
     const rt = rtx(mod);
     const obj = mod.FPDFPage_GetObject(page, objectIndex);
     if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
       throw new Error(`PDFium: object ${objectIndex} is not a text object`);
     }
+
+    // --- Font change: recreate the run with the new font ---
+    if (style.font) {
+      // Preserve the original placement (matrix), color and size.
+      const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
+      mod.FPDFPageObj_GetMatrix(obj, mPtr);
+      const c4 = rt.wasmExports.malloc(16);
+      const fill: [number, number, number, number] =
+        style.fill ??
+        (mod.FPDFPageObj_GetFillColor(obj, c4, c4 + 4, c4 + 8, c4 + 12)
+          ? [
+              rt.getValue(c4, "i32") & 0xff,
+              rt.getValue(c4 + 4, "i32") & 0xff,
+              rt.getValue(c4 + 8, "i32") & 0xff,
+              rt.getValue(c4 + 12, "i32") & 0xff || 255,
+            ]
+          : [0, 0, 0, 255]);
+      rt.wasmExports.free(c4);
+      const fs = rt.wasmExports.malloc(4);
+      mod.FPDFTextObj_GetFontSize(obj, fs);
+      const size = style.fontSize ?? rt.getValue(fs, "float");
+      rt.wasmExports.free(fs);
+
+      let font: number;
+      if (style.font.bytes) {
+        const fp = toHeap(mod, style.font.bytes);
+        font = mod.FPDFText_LoadFont(doc, fp, style.font.bytes.length, FPDF_FONT_TRUETYPE, false);
+        rt.wasmExports.free(fp);
+      } else {
+        font = mod.FPDFText_LoadStandardFont(doc, style.font.standardName ?? "Helvetica");
+      }
+      if (!font) throw new Error("PDFium: could not load replacement font");
+
+      const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
+      const sp = allocUtf16(mod, style.text ?? "");
+      mod.FPDFText_SetText(next, sp);
+      rt.wasmExports.free(sp);
+      mod.FPDFPageObj_SetMatrix(next, mPtr);
+      rt.wasmExports.free(mPtr);
+      mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
+      mod.FPDFPage_InsertObject(page, next);
+      if (mod.FPDFPage_RemoveObject(page, obj)) mod.FPDFPageObj_Destroy(obj);
+      return;
+    }
+
+    // --- In-place edits (keep the original embedded font) ---
     if (style.text != null) {
       const p = allocUtf16(mod, style.text);
       const ok = mod.FPDFText_SetText(obj, p);
@@ -602,7 +681,7 @@ export async function setObjectStyle(
 async function editPage(
   bytes: Uint8Array,
   pageIndex: number,
-  fn: (mod: WrappedPdfiumModule, page: number) => void,
+  fn: (mod: WrappedPdfiumModule, page: number, doc: number) => void,
 ): Promise<Uint8Array> {
   const mod = await getPdfium();
   const rt = rtx(mod);
@@ -616,7 +695,7 @@ async function editPage(
     const page = mod.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`PDFium: could not load page ${pageIndex}`);
     try {
-      fn(mod, page);
+      fn(mod, page, doc);
       mod.FPDFPage_GenerateContent(page);
     } finally {
       mod.FPDF_ClosePage(page);

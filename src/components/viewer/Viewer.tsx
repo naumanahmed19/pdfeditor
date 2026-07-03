@@ -721,6 +721,7 @@ function PageView({
     const [r, g, b] = hit.color;
     const hex =
       "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+    const f = detectFontFromName(hit.fontName || "");
     setInlineEdit({
       objectIndex: hit.index,
       original: hit.text,
@@ -732,6 +733,9 @@ function PageView({
       color: `rgb(${r}, ${g}, ${b})`,
       colorHex: hex,
       fontSize: hit.fontSize,
+      fontFamily: f.family,
+      bold: f.bold,
+      italic: f.italic,
     });
   };
 
@@ -739,33 +743,48 @@ function PageView({
     text: string,
     colorHex: string,
     fontSize: number,
+    fontFamily: string,
+    bold: boolean,
+    italic: boolean,
   ) => {
     const edit = inlineEdit;
     if (!edit) return;
     const textChanged = text !== edit.original && text.trim().length > 0;
     const colorChanged = colorHex.toLowerCase() !== edit.colorHex.toLowerCase();
     const sizeChanged = fontSize > 0 && fontSize !== Math.round(edit.fontSize);
-    if (!textChanged && !colorChanged && !sizeChanged) {
+    const fontChanged =
+      fontFamily !== edit.fontFamily || bold !== edit.bold || italic !== edit.italic;
+    if (!textChanged && !colorChanged && !sizeChanged && !fontChanged) {
       setInlineEdit(null);
       return;
     }
+    const fill: [number, number, number, number] = [
+      parseInt(colorHex.slice(1, 3), 16),
+      parseInt(colorHex.slice(3, 5), 16),
+      parseInt(colorHex.slice(5, 7), 16),
+      255,
+    ];
     setSavingEdit(true);
     try {
-      await app.applyTextStyle(pageIndex, edit.objectIndex, {
-        text: textChanged ? text : undefined,
-        fill: colorChanged
-          ? [
-              parseInt(colorHex.slice(1, 3), 16),
-              parseInt(colorHex.slice(3, 5), 16),
-              parseInt(colorHex.slice(5, 7), 16),
-              255,
-            ]
-          : undefined,
-        fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
-      });
+      if (fontChanged) {
+        // Changing the font recreates the run — pass everything absolutely.
+        const font = await resolveTextFont(fontFamily, bold, italic);
+        await app.applyTextStyle(pageIndex, edit.objectIndex, {
+          text,
+          fill,
+          fontSize,
+          font,
+        });
+      } else {
+        await app.applyTextStyle(pageIndex, edit.objectIndex, {
+          text: textChanged ? text : undefined,
+          fill: colorChanged ? fill : undefined,
+          fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
+        });
+      }
     } catch {
       toast.error(
-        "This text can't be edited in place — its font isn't fully embeddable. Use the Text tool to add a correction on top instead.",
+        "Couldn't edit this text in place — its font may not be embeddable. Use the Text tool to overlay a correction instead.",
       );
     } finally {
       setSavingEdit(false);
@@ -841,6 +860,74 @@ interface InlineEdit {
   colorHex: string;
   /** Original font size in PDF points. */
   fontSize: number;
+  /** Detected original font, so we only recreate the run when it changes. */
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
+}
+
+// Standard-14 font names by [regular, bold, italic, bold-italic].
+const STD_FONT_NAMES: Record<string, [string, string, string, string]> = {
+  helvetica: ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"],
+  times: ["Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"],
+  courier: ["Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"],
+};
+const BUNDLED_FONT_FILES: Record<string, [string, string, string, string]> = {
+  carlito: [
+    "/fonts/Carlito-Regular.ttf",
+    "/fonts/Carlito-Bold.ttf",
+    "/fonts/Carlito-Italic.ttf",
+    "/fonts/Carlito-BoldItalic.ttf",
+  ],
+  caladea: [
+    "/fonts/Caladea-Regular.ttf",
+    "/fonts/Caladea-Bold.ttf",
+    "/fonts/Caladea-Italic.ttf",
+    "/fonts/Caladea-BoldItalic.ttf",
+  ],
+};
+const FONT_CSS: Record<string, string> = {
+  helvetica: "Helvetica, Arial, sans-serif",
+  times: '"Times New Roman", Times, serif',
+  courier: '"Courier New", Courier, monospace',
+  carlito: "Carlito, Calibri, sans-serif",
+  caladea: "Caladea, Cambria, serif",
+};
+
+/** Best-effort family/weight/slant from a PDF base font name. */
+function detectFontFromName(name: string): { family: string; bold: boolean; italic: boolean } {
+  const n = name.replace(/^[A-Z]{6}\+/, "");
+  let family = "helvetica";
+  if (/calibri|carlito/i.test(n)) family = "carlito";
+  else if (/cambria|caladea/i.test(n)) family = "caladea";
+  else if (/courier|mono/i.test(n)) family = "courier";
+  else if (/times|georgia|garamond|roman|serif/i.test(n) && !/sans/i.test(n)) family = "times";
+  return {
+    family,
+    bold: /bold|black|heavy|semib|demib/i.test(n),
+    italic: /italic|oblique/i.test(n),
+  };
+}
+
+/** Resolve a family+weight+slant to a PDFium font (standard name or TTF bytes). */
+async function resolveTextFont(
+  family: string,
+  bold: boolean,
+  italic: boolean,
+): Promise<{ standardName?: string; bytes?: Uint8Array }> {
+  const idx = (bold ? 1 : 0) + (italic ? 2 : 0);
+  if (STD_FONT_NAMES[family]) return { standardName: STD_FONT_NAMES[family][idx] };
+  const files = BUNDLED_FONT_FILES[family];
+  if (files) {
+    try {
+      const bytes = new Uint8Array(await (await fetch(files[idx])).arrayBuffer());
+      return { bytes };
+    } catch {
+      /* fall back to the metric-compatible standard font */
+    }
+  }
+  const sub = family === "caladea" ? "times" : "helvetica";
+  return { standardName: STD_FONT_NAMES[sub][idx] };
 }
 
 /**
@@ -856,13 +943,23 @@ function InlineTextEditor({
 }: {
   edit: InlineEdit;
   saving: boolean;
-  onCommit: (text: string, colorHex: string, fontSize: number) => void;
+  onCommit: (
+    text: string,
+    colorHex: string,
+    fontSize: number,
+    fontFamily: string,
+    bold: boolean,
+    italic: boolean,
+  ) => void;
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [value, setValue] = useState(edit.original);
   const [colorHex, setColorHex] = useState(edit.colorHex);
   const [sizePt, setSizePt] = useState(Math.round(edit.fontSize));
+  const [family, setFamily] = useState(edit.fontFamily);
+  const [bold, setBold] = useState(edit.bold);
+  const [italic, setItalic] = useState(edit.italic);
   const done = useRef(false);
 
   useEffect(() => {
@@ -878,7 +975,7 @@ function InlineTextEditor({
   const finish = () => {
     if (done.current) return;
     done.current = true;
-    onCommit(value, colorHex, sizePt);
+    onCommit(value, colorHex, sizePt, family, bold, italic);
   };
 
   // Live-preview the size change on screen (px per point from the original).
@@ -900,8 +997,41 @@ function InlineTextEditor({
         if (!e.currentTarget.contains(e.relatedTarget as Node)) finish();
       }}
     >
-      {/* Options bar: text color + size stepper. */}
+      {/* Options bar: font, color, size. Native <select> (not the base-ui one)
+          so the dropdown doesn't portal focus out and commit prematurely. */}
       <div className="absolute bottom-full left-0 mb-1 flex items-center gap-1.5 whitespace-nowrap rounded-md border bg-background px-1.5 py-1 shadow-md">
+        <select
+          value={family}
+          disabled={saving}
+          onChange={(e) => setFamily(e.target.value)}
+          title="Font"
+          className="h-6 rounded border border-input bg-background px-1 text-xs text-foreground"
+        >
+          <option value="helvetica">Helvetica</option>
+          <option value="times">Times</option>
+          <option value="courier">Courier</option>
+          <option value="carlito">Carlito</option>
+          <option value="caladea">Caladea</option>
+        </select>
+        <button
+          type="button"
+          className={cn(stepBtn, bold && "bg-accent text-foreground")}
+          title="Bold"
+          disabled={saving}
+          onClick={() => setBold((v) => !v)}
+        >
+          <Bold className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          className={cn(stepBtn, italic && "bg-accent text-foreground")}
+          title="Italic"
+          disabled={saving}
+          onClick={() => setItalic((v) => !v)}
+        >
+          <Italic className="h-3 w-3" />
+        </button>
+        <div className="mx-0.5 h-4 w-px bg-border" />
         <input
           type="color"
           value={colorHex}
@@ -956,7 +1086,9 @@ function InlineTextEditor({
           lineHeight: `${boxH}px`,
           color: colorHex,
           padding: "0 1px",
-          fontFamily: "Helvetica, Arial, sans-serif",
+          fontFamily: FONT_CSS[family] ?? "Helvetica, Arial, sans-serif",
+          fontWeight: bold ? 700 : 400,
+          fontStyle: italic ? "italic" : "normal",
         }}
       />
     </div>
