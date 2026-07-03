@@ -25,6 +25,7 @@ import { cn, uid } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
+import { Popover, PopoverContent } from "../ui/popover";
 import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
@@ -2332,12 +2333,7 @@ function FieldProperties({
   const lbl = "text-[10px] font-medium text-muted-foreground";
 
   return (
-    <div
-      className="scrollbar-soft absolute left-[calc(100%+10px)] top-0 z-30 max-h-[70vh] w-60 space-y-2 overflow-y-auto rounded-lg border bg-background p-2.5 shadow-xl"
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
+    <>
       <div className="text-[11px] font-semibold">{FIELD_TYPE_LABEL[ann.fieldType]} field</div>
 
       <div className="space-y-0.5">
@@ -2554,7 +2550,7 @@ function FieldProperties({
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -2609,6 +2605,7 @@ function AnnotationItem({
     orig: { x: number; y: number; w: number; h: number };
   } | null>(null);
   const lastDownAt = useRef(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   const maxTextWidth = Math.max(40, baseDims.width - ann.x - 2);
 
@@ -2874,6 +2871,7 @@ function AnnotationItem({
 
   return (
     <div
+      ref={wrapRef}
       style={style}
       className={cn(
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
@@ -2898,13 +2896,29 @@ function AnnotationItem({
           onPointerDown={(e) => beginDrag(e, "resize")}
         />
       )}
-      {isSelected && ann.kind === "formfield" && (
-        <FieldProperties
-          ann={ann}
-          onPatch={(p) =>
-            app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
-          }
-        />
+      {ann.kind === "formfield" && (
+        <Popover
+          open={isSelected}
+          onOpenChange={(o: boolean) => {
+            if (!o) app.setSelected(null);
+          }}
+        >
+          <PopoverContent
+            anchor={wrapRef}
+            side="right"
+            align="start"
+            sideOffset={12}
+            className="scrollbar-soft max-h-[72vh] w-64 space-y-2 overflow-y-auto p-2.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <FieldProperties
+              ann={ann}
+              onPatch={(p) =>
+                app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+              }
+            />
+          </PopoverContent>
+        </Popover>
       )}
     </div>
   );
