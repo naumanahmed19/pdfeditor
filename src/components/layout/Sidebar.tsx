@@ -84,30 +84,43 @@ function RecentList() {
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
       <div className="flex flex-col gap-0.5">
-        {app.recentFiles.map((r) => (
-          <button
-            key={r.id}
-            onClick={() => {
-              void app.openRecent(r.id);
-              if (app.isMobile) app.setSidebarOpen(false);
-            }}
-            title={r.name}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent"
-          >
-            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate">{r.name}</span>
-            {r.open ? (
-              <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
-                title="Currently open"
+        {app.recentFiles.map((r) => {
+          const isActive = r.id === app.activeTabId;
+          return (
+            <button
+              key={r.id}
+              onClick={() => {
+                void app.openRecent(r.id);
+                if (app.isMobile) app.setSidebarOpen(false);
+              }}
+              title={r.name}
+              className={cn(
+                "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                isActive
+                  ? "bg-sidebar-accent font-medium text-foreground"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent",
+              )}
+            >
+              <FileText
+                className={cn(
+                  "h-3.5 w-3.5 shrink-0",
+                  isActive ? "text-foreground" : "text-muted-foreground",
+                )}
               />
-            ) : (
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {timeAgo(r.lastOpened)}
-              </span>
-            )}
-          </button>
-        ))}
+              <span className="min-w-0 flex-1 truncate">{r.name}</span>
+              {r.open ? (
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+                  title="Currently open"
+                />
+              ) : (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {timeAgo(r.lastOpened)}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
