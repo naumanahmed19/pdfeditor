@@ -49,22 +49,25 @@ const SCREEN_TITLES: Record<string, string> = {
 
 function PaneShell({ pane }: { pane: { id: string; docId: string } }) {
   const app = useApp();
-  const isFocused = pane.id === app.activePaneId;
+  // The editable Viewer is bound to the active document, so only render it
+  // when this focused pane's document matches (otherwise it'd show the wrong
+  // doc). Any other pane renders its own document read-only.
+  const editable = pane.id === app.activePaneId && pane.docId === app.activeTabId;
 
   return (
     <div
       className={cn(
         "h-full min-h-0 min-w-0",
-        isFocused && "ring-1 ring-inset ring-primary/30",
+        pane.id === app.activePaneId && "ring-1 ring-inset ring-primary/30",
       )}
       onPointerDownCapture={() => {
-        if (!isFocused) app.focusPane(pane.id);
+        if (pane.id !== app.activePaneId) app.focusPane(pane.id);
       }}
     >
-      {isFocused ? (
+      {editable ? (
         <Viewer key={`v-${pane.docId}`} />
       ) : (
-        <ReaderPane key={`r-${pane.id}`} docId={pane.docId} />
+        <ReaderPane key={`r-${pane.id}-${pane.docId}`} docId={pane.docId} />
       )}
     </div>
   );

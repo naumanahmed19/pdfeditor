@@ -604,9 +604,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (id: string) => {
       const existing = docs.find((d) => d.id === id);
       if (existing) {
-        setActiveTabId(id);
-        setDocVersion((v) => v + 1);
-        resetTransient();
+        // In split view: focus the pane already showing this doc, otherwise
+        // load it into the focused pane (never desync active doc from panes).
+        if (panes.length > 0) {
+          const inPane = panes.find((p) => p.docId === id);
+          if (inPane) {
+            setActivePaneId(inPane.id);
+          } else if (activePaneId) {
+            setPanes((prev) =>
+              prev.map((p) => (p.id === activePaneId ? { ...p, docId: id } : p)),
+            );
+          }
+        }
+        if (id !== activeTabId) {
+          setActiveTabId(id);
+          setDocVersion((v) => v + 1);
+          resetTransient();
+        }
         setScreen("viewer");
         return;
       }
@@ -618,16 +632,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       await openBytesInternal(stored.bytes, stored.name, stored.id);
     },
-    [docs, openBytesInternal, resetTransient, refreshRecent],
+    [docs, panes, activePaneId, activeTabId, openBytesInternal, resetTransient, refreshRecent],
   );
 
   const switchTab = useCallback(
     (id: string) => {
-      // In split view, load the document into the focused pane.
-      if (panes.length > 0 && activePaneId) {
-        setPanes((prev) =>
-          prev.map((p) => (p.id === activePaneId ? { ...p, docId: id } : p)),
-        );
+      if (panes.length > 0) {
+        // If the document is already shown in a pane, focus that pane
+        // instead of loading it into the current one (VS Code behavior).
+        const existing = panes.find((p) => p.docId === id);
+        if (existing) {
+          setActivePaneId(existing.id);
+          if (id !== activeTabId) {
+            setActiveTabId(id);
+            setDocVersion((v) => v + 1);
+            resetTransient();
+          }
+          setScreen("viewer");
+          return;
+        }
+        // Otherwise load it into the focused pane.
+        if (activePaneId) {
+          setPanes((prev) =>
+            prev.map((p) => (p.id === activePaneId ? { ...p, docId: id } : p)),
+          );
+        }
       }
       if (id === activeTabId) {
         setScreen("viewer");
@@ -638,7 +667,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       resetTransient();
       setScreen("viewer");
     },
-    [activeTabId, panes.length, activePaneId, resetTransient],
+    [activeTabId, panes, activePaneId, resetTransient],
   );
 
   const closeTab = useCallback(
@@ -1143,7 +1172,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Dev-only hook for driving the app from automated tests.
   useEffect(() => {
     if (import.meta.env.DEV) {
-      (window as any).__pdfwb = { setScreen, switchTab, setEditMode, setTool };
+      (window as any).__pdfwb = {
+        setScreen,
+        switchTab,
+        setEditMode,
+        setTool,
+        splitView,
+        openInPane,
+        focusPane,
+        exitSplit,
+        state: () => ({ activeTabId, activePaneId, panes }),
+      };
     }
   }, [switchTab, setEditMode]);
 
