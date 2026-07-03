@@ -25,6 +25,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn } from "../../lib/utils";
 import type {
   FontFamilyKind,
@@ -50,6 +51,30 @@ export function EditorToolbar() {
   const imageRef = useRef<HTMLInputElement>(null);
 
   if (!app.pdf) return null;
+
+  // The tool cluster is a single-select toggle group driven by app.tool
+  // (empty while a stamp is pending or a form tool is active).
+  const toolValue =
+    !app.pendingStamp && TOOLS.some((t) => t.key === app.tool) ? [app.tool] : [];
+
+  const handleToolChange = (values: string[]) => {
+    const key = values[0] as ToolKind | undefined;
+    if (!key) return; // ignore toggling the active tool off
+    if (key === "highlight") {
+      const sel = window.getSelection();
+      if (
+        sel &&
+        !sel.isCollapsed &&
+        sel.anchorNode?.parentElement?.closest(".textLayer")
+      ) {
+        window.dispatchEvent(new CustomEvent("pdfwb:highlight-selection"));
+        return;
+      }
+    }
+    app.setTool(key);
+    app.setPendingStamp(null);
+    if (key !== "select") app.setSelected(null);
+  };
 
   // When a text box is selected, style controls edit it directly.
   const selectedText = (() => {
@@ -100,37 +125,23 @@ export function EditorToolbar() {
     <div className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
       {/* tools */}
       <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-        {TOOLS.map((t) => (
-          <button
-            key={t.key}
-            title={t.label}
-            onClick={() => {
-              // Highlight with an active text selection highlights it directly.
-              if (t.key === "highlight") {
-                const sel = window.getSelection();
-                if (
-                  sel &&
-                  !sel.isCollapsed &&
-                  sel.anchorNode?.parentElement?.closest(".textLayer")
-                ) {
-                  window.dispatchEvent(new CustomEvent("pdfwb:highlight-selection"));
-                  return;
-                }
-              }
-              app.setTool(t.key);
-              app.setPendingStamp(null);
-              if (t.key !== "select") app.setSelected(null);
-            }}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-sm transition-colors",
-              app.tool === t.key && !app.pendingStamp
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <t.icon className="h-4 w-4" />
-          </button>
-        ))}
+        <ToggleGroup
+          value={toolValue}
+          onValueChange={handleToolChange}
+          className="bg-transparent p-0"
+          aria-label="Annotation tools"
+        >
+          {TOOLS.map((t) => (
+            <ToggleGroupItem
+              key={t.key}
+              value={t.key}
+              title={t.label}
+              aria-label={t.label}
+            >
+              <t.icon className="h-4 w-4" />
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
         <button
           title="Insert image"
           onClick={() => imageRef.current?.click()}
