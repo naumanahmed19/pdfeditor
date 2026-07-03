@@ -894,6 +894,57 @@ interface ScreenObj {
   stroke: [number, number, number, number] | null;
 }
 
+/**
+ * A small color swatch that opens the native picker and commits the chosen
+ * color once — on the input's native `change` event (fired when the picker
+ * closes), not on blur or React's continuous onChange. The swatch previews the
+ * live value while the picker is open.
+ */
+function ColorChip({
+  label,
+  hex,
+  disabled,
+  onPick,
+}: {
+  label: string;
+  hex: string;
+  disabled: boolean;
+  onPick: (hex: string) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState(hex);
+  useEffect(() => setPreview(hex), [hex]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const commit = () => onPick(el.value);
+    el.addEventListener("change", commit);
+    return () => el.removeEventListener("change", commit);
+  }, [onPick]);
+  return (
+    <div
+      className="z-10 flex w-max items-center gap-1.5 rounded-md border bg-background px-1.5 py-1 shadow-md"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="text-[10px] font-medium text-muted-foreground">{label}</span>
+      <label
+        className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded border border-border"
+        style={{ backgroundColor: preview }}
+        title="Change color"
+      >
+        <input
+          ref={ref}
+          type="color"
+          defaultValue={hex}
+          disabled={disabled}
+          className="absolute -inset-2 cursor-pointer opacity-0"
+          onInput={(e) => setPreview(e.currentTarget.value)}
+        />
+      </label>
+    </div>
+  );
+}
+
 type Corner = "nw" | "ne" | "sw" | "se";
 const HANDLE = 9; // px hit radius for resize handles
 
@@ -1257,43 +1308,31 @@ function ObjectLayer({
               .map((v) => v.toString(16).padStart(2, "0"))
               .join("");
           const useFill = !!selObj.fill;
+          const idx = selObj.index;
           return (
             <div
-              className="absolute z-10 flex items-center gap-1.5 rounded-md border bg-background px-1.5 py-1 shadow-md"
+              className="absolute"
               style={{ left: selObj.rect.left, top: Math.max(2, selObj.rect.top - 32) }}
-              onPointerDown={(e) => e.stopPropagation()}
             >
-              <span className="text-[10px] font-medium text-muted-foreground">
-                {selObj.kind === "text" ? "Text color" : useFill ? "Fill" : "Stroke"}
-              </span>
-              <label
-                className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded border border-border"
-                style={{ backgroundColor: hex }}
-                title="Change color"
-              >
-                <input
-                  type="color"
-                  defaultValue={hex}
-                  disabled={busy}
-                  className="absolute -inset-2 cursor-pointer opacity-0"
-                  onBlur={(e) => {
-                    const h = e.target.value;
-                    if (h.toLowerCase() === hex.toLowerCase()) return;
-                    const rgb: [number, number, number, number] = [
-                      parseInt(h.slice(1, 3), 16),
-                      parseInt(h.slice(3, 5), 16),
-                      parseInt(h.slice(5, 7), 16),
-                      255,
-                    ];
-                    const idx = selObj.index;
-                    setBusy(true);
-                    app
-                      .applyObjectColor(pageIndex, idx, useFill ? { fill: rgb } : { stroke: rgb })
-                      .catch(() => toast.error("Couldn't recolor that object."))
-                      .finally(() => setBusy(false));
-                  }}
-                />
-              </label>
+              <ColorChip
+                label={selObj.kind === "text" ? "Text color" : useFill ? "Fill" : "Stroke"}
+                hex={hex}
+                disabled={busy}
+                onPick={(h) => {
+                  if (h.toLowerCase() === hex.toLowerCase()) return;
+                  const rgb: [number, number, number, number] = [
+                    parseInt(h.slice(1, 3), 16),
+                    parseInt(h.slice(3, 5), 16),
+                    parseInt(h.slice(5, 7), 16),
+                    255,
+                  ];
+                  setBusy(true);
+                  app
+                    .applyObjectColor(pageIndex, idx, useFill ? { fill: rgb } : { stroke: rgb })
+                    .catch(() => toast.error("Couldn't recolor that object."))
+                    .finally(() => setBusy(false));
+                }}
+              />
             </div>
           );
         })()}
