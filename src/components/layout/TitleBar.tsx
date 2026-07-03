@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import {
+  Bot,
   ChevronDown,
   ChevronUp,
   Combine,
@@ -9,8 +10,6 @@ import {
   FolderOpen,
   LayoutGrid,
   Menu as MenuIcon,
-  PanelRightClose,
-  PanelRightOpen,
   Printer,
   Scissors,
   Search,
@@ -290,11 +289,7 @@ export function TitleBar() {
           if (next && app.isMobile) app.setSidebarOpen(false);
         }}
       >
-        {app.aiOpen ? (
-          <PanelRightClose className="h-4 w-4" />
-        ) : (
-          <PanelRightOpen className="h-4 w-4" />
-        )}
+        <Bot className="h-4 w-4" />
       </Button>
       <Button
         variant="ghost"
