@@ -22,6 +22,11 @@ import { toast } from "sonner";
 import { useApp } from "../../store";
 import type { Annotation, FormFieldAnnotation, TextAnnotation } from "../../types";
 import { cn, uid } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Select } from "../ui/select";
+import { Textarea } from "../ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 
 const PAGE_GAP = 24;
 
@@ -1028,8 +1033,8 @@ function ObjectProperties({
       {hasStroke && (
         <label className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
           Width
-          <select
-            className="h-6 rounded border border-input bg-background px-1 text-xs text-foreground"
+          <Select
+            className="h-6 w-14 px-1.5 text-xs"
             value={String(obj.strokeWidth || 1)}
             disabled={busy}
             onChange={(e) => onStyle({ strokeWidth: Number(e.target.value) })}
@@ -1039,21 +1044,23 @@ function ObjectProperties({
                 {w}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       )}
       <span className="whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">
         {wPt}×{hPt} pt
       </span>
       <div className="h-4 w-px bg-border" />
-      <button
-        className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         title="Delete object"
         disabled={busy}
         onClick={onDelete}
       >
         <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -2320,8 +2327,10 @@ function FieldProperties({
   const isText = ann.fieldType === "text";
   const isChoice = ann.fieldType === "dropdown" || ann.fieldType === "radio";
   const isCheck = ann.fieldType === "checkbox";
-  const input = "h-6 w-full rounded border border-input bg-background px-1.5 text-xs outline-none focus:ring-1 focus:ring-ring";
+  const sm = "h-7 text-xs px-2";
   const lbl = "text-[10px] font-medium text-muted-foreground";
+  const check =
+    "h-3.5 w-3.5 rounded border-input text-primary focus:ring-1 focus:ring-ring";
 
   return (
     <div
@@ -2332,22 +2341,22 @@ function FieldProperties({
     >
       <div className="text-[11px] font-semibold">{FIELD_TYPE_LABEL[ann.fieldType]} field</div>
 
-      <div>
+      <div className="space-y-0.5">
         <div className={lbl}>Name</div>
-        <input
+        <Input
           key={`name-${ann.id}`}
-          className={input}
+          className={sm}
           defaultValue={ann.fieldName}
           onBlur={(e) => onPatch({ fieldName: e.target.value.trim() || ann.fieldName })}
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
       </div>
 
-      <div>
+      <div className="space-y-0.5">
         <div className={lbl}>Tooltip</div>
-        <input
+        <Input
           key={`tip-${ann.id}`}
-          className={input}
+          className={sm}
           defaultValue={ann.tooltip ?? ""}
           placeholder="shown on hover"
           onBlur={(e) => onPatch({ tooltip: e.target.value || undefined })}
@@ -2355,11 +2364,11 @@ function FieldProperties({
       </div>
 
       {!isCheck && (
-        <div>
+        <div className="space-y-0.5">
           <div className={lbl}>{isChoice ? "Default value" : "Default text"}</div>
-          <input
+          <Input
             key={`def-${ann.id}`}
-            className={input}
+            className={sm}
             defaultValue={ann.defaultValue ?? ""}
             onBlur={(e) => onPatch({ defaultValue: e.target.value || undefined })}
           />
@@ -2367,17 +2376,19 @@ function FieldProperties({
       )}
 
       <div className="flex gap-3">
-        <label className="flex items-center gap-1 text-[11px]">
+        <label className="flex items-center gap-1.5 text-[11px]">
           <input
             type="checkbox"
+            className={check}
             checked={!!ann.required}
             onChange={(e) => onPatch({ required: e.target.checked })}
           />
           Required
         </label>
-        <label className="flex items-center gap-1 text-[11px]">
+        <label className="flex items-center gap-1.5 text-[11px]">
           <input
             type="checkbox"
+            className={check}
             checked={!!ann.readOnly}
             onChange={(e) => onPatch({ readOnly: e.target.checked })}
           />
@@ -2386,9 +2397,10 @@ function FieldProperties({
       </div>
 
       {isCheck && (
-        <label className="flex items-center gap-1 text-[11px]">
+        <label className="flex items-center gap-1.5 text-[11px]">
           <input
             type="checkbox"
+            className={check}
             checked={ann.defaultValue === "true"}
             onChange={(e) => onPatch({ defaultValue: e.target.checked ? "true" : undefined })}
           />
@@ -2398,10 +2410,10 @@ function FieldProperties({
 
       {(isText || isChoice) && (
         <div className="flex items-end gap-2">
-          <div className="flex-1">
+          <div className="flex-1 space-y-0.5">
             <div className={lbl}>Font size</div>
-            <select
-              className={input}
+            <Select
+              className={sm}
               value={String(ann.fontSize ?? 0)}
               onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
             >
@@ -2411,45 +2423,40 @@ function FieldProperties({
                   {s}pt
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
-          <div className="flex gap-0.5">
+          <ToggleGroup
+            value={[ann.align ?? "left"]}
+            onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}
+            aria-label="Text alignment"
+          >
             {(["left", "center", "right"] as const).map((a) => (
-              <button
-                key={a}
-                title={a}
-                onClick={() => onPatch({ align: a })}
-                className={cn(
-                  "flex h-6 w-6 items-center justify-center rounded border text-[10px] capitalize",
-                  (ann.align ?? "left") === a
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-input text-muted-foreground",
-                )}
-              >
+              <ToggleGroupItem key={a} value={a} title={a} className="text-[11px] capitalize">
                 {a[0].toUpperCase()}
-              </button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </div>
       )}
 
       {isText && (
         <div className="flex items-end gap-2">
-          <label className="flex items-center gap-1 text-[11px]">
+          <label className="flex items-center gap-1.5 text-[11px]">
             <input
               type="checkbox"
+              className={check}
               checked={!!ann.multiline}
               onChange={(e) => onPatch({ multiline: e.target.checked })}
             />
             Multiline
           </label>
-          <div className="flex-1">
+          <div className="flex-1 space-y-0.5">
             <div className={lbl}>Max length</div>
-            <input
+            <Input
               key={`max-${ann.id}`}
               type="number"
               min={0}
-              className={input}
+              className={sm}
               defaultValue={ann.maxLength ?? ""}
               placeholder="∞"
               onBlur={(e) =>
@@ -2461,12 +2468,14 @@ function FieldProperties({
       )}
 
       {isChoice && (
-        <div>
-          <div className={lbl}>{ann.fieldType === "radio" ? "This option's value" : "Options (one per line)"}</div>
+        <div className="space-y-0.5">
+          <div className={lbl}>
+            {ann.fieldType === "radio" ? "This option's value" : "Options (one per line)"}
+          </div>
           {ann.fieldType === "dropdown" ? (
-            <textarea
+            <Textarea
               key={`opt-${ann.id}`}
-              className={cn(input, "h-16 resize-none py-1")}
+              className="min-h-16 px-2 py-1 text-xs"
               defaultValue={(ann.options ?? []).join("\n")}
               onBlur={(e) =>
                 onPatch({
@@ -2475,9 +2484,9 @@ function FieldProperties({
               }
             />
           ) : (
-            <input
+            <Input
               key={`rv-${ann.id}`}
-              className={input}
+              className={sm}
               defaultValue={ann.optionValue ?? ""}
               onBlur={(e) => onPatch({ optionValue: e.target.value || undefined })}
             />
@@ -2494,34 +2503,35 @@ function FieldProperties({
               type="color"
               value={ann.borderColor ?? "#9ca8c8"}
               onChange={(e) => onPatch({ borderColor: e.target.value })}
-              className="h-5 w-5 rounded border border-input bg-background p-0.5"
+              className="h-6 w-6 rounded border border-input bg-background p-0.5"
               title="Border color"
             />
-            <select
-              className="h-6 rounded border border-input bg-background px-1 text-xs"
+            <Select
+              className="h-7 w-[4.5rem] px-2 text-xs"
               value={String(ann.borderWidth ?? 1)}
               onChange={(e) => onPatch({ borderWidth: Number(e.target.value) })}
-              title="Border width"
             >
               {[0, 1, 2, 3].map((w) => (
                 <option key={w} value={w}>
                   {w}px
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
-        <select
-          className={input}
+        <Select
+          className={sm}
           value={ann.borderStyle ?? "solid"}
-          onChange={(e) => onPatch({ borderStyle: e.target.value as FormFieldAnnotation["borderStyle"] })}
+          onChange={(e) =>
+            onPatch({ borderStyle: e.target.value as FormFieldAnnotation["borderStyle"] })
+          }
         >
           {BORDER_STYLES.map((s) => (
             <option key={s.v} value={s.v}>
               {s.label}
             </option>
           ))}
-        </select>
+        </Select>
         <div className="flex items-center justify-between gap-2">
           <span className={lbl}>Background</span>
           {ann.backgroundColor ? (
@@ -2530,22 +2540,26 @@ function FieldProperties({
                 type="color"
                 value={ann.backgroundColor}
                 onChange={(e) => onPatch({ backgroundColor: e.target.value })}
-                className="h-5 w-5 rounded border border-input bg-background p-0.5"
+                className="h-6 w-6 rounded border border-input bg-background p-0.5"
               />
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
                 onClick={() => onPatch({ backgroundColor: undefined })}
-                className="rounded px-1 text-[10px] text-muted-foreground hover:bg-accent"
               >
                 None
-              </button>
+              </Button>
             </div>
           ) : (
-            <button
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
               onClick={() => onPatch({ backgroundColor: "#eef2fb" })}
-              className="rounded px-1.5 text-[11px] text-muted-foreground hover:bg-accent"
             >
               Add fill
-            </button>
+            </Button>
           )}
         </div>
       </div>
