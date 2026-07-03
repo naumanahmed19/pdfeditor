@@ -1574,10 +1574,27 @@ function AnnotationLayer({
         />
       ))}
 
-      {/* live draft shape */}
-      {draft && (
+      {/* live draft shape — matches the tool being drawn */}
+      {draft && app.tool === "line" && (
+        <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+          <line
+            x1={draft.x0 * scale}
+            y1={draft.y0 * scale}
+            x2={draft.x1 * scale}
+            y2={draft.y1 * scale}
+            stroke={app.toolColor}
+            strokeWidth={app.strokeWidth * scale}
+            strokeLinecap="round"
+            strokeDasharray="5 4"
+          />
+        </svg>
+      )}
+      {draft && app.tool !== "line" && (
         <div
-          className="absolute border-2 border-dashed"
+          className={cn(
+            "absolute border-2 border-dashed",
+            app.tool === "ellipse" && "rounded-[50%]",
+          )}
           style={{
             left: Math.min(draft.x0, draft.x1) * scale,
             top: Math.min(draft.y0, draft.y1) * scale,
