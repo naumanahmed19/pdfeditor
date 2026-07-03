@@ -206,21 +206,28 @@ export function Thumbnail({
     <div
       ref={wrapRef}
       onClick={onClick}
-      className={cn(
-        "mx-auto w-fit cursor-pointer rounded-lg border bg-background p-1.5 transition-colors",
-        active
-          ? "border-foreground/50 ring-1 ring-foreground/30"
-          : "border-sidebar-border hover:border-foreground/25",
-      )}
+      className="group relative mx-auto w-fit cursor-pointer"
     >
-      <canvas
-        ref={canvasRef}
-        className="rounded-sm bg-white"
-        style={{ width }}
-      />
-      <p className="pt-1 text-center text-[11px] text-muted-foreground">
+      <div
+        className={cn(
+          "overflow-hidden rounded-md bg-white ring-1 transition-all",
+          active
+            ? "shadow-md ring-2 ring-blue-500"
+            : "shadow-sm ring-border/70 group-hover:shadow-md group-hover:ring-foreground/25",
+        )}
+      >
+        <canvas ref={canvasRef} className="block" style={{ width }} />
+      </div>
+      <span
+        className={cn(
+          "pointer-events-none absolute bottom-1.5 left-1/2 -translate-x-1/2 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums shadow-sm ring-1",
+          active
+            ? "bg-blue-500 text-white ring-blue-600/30"
+            : "bg-background/85 text-foreground/70 ring-black/5 backdrop-blur-sm",
+        )}
+      >
         {pageIndex + 1}
-      </p>
+      </span>
     </div>
   );
 }
