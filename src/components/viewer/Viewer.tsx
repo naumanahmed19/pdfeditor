@@ -1567,6 +1567,7 @@ function AnnotationLayer({
           ann={ann}
           pageIndex={pageIndex}
           scale={scale}
+          baseDims={baseDims}
         />
       ))}
 
@@ -1615,14 +1616,67 @@ function AnnotationLayer({
 
 /* ------------------------------------------------------------------ */
 
+/** Measure the tight box (in PDF points) that fits a text annotation's text. */
+let _measureCanvas: HTMLCanvasElement | null = null;
+function measureTextBox(
+  a: TextAnnotation,
+  text: string,
+  maxWidthPts: number,
+): { w: number; h: number } {
+  const canvas = (_measureCanvas ??= document.createElement("canvas"));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { w: a.w, h: a.h };
+  const family =
+    a.displayFontCss ||
+    (a.fontFamily === "times"
+      ? "'Times New Roman', Times, serif"
+      : a.fontFamily === "courier"
+        ? "'Courier New', Courier, monospace"
+        : "Helvetica, Arial, sans-serif");
+  ctx.font = `${a.italic ? "italic " : ""}${a.bold ? "700 " : "400 "}${a.fontSize}px ${family}`;
+  const pad = a.fontSize * 0.35 + 4;
+  const lines = text.length ? text.split("\n") : [""];
+  let longest = 0;
+  for (const l of lines) longest = Math.max(longest, ctx.measureText(l || " ").width);
+
+  let w: number;
+  let lineCount: number;
+  if (longest + pad <= maxWidthPts) {
+    w = Math.max(a.fontSize * 2, longest + pad);
+    lineCount = lines.length;
+  } else {
+    // Wraps at the page edge: count wrapped lines to grow height instead.
+    w = maxWidthPts;
+    const usable = maxWidthPts - pad;
+    lineCount = 0;
+    for (const l of lines) {
+      const words = l.split(/(\s+)/);
+      let cur = "";
+      let n = 1;
+      for (const word of words) {
+        if (cur && ctx.measureText(cur + word).width > usable) {
+          n++;
+          cur = word.trimStart();
+        } else {
+          cur += word;
+        }
+      }
+      lineCount += n;
+    }
+  }
+  return { w, h: lineCount * a.fontSize * 1.25 + pad * 0.6 };
+}
+
 function AnnotationItem({
   ann,
   pageIndex,
   scale,
+  baseDims,
 }: {
   ann: Annotation;
   pageIndex: number;
   scale: number;
+  baseDims: PageDims;
 }) {
   const app = useApp();
   const isSelected =
@@ -1655,6 +1709,8 @@ function AnnotationItem({
     return () => cancelAnimationFrame(raf);
   }, [editing]);
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // While editing, the box auto-grows to fit the typed text.
+  const [editSize, setEditSize] = useState<{ w: number; h: number } | null>(null);
   const dragRef = useRef<{
     mode: "move" | "resize";
     startX: number;
@@ -1663,7 +1719,21 @@ function AnnotationItem({
   } | null>(null);
   const lastDownAt = useRef(0);
 
-  const box = live ?? ann;
+  const maxTextWidth = Math.max(40, baseDims.width - ann.x - 2);
+
+  // Initialize / clear the auto-grow size as editing toggles.
+  useEffect(() => {
+    if (editing && ann.kind === "text") {
+      setEditSize(measureTextBox(ann, ann.text, maxTextWidth));
+    } else {
+      setEditSize(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  const box =
+    live ??
+    (editing && editSize ? { ...ann, w: editSize.w, h: editSize.h } : ann);
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
     if (app.tool !== "select") return;
@@ -1860,24 +1930,32 @@ function AnnotationItem({
           ref={editRef}
           autoFocus
           defaultValue={ann.text}
-          className="h-full w-full resize-none border-0 bg-transparent p-0 outline-none"
+          className="h-full w-full resize-none overflow-hidden whitespace-pre-wrap border-0 bg-transparent p-0 outline-none"
           style={{
             fontSize: ann.fontSize * scale,
             lineHeight: 1.25,
             color: ann.color,
             ...textAnnCss(ann),
           }}
+          onInput={(e) => {
+            if (ann.kind === "text") {
+              setEditSize(
+                measureTextBox(ann, (e.target as HTMLTextAreaElement).value, maxTextWidth),
+              );
+            }
+          }}
           onBlur={(e) => {
             setEditing(false);
             const text = e.target.value;
             if (!text.trim()) {
               app.removeAnnotation(pageIndex, ann.id);
-            } else {
-              const lines = text.split("\n").length;
+            } else if (ann.kind === "text") {
+              const size = measureTextBox(ann, text, maxTextWidth);
               app.updateAnnotation(pageIndex, {
                 ...ann,
                 text,
-                h: Math.max(ann.h, lines * ann.fontSize * 1.3),
+                w: size.w,
+                h: size.h,
               });
             }
           }}
