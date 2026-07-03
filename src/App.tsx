@@ -8,6 +8,7 @@ import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Viewer } from "./components/viewer/Viewer";
+import { ReaderPane } from "./components/viewer/ReaderPane";
 import { EditorToolbar } from "./components/viewer/Toolbar";
 import { SignatureModal } from "./components/viewer/SignatureModal";
 import { AiPanel } from "./components/ai/AiPanel";
@@ -248,9 +249,19 @@ function Shell() {
           <ContentHeader />
           {app.screen === "viewer" && app.editMode && <EditorToolbar />}
           <div className="min-h-0 flex-1">
-            {app.screen === "viewer" && (
-              <Viewer key={app.activeTabId ?? "empty"} />
-            )}
+            {app.screen === "viewer" &&
+              (app.splitTabId ? (
+                <div className="flex h-full min-h-0 flex-col lg:flex-row">
+                  <div className="min-h-0 min-w-0 flex-1 border-b lg:border-b-0 lg:border-r">
+                    <Viewer key={app.activeTabId ?? "empty"} />
+                  </div>
+                  <div className="min-h-0 min-w-0 flex-1">
+                    <ReaderPane key={app.splitTabId} docId={app.splitTabId} />
+                  </div>
+                </div>
+              ) : (
+                <Viewer key={app.activeTabId ?? "empty"} />
+              ))}
             {app.screen === "organize" && <OrganizeScreen />}
             {app.screen === "merge" && <MergeScreen />}
             {app.screen === "split" && <SplitScreen />}

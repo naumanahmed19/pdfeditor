@@ -82,6 +82,19 @@ interface AppStore {
   switchTab: (id: string) => void;
   closeTab: (id: string) => void;
 
+  /** Second document shown side-by-side (read-only reference pane). */
+  splitTabId: string | null;
+  openInSplit: (id: string) => void;
+  closeSplit: () => void;
+  swapSplit: () => void;
+  /** Read a specific open document by id (for the split pane). */
+  docById: (id: string) => {
+    id: string;
+    name: string;
+    pdf: PDFDocumentProxy;
+    numPages: number;
+  } | null;
+
   docName: string | null;
   docBytes: Uint8Array | null;
   pdf: PDFDocumentProxy | null;
@@ -242,6 +255,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [screen, setScreen] = useState<Screen>("viewer");
   const [docs, setDocs] = useState<OpenDoc[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [splitTabId, setSplitTabId] = useState<string | null>(null);
   const [docVersion, setDocVersion] = useState(0);
 
   const active = docs.find((d) => d.id === activeTabId) ?? null;
@@ -628,17 +642,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         return next;
       });
+      if (id === splitTabId || id === activeTabId) setSplitTabId(null);
       setDocVersion((v) => v + 1);
       resetTransient();
       docHandles.current.delete(id);
       void markDocClosed(id).then(refreshRecent);
     },
-    [docs, activeTabId, resetTransient, refreshRecent],
+    [docs, activeTabId, splitTabId, resetTransient, refreshRecent],
   );
 
   const closeDocument = useCallback(() => {
     if (activeTabId) closeTab(activeTabId);
   }, [activeTabId, closeTab]);
+
+  const openInSplit = useCallback(
+    (id: string) => {
+      if (!docs.some((d) => d.id === id) || id === activeTabId) return;
+      setSplitTabId(id);
+      setScreen("viewer");
+    },
+    [docs, activeTabId],
+  );
+
+  const closeSplit = useCallback(() => setSplitTabId(null), []);
+
+  const swapSplit = useCallback(() => {
+    if (!splitTabId || !activeTabId) return;
+    const a = activeTabId;
+    setActiveTabId(splitTabId);
+    setSplitTabId(a);
+    setDocVersion((v) => v + 1);
+    resetTransient();
+  }, [splitTabId, activeTabId, resetTransient]);
+
+  const docById = useCallback(
+    (id: string) => {
+      const d = docs.find((x) => x.id === id);
+      if (!d) return null;
+      return { id: d.id, name: d.name, pdf: d.pdf, numPages: d.pdf.numPages };
+    },
+    [docs],
+  );
 
   const setFormValue = useCallback(
     (name: string, value: unknown) => {
@@ -894,6 +938,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeTabId,
     switchTab,
     closeTab,
+    splitTabId,
+    openInSplit,
+    closeSplit,
+    swapSplit,
+    docById,
     docName: active?.name ?? null,
     docBytes: active?.bytes ?? null,
     pdf: active?.pdf ?? null,

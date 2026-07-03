@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Files, FileText, History, Plus, X } from "lucide-react";
+import {
+  BookOpen,
+  Columns2,
+  Files,
+  FileText,
+  History,
+  Plus,
+  X,
+} from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useApp, type RecentFile } from "../../store";
 import { cn } from "../../lib/utils";
@@ -165,16 +173,30 @@ function RecentRow({ r }: { r: RecentFile }) {
             className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500 group-hover:hidden"
             title="Currently open"
           />
-          <button
-            className="hidden shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground group-hover:block"
-            title="Close document"
-            onClick={(e) => {
-              e.stopPropagation();
-              app.closeTab(r.id);
-            }}
-          >
-            <X className="h-3 w-3" />
-          </button>
+          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+            {!isActive && r.id !== app.splitTabId && (
+              <button
+                className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Open side-by-side"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  app.openInSplit(r.id);
+                }}
+              >
+                <Columns2 className="h-3 w-3" />
+              </button>
+            )}
+            <button
+              className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="Close document"
+              onClick={(e) => {
+                e.stopPropagation();
+                app.closeTab(r.id);
+              }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
         </>
       ) : (
         <span className="shrink-0 text-[10px] text-muted-foreground">
