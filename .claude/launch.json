@@ -6,12 +6,6 @@
       "runtimeExecutable": "bun",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
-    },
-    {
-      "name": "inkden-landing",
-      "runtimeExecutable": "bunx",
-      "runtimeArgs": ["--bun", "serve", "landing", "-p", "4321"],
-      "port": 4321
     }
   ]
 }
