@@ -403,7 +403,24 @@ export async function bakeAnnotations(
 
   if (fieldOps && Object.keys(fieldOps).length) applyFieldOps(doc, fieldOps);
 
-  return doc.save();
+  const out = await doc.save();
+
+  // If we touched any form fields, regenerate their appearance streams with
+  // PDFium so filled values render everywhere (pdf-lib's updateFieldAppearances
+  // is best-effort and some viewers ignore /NeedAppearances). Lazy-loaded.
+  const touchedForms =
+    newFields.length > 0 ||
+    (!!formValues && Object.keys(formValues).length > 0) ||
+    (!!fieldOps && Object.keys(fieldOps).length > 0);
+  if (touchedForms) {
+    try {
+      const { regenerateFormAppearances } = await import("./pdfium");
+      return await regenerateFormAppearances(out);
+    } catch {
+      /* PDFium unavailable — fall back to the pdf-lib output */
+    }
+  }
+  return out;
 }
 
 /** Apply move/rename/delete edits to existing AcroForm fields. */

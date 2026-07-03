@@ -77,6 +77,46 @@ export async function makeObjectPdf(): Promise<Uint8Array> {
   return doc.save();
 }
 
+/** Fill a text field, regenerate its appearance via PDFium, confirm it renders. */
+export async function testFormAppearance() {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([300, 120]);
+  const form = doc.getForm();
+  const tf = form.createTextField("fullName");
+  tf.setText("Ada Lovelace");
+  tf.addToPage(page, { x: 20, y: 60, width: 220, height: 24 });
+  const bytes = await doc.save();
+
+  const { regenerateFormAppearances } = await import("./pdfium");
+  const fixed = await regenerateFormAppearances(bytes);
+
+  // Render with pdf.js (which paints widget appearances) and count dark pixels
+  // in the field region — confirms PDFium generated a real AP, not a blank one.
+  GlobalWorkerOptions.workerSrc = workerUrl;
+  const darkPixels = async (b: Uint8Array) => {
+    const pdf = await getDocument({ data: b.slice() }).promise;
+    const page = await pdf.getPage(1);
+    const vp = page.getViewport({ scale: 3 });
+    const canvas = document.createElement("canvas");
+    canvas.width = vp.width;
+    canvas.height = vp.height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] < 110 && data[i + 1] < 110 && data[i + 2] < 110) n++;
+    }
+    return n;
+  };
+  return {
+    afterDark: await darkPixels(fixed),
+    bytesChanged: fixed.length !== bytes.length,
+  };
+}
+
 async function extractText(bytes: Uint8Array): Promise<string> {
   GlobalWorkerOptions.workerSrc = workerUrl;
   const pdf = await getDocument({ data: bytes.slice() }).promise;

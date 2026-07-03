@@ -37,9 +37,11 @@ import {
   SplitScreen,
   WatermarkScreen,
 } from "./components/tools/ToolsScreens";
+import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
+  templates: "New from template",
   organize: "Organize pages",
   merge: "Merge PDFs",
   split: "Split & extract",
@@ -424,6 +426,7 @@ function Shell() {
               ) : (
                 <Viewer key={app.activeTabId ?? "empty"} />
               ))}
+            {app.screen === "templates" && <TemplatesScreen />}
             {app.screen === "organize" && <OrganizeScreen />}
             {app.screen === "merge" && <MergeScreen />}
             {app.screen === "split" && <SplitScreen />}

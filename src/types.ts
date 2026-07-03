@@ -163,6 +163,7 @@ export interface FolderNode {
 
 export type Screen =
   | "viewer"
+  | "templates"
   | "organize"
   | "merge"
   | "split"

@@ -6,6 +6,7 @@ import {
   Combine,
   Download,
   Droplets,
+  FilePlus2,
   FileText,
   FolderOpen,
   LayoutGrid,
@@ -50,6 +51,10 @@ export function TitleBar() {
       <MenuItem onClick={() => void app.requestOpen()}>
         <FolderOpen className="h-4 w-4 text-muted-foreground" />
         Open PDF…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("templates")}>
+        <FilePlus2 className="h-4 w-4 text-muted-foreground" />
+        New from template…
       </MenuItem>
       {app.recentFiles.length > 0 && (
         <>

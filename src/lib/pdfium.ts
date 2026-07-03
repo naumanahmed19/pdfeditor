@@ -556,6 +556,65 @@ export async function removeObject(
   });
 }
 
+// --- Form field appearances -----------------------------------------------
+
+const FPDF_ANNOT_WIDGET = 20; // annotation subtype for form field widgets
+
+/**
+ * Regenerate the appearance stream of every form-field widget from its current
+ * value, so filled values render correctly in every viewer (not just ones that
+ * honor /NeedAppearances). Returns fresh bytes, or the input unchanged if the
+ * document has no widgets.
+ */
+export async function regenerateFormAppearances(
+  bytes: Uint8Array,
+): Promise<Uint8Array> {
+  const mod = await getPdfium();
+  const rt = runtime(mod);
+  const filePtr = toHeap(mod, bytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, "");
+  if (!doc) {
+    rt.wasmExports.free(filePtr);
+    throw new Error(`PDFium: could not open document (err ${mod.FPDF_GetLastError()})`);
+  }
+  // A form-fill environment is required for PDFium to build widget appearances
+  // from field values (EmbedPDF's OpenFormFillInfo avoids the 30-callback struct).
+  const formInfo = mod.PDFiumExt_OpenFormFillInfo();
+  const formHandle = mod.PDFiumExt_InitFormFillEnvironment(doc, formInfo);
+  try {
+    let changed = false;
+    const pages = mod.FPDF_GetPageCount(doc);
+    for (let p = 0; p < pages; p++) {
+      const page = mod.FPDF_LoadPage(doc, p);
+      if (!page) continue;
+      mod.FORM_OnAfterLoadPage(page, formHandle);
+      try {
+        const n = mod.FPDFPage_GetAnnotCount(page);
+        for (let i = 0; i < n; i++) {
+          const annot = mod.FPDFPage_GetAnnot(page, i);
+          if (!annot) continue;
+          if (
+            mod.FPDFAnnot_GetSubtype(annot) === FPDF_ANNOT_WIDGET &&
+            mod.EPDFAnnot_GenerateFormFieldAP(annot)
+          ) {
+            changed = true;
+          }
+          mod.FPDFPage_CloseAnnot(annot);
+        }
+      } finally {
+        mod.FORM_OnBeforeClosePage(page, formHandle);
+        mod.FPDF_ClosePage(page);
+      }
+    }
+    return changed ? saveAsCopy(mod, doc) : bytes;
+  } finally {
+    mod.PDFiumExt_ExitFormFillEnvironment(formHandle);
+    mod.PDFiumExt_CloseFormFillInfo(formInfo);
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+}
+
 /** Serialize the (possibly modified) document to bytes via FPDF_SaveAsCopy. */
 function saveAsCopy(mod: WrappedPdfiumModule, doc: number): Uint8Array {
   const rt = rtx(mod);

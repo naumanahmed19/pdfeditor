@@ -63,13 +63,19 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 ## Forms
 
 - **Fill** existing AcroForm fields — text, checkbox, radio, dropdown — with
-  values saved into the PDF.
+  values saved into the PDF. On save, field **appearance streams are regenerated
+  with PDFium** so entered values render correctly in every viewer (not just ones
+  that honor `/NeedAppearances`).
 - **Design** forms: a Field menu places **text fields, checkboxes, radio groups
   and dropdowns** as draggable placeholders; set name, options and radio values
   in the toolbar. On save they become real AcroForm fields (tall text fields
   become multiline).
 - **Edit existing fields**: move, resize, rename or delete a document's fields;
   changes are written back to the form on save.
+- **Templates** — **File → New from template** opens ready-made **fillable forms**
+  (invoice, job application, feedback survey, NDA with signature lines, weekly
+  timesheet) with real form fields, plus blank **document starters** (business
+  letter, meeting notes, résumé).
 
 ## Tools
 
