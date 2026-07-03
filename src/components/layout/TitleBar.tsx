@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import {
-  Bot,
   ChevronDown,
   ChevronUp,
   Combine,
@@ -10,6 +9,8 @@ import {
   FolderOpen,
   LayoutGrid,
   Menu as MenuIcon,
+  PanelRightClose,
+  PanelRightOpen,
   Printer,
   Scissors,
   Search,
@@ -58,9 +59,8 @@ export function TitleBar() {
       >
         <MenuIcon className="h-4 w-4" />
       </Button>
-      <div className="flex items-center gap-2 text-sm font-semibold">
+      <div className="flex items-center px-1 text-sm font-semibold" title="PDF Workbench">
         <FileText className="h-4 w-4 shrink-0" />
-        <span className="hidden sm:inline">PDF Workbench</span>
       </div>
 
       <Menu>
@@ -283,14 +283,18 @@ export function TitleBar() {
           "h-7 w-7",
           app.aiOpen && "bg-accent text-accent-foreground",
         )}
-        title="Toggle AI assistant"
+        title={app.aiOpen ? "Hide AI assistant" : "Show AI assistant"}
         onClick={() => {
           const next = !app.aiOpen;
           app.setAiOpen(next);
           if (next && app.isMobile) app.setSidebarOpen(false);
         }}
       >
-        <Bot className="h-4 w-4" />
+        {app.aiOpen ? (
+          <PanelRightClose className="h-4 w-4" />
+        ) : (
+          <PanelRightOpen className="h-4 w-4" />
+        )}
       </Button>
       <Button
         variant="ghost"

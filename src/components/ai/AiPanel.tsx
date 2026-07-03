@@ -274,8 +274,8 @@ export function AiPanel() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 lg:hidden"
-            title="Close"
+            className="h-6 w-6"
+            title="Hide assistant"
             onClick={() => app.setAiOpen(false)}
           >
             <X className="h-3.5 w-3.5" />
