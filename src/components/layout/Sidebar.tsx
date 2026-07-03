@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Files, FileText, History, Plus } from "lucide-react";
+import { BookOpen, Files, FileText, History, Plus, X } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useApp, type RecentFile } from "../../store";
 import { cn } from "../../lib/utils";
@@ -129,15 +129,24 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function RecentRow({ r }: { r: RecentFile }) {
   const app = useApp();
   const isActive = r.id === app.activeTabId;
+  const open = () => {
+    void app.openRecent(r.id);
+    if (app.isMobile) app.setSidebarOpen(false);
+  };
   return (
-    <button
-      onClick={() => {
-        void app.openRecent(r.id);
-        if (app.isMobile) app.setSidebarOpen(false);
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
       }}
       title={r.name}
       className={cn(
-        "flex items-center gap-2 rounded-md border-l-2 px-2 py-1.5 text-left text-xs transition-colors",
+        "group flex cursor-pointer items-center gap-2 rounded-md border-l-2 px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         isActive
           ? "border-primary bg-sidebar-accent font-medium text-foreground"
           : "border-transparent text-sidebar-foreground hover:bg-sidebar-accent",
@@ -151,16 +160,28 @@ function RecentRow({ r }: { r: RecentFile }) {
       />
       <span className="min-w-0 flex-1 truncate">{r.name}</span>
       {r.open ? (
-        <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
-          title="Currently open"
-        />
+        <>
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500 group-hover:hidden"
+            title="Currently open"
+          />
+          <button
+            className="hidden shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground group-hover:block"
+            title="Close document"
+            onClick={(e) => {
+              e.stopPropagation();
+              app.closeTab(r.id);
+            }}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </>
       ) : (
         <span className="shrink-0 text-[10px] text-muted-foreground">
           {timeAgo(r.lastOpened)}
         </span>
       )}
-    </button>
+    </div>
   );
 }
 

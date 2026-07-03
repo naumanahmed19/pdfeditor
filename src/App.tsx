@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
-import { ArrowLeft, FileText, Plus, X } from "lucide-react";
+import { ArrowLeft, Download, FileText, Plus, Printer, SquarePen } from "lucide-react";
+import { toast } from "sonner";
 import { AppProvider, useApp } from "./store";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { cn } from "./lib/utils";
+import { Button } from "./components/ui/button";
 import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
@@ -27,82 +28,102 @@ const SCREEN_TITLES: Record<string, string> = {
   settings: "Settings",
 };
 
+function DocActions() {
+  const app = useApp();
+  if (!app.pdf) return null;
+
+  const saveBtn = (
+    <Button
+      variant="default"
+      size="sm"
+      className="h-7 gap-1.5"
+      onClick={() => void app.saveCurrent()}
+    >
+      <Download className="h-3.5 w-3.5" />
+      {app.activeHasHandle ? "Save" : "Save PDF"}
+    </Button>
+  );
+
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="hidden h-7 w-7 sm:inline-flex"
+        title="Print"
+        onClick={() => void app.printCurrent()}
+      >
+        <Printer className="h-4 w-4" />
+      </Button>
+      {app.editMode ? (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7"
+            onClick={() => {
+              app.setEditMode(false);
+              app.setScreen("viewer");
+              const hasNewFields = Object.values(app.annotations)
+                .flat()
+                .some((a) => a.kind === "formfield");
+              if (hasNewFields) {
+                toast.info("New form fields become fillable after you save the PDF.");
+              }
+            }}
+          >
+            Done
+          </Button>
+          {saveBtn}
+        </>
+      ) : (
+        <>
+          {app.hasAnnotations && saveBtn}
+          <Button
+            variant={app.hasAnnotations ? "outline" : "default"}
+            size="sm"
+            className="h-7 gap-1.5"
+            onClick={() => {
+              app.setEditMode(true);
+              app.setScreen("viewer");
+            }}
+          >
+            <SquarePen className="h-3.5 w-3.5" />
+            Edit
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ContentHeader() {
   const app = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Viewer screen with open documents: the header row IS the tab strip.
-  if (app.screen === "viewer" && app.tabs.length > 0) {
+  // Viewer screen with a document open: name + status + doc actions.
+  if (app.screen === "viewer" && app.pdf) {
     return (
-      <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center rounded-tl-lg border-b bg-background/95 px-2 backdrop-blur">
-        {app.tabs.map((t) => {
-          const isActive = t.id === app.activeTabId;
-          return (
-            <div
-              key={t.id}
-              onClick={() => app.switchTab(t.id)}
-              onAuxClick={(e) => {
-                if (e.button === 1) app.closeTab(t.id);
-              }}
-              title={t.name}
-              className={cn(
-                "group relative flex h-full min-w-0 max-w-52 cursor-pointer items-center gap-1.5 px-3 text-xs transition-colors",
-                isActive
-                  ? "bg-muted/60 font-medium text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-primary"
-                  : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-              )}
-            >
-              <FileText className="h-3.5 w-3.5 shrink-0 opacity-70" />
-              <span className="truncate">{t.name}</span>
-              {t.hasEdits && (
-                <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"
-                  title="Unsaved edits"
-                />
-              )}
-              <button
-                className="shrink-0 rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
-                title="Close tab"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  app.closeTab(t.id);
-                }}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          );
-        })}
-        <button
-          className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Open another PDF"
-          onClick={() => void app.requestOpen()}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-        <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-          {app.editMode && (
-            <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
-              Editing
-            </span>
-          )}
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-            {app.numPages} pages
+      <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-3 backdrop-blur">
+        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="truncate text-sm font-medium">{app.docName}</span>
+        {app.hasAnnotations && (
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"
+            title="Unsaved edits"
+          />
+        )}
+        {app.editMode && (
+          <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 sm:inline dark:text-blue-400">
+            Editing
           </span>
+        )}
+        <span className="hidden shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline">
+          {app.numPages} pages
+        </span>
+        <div className="ml-auto">
+          <DocActions />
         </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/pdf"
-          multiple
-          className="hidden"
-          onChange={async (e) => {
-            for (const f of Array.from(e.target.files ?? [])) {
-              await app.openFile(f);
-            }
-            e.target.value = "";
-          }}
-        />
       </div>
     );
   }
