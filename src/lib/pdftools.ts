@@ -17,6 +17,7 @@ import type {
   FormFieldAnnotation,
   TextAnnotation,
 } from "../types";
+import type { OcrPage } from "./ocr";
 import { hexToRgb01 } from "./utils";
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
@@ -679,6 +680,60 @@ function displayPointToPdf(
     default:
       return { x: p.x, y: ph - p.y };
   }
+}
+
+/**
+ * Add an invisible (opacity 0) text layer to a PDF from OCR results, so the
+ * document becomes searchable, selectable and AI-readable without changing how
+ * it looks. Word positions come from the rasterized page and are mapped back to
+ * PDF points.
+ */
+export async function addOcrTextLayer(
+  bytes: Uint8Array,
+  ocr: OcrPage[],
+): Promise<Uint8Array> {
+  const doc = await load(bytes);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const pageCount = doc.getPageCount();
+
+  for (const p of ocr) {
+    if (p.pageIndex < 0 || p.pageIndex >= pageCount || !p.words.length) continue;
+    const page = doc.getPage(p.pageIndex);
+    const { height: ph } = page.getSize();
+    const s = p.renderScale;
+
+    for (const w of p.words) {
+      const text = sanitizeWinAnsi(w.text);
+      if (!text.trim()) continue;
+      const x = w.x0 / s;
+      const boxH = (w.y1 - w.y0) / s;
+      const size = Math.max(4, boxH * 0.92);
+      // Baseline sits a little above the box bottom (top-left origin → flip Y).
+      const y = ph - w.y1 / s + boxH * 0.18;
+      const boxW = (w.x1 - w.x0) / s;
+      // Horizontally squeeze the invisible text to roughly match the word width
+      // so selection lines up with the image.
+      let natural = 0;
+      try {
+        natural = font.widthOfTextAtSize(text, size);
+      } catch {
+        natural = 0;
+      }
+      const squeeze = natural > 0 ? Math.min(1, boxW / natural) : 1;
+      try {
+        page.drawText(text, {
+          x,
+          y,
+          size: size * (squeeze < 0.6 ? squeeze : 1),
+          font,
+          opacity: 0,
+        });
+      } catch {
+        /* skip glyphs the font can't encode */
+      }
+    }
+  }
+  return doc.save();
 }
 
 /** Word-wrap a single line to fit maxWidth at the given font/size. */

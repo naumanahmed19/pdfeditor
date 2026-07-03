@@ -39,7 +39,8 @@ viewer framework — v2.14.x as of mid-2026, near-complete PDFium API surface
 
 ## Other deferred items
 
-- [ ] OCR for scanned PDFs (tesseract.js) — enables search/edit/AI on scans
+- [x] OCR for scanned PDFs (tesseract.js) — adds an invisible searchable text
+      layer so search/select/edit/AI work on scans (Tools → Make searchable)
 - [ ] True redaction (strip text from content stream, not whiteout) — see
       PDFium evaluation above for the likely implementation path
 - [ ] Sticky notes / comments with popups

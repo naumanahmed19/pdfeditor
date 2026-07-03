@@ -22,9 +22,9 @@ import type {
   SearchMatch,
   ToolKind,
 } from "./types";
-import { loadPdf, searchDocument } from "./lib/pdf";
+import { loadPdf, searchDocument, extractAllText } from "./lib/pdf";
 import { pickFolder, readNode } from "./lib/folder";
-import { bakeAnnotations } from "./lib/pdftools";
+import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
 import {
@@ -138,6 +138,10 @@ interface AppStore {
   bakeToBytes: () => Promise<Uint8Array | null>;
   downloadCurrent: () => Promise<void>;
   printCurrent: () => Promise<void>;
+
+  /** OCR the active document into a searchable text layer. */
+  ocrBusy: boolean;
+  runOcrText: () => Promise<void>;
 
   currentPage: number;
   setCurrentPage: (p: number) => void;
@@ -490,6 +494,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [folderRoot, setFolderRoot] = useState<FolderNode | null>(null);
   const [folderBusy, setFolderBusy] = useState(false);
   const docHandles = useRef(new Map<string, any>());
+  const runOcrRef = useRef<(() => Promise<void>) | null>(null);
 
   const refreshRecent = useCallback(async () => {
     const stored = await listStoredDocs();
@@ -538,6 +543,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
             open: true,
           }).then(refreshRecent);
         }
+        // Offer OCR if the document has essentially no extractable text (scan).
+        void extractAllText(pdfDoc)
+          .then((textPages) => {
+            const chars = textPages.reduce((n, p) => n + p.full.trim().length, 0);
+            if (chars < pdfDoc.numPages * 10) {
+              toast("This looks like a scanned PDF", {
+                description:
+                  "Run OCR to make its text searchable, selectable and AI-readable.",
+                action: {
+                  label: "Run OCR",
+                  onClick: () => void runOcrRef.current?.(),
+                },
+                duration: 12000,
+              });
+            }
+          })
+          .catch(() => {});
         return doc.id;
       } catch (err) {
         if ((err as Error)?.message !== "Password required") {
@@ -1015,6 +1037,75 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [active, bakeToBytes, downloadCurrent, updateDoc]);
 
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const runOcrText = useCallback(async () => {
+    if (!active || ocrBusy) return;
+    const id = active.id;
+    setOcrBusy(true);
+    const toastId = toast.loading("Preparing OCR… (first run downloads a model)");
+    try {
+      const { runOcr } = await import("./lib/ocr");
+      const ocr = await runOcr(active.pdf, (page, total, phase) => {
+        toast.loading(
+          phase === "prepare"
+            ? "Preparing OCR…"
+            : `Recognizing text — page ${Math.min(page + 1, total)} of ${total}…`,
+          { id: toastId },
+        );
+      });
+      const wordCount = ocr.reduce((n, p) => n + p.words.length, 0);
+      if (!wordCount) {
+        toast.error("No text could be recognized in this document.", { id: toastId });
+        return;
+      }
+      // Bake any pending edits first, then add the invisible OCR text layer.
+      let base = active.bytes;
+      if (docHasEdits(active)) {
+        base = await bakeAnnotations(
+          active.bytes,
+          active.annotations,
+          active.formValues,
+          active.fieldOps,
+        );
+      }
+      const next = await addOcrTextLayer(base, ocr);
+      const nextPdf = await loadPdf(next);
+      active.pdf.destroy().catch(() => {});
+      updateDoc(id, {
+        bytes: next,
+        pdf: nextPdf,
+        annotations: {},
+        history: [{}],
+        historyIndex: 0,
+        formValues: {},
+        fieldOps: {},
+      });
+      setDocVersion((v) => v + 1);
+      setSelected(null);
+      void persistDoc({
+        id,
+        name: active.name,
+        bytes: next,
+        lastOpened: Date.now(),
+        open: true,
+      });
+      toast.success(
+        `OCR complete — ${wordCount.toLocaleString()} words. Search, copy and AI now work on this document.`,
+        { id: toastId },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "error";
+      if (msg !== "OCR cancelled") toast.error(`OCR failed: ${msg}`, { id: toastId });
+      else toast.dismiss(toastId);
+    } finally {
+      setOcrBusy(false);
+    }
+  }, [active, ocrBusy, updateDoc]);
+
+  useEffect(() => {
+    runOcrRef.current = runOcrText;
+  }, [runOcrText]);
+
   const printCurrent = useCallback(async () => {
     const bytes = await bakeToBytes();
     if (!bytes) return;
@@ -1151,6 +1242,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     bakeToBytes,
     downloadCurrent,
     printCurrent,
+    ocrBusy,
+    runOcrText,
     currentPage: active?.currentPage ?? 0,
     setCurrentPage,
     scrollToPage,
@@ -1230,6 +1323,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         focusPane,
         exitSplit,
         setFolderRoot,
+        runOcrText,
         state: () => ({ activeTabId, activePaneId, panes }),
       };
     }

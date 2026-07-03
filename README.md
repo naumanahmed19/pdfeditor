@@ -71,6 +71,10 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 - **Organize pages**: drag-and-drop reorder, rotate, duplicate, delete, insert
   blank pages, or **insert pages from another PDF**.
 - **Watermark** (text, opacity, color, diagonal) and **page numbering**.
+- **OCR (Make searchable)** — recognize text on scanned/image PDFs (Tesseract.js,
+  runs locally) and add an invisible text layer so **search, selection, copy,
+  edit-text and the AI assistant** work on scans. Offered automatically when a
+  text-less PDF is opened, or via Tools → Make searchable.
 
 ## Workspace
 
@@ -159,5 +163,8 @@ save-in-place work there too.
 - Editing text that uses a subset-embedded custom font falls back to the closest
   bundled/standard font.
 
-See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, OCR for scanned
-PDFs, true redaction, and a PDFium evaluation).
+- OCR fetches its language model once from a CDN (cached); the recognition
+  itself runs locally, so your document is never uploaded.
+
+See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, true redaction,
+and a PDFium evaluation).

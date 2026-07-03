@@ -11,6 +11,7 @@ import {
   LayoutGrid,
   PanelLeft,
   Printer,
+  ScanText,
   Scissors,
   Search,
   Settings,
@@ -103,6 +104,14 @@ export function TitleBar() {
       <MenuItem onClick={() => app.setScreen("watermark")}>
         <Droplets className="h-4 w-4 text-muted-foreground" />
         Watermark & numbers
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem
+        disabled={!app.pdf || app.ocrBusy}
+        onClick={() => void app.runOcrText()}
+      >
+        <ScanText className="h-4 w-4 text-muted-foreground" />
+        Make searchable (OCR)
       </MenuItem>
     </>
   );
