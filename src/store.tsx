@@ -560,6 +560,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSearchQuery("");
     setSearchMatches([]);
     setActiveMatch(0);
+    // A changed/opened document starts in read mode, not carrying over the
+    // previous doc's edit session. (Templates re-enable edit mode after opening.)
+    setEditModeState(false);
+    setTool("select");
   }, []);
 
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
