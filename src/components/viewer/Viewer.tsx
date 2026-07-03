@@ -1289,6 +1289,7 @@ function FieldDesigner({
         height: rect.h * scale,
         pointerEvents: app.tool === "select" ? "auto" : "none",
         cursor: app.tool === "select" ? "move" : "default",
+        touchAction: app.tool === "select" ? "none" : "auto",
       }}
       className={cn(
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
@@ -1549,6 +1550,8 @@ function AnnotationLayer({
       className="absolute inset-0"
       style={{
         pointerEvents: interactive && (drawingTool || app.tool === "text" || app.pendingStamp) ? "auto" : "none",
+        // Prevent the page from scrolling under a drawing/placement gesture.
+        touchAction: drawingTool || app.pendingStamp ? "none" : "auto",
         cursor: app.pendingStamp
           ? "copy"
           : app.tool === "text"
@@ -1800,6 +1803,8 @@ function AnnotationItem({
       app.editMode && app.tool === "select" && !ann.locked ? "auto" : "none",
     cursor:
       app.editMode && app.tool === "select" && !ann.locked ? "move" : "default",
+    touchAction:
+      app.editMode && app.tool === "select" && !ann.locked ? "none" : "auto",
   };
 
   let body: React.ReactNode = null;

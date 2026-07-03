@@ -187,6 +187,12 @@ interface AppStore {
   aiOpen: boolean;
   setAiOpen: (v: boolean) => void;
 
+  /** Mobile slide-over sidebar (thumbnails/outline/recent). */
+  sidebarOpen: boolean;
+  setSidebarOpen: (v: boolean) => void;
+  /** True when the viewport is below the desktop breakpoint (<1024px). */
+  isMobile: boolean;
+
   settings: AppSettings;
   setSettings: (s: AppSettings) => void;
 
@@ -277,7 +283,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [searchMatches, setSearchMatches] = useState<SearchMatch[]>([]);
   const [activeMatch, setActiveMatch] = useState(0);
 
-  const [aiOpen, setAiOpen] = useState(true);
+  // AI panel opens by default on desktop, stays closed on mobile.
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 1024,
+  );
+  const [aiOpen, setAiOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 1024,
+  );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 1024);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
 
   const [settings, setSettingsState] = useState<AppSettings>(() =>
@@ -947,6 +966,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     clearSearch,
     aiOpen,
     setAiOpen,
+    sidebarOpen,
+    setSidebarOpen,
+    isMobile,
     settings,
     setSettings,
     signatures,

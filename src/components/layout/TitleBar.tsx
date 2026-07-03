@@ -9,6 +9,7 @@ import {
   FileText,
   FolderOpen,
   LayoutGrid,
+  Menu as MenuIcon,
   Printer,
   Scissors,
   Search,
@@ -35,6 +36,7 @@ export function TitleBar() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [propsOpen, setPropsOpen] = useState(false);
+  const [mobileSearch, setMobileSearch] = useState(false);
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,10 +44,23 @@ export function TitleBar() {
   };
 
   return (
-    <header className="flex h-[42px] shrink-0 items-center gap-2 bg-sidebar px-3 text-sidebar-foreground">
+    <header className="relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 lg:hidden"
+        title="Menu"
+        onClick={() => {
+          const next = !app.sidebarOpen;
+          app.setSidebarOpen(next);
+          if (next) app.setAiOpen(false);
+        }}
+      >
+        <MenuIcon className="h-4 w-4" />
+      </Button>
       <div className="flex items-center gap-2 text-sm font-semibold">
-        <FileText className="h-4 w-4" />
-        PDF Workbench
+        <FileText className="h-4 w-4 shrink-0" />
+        <span className="hidden sm:inline">PDF Workbench</span>
       </div>
 
       <Menu>
@@ -135,7 +150,7 @@ export function TitleBar() {
 
       <form
         onSubmit={submitSearch}
-        className="mx-auto flex h-7 w-full max-w-md items-center gap-1.5 rounded-md border border-sidebar-border bg-background/70 px-2"
+        className="mx-auto hidden h-7 w-full max-w-md items-center gap-1.5 rounded-md border border-sidebar-border bg-background/70 px-2 sm:flex"
       >
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
@@ -179,12 +194,23 @@ export function TitleBar() {
         )}
       </form>
 
+      <Button
+        variant="ghost"
+        size="icon"
+        className="ml-auto h-7 w-7 sm:hidden"
+        title="Search"
+        disabled={!app.pdf}
+        onClick={() => setMobileSearch(true)}
+      >
+        <Search className="h-4 w-4" />
+      </Button>
+
       {app.pdf && (
         <>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="hidden h-7 w-7 sm:inline-flex"
             title="Print"
             onClick={() => void app.printCurrent()}
           >
@@ -258,7 +284,11 @@ export function TitleBar() {
           app.aiOpen && "bg-accent text-accent-foreground",
         )}
         title="Toggle AI assistant"
-        onClick={() => app.setAiOpen(!app.aiOpen)}
+        onClick={() => {
+          const next = !app.aiOpen;
+          app.setAiOpen(next);
+          if (next && app.isMobile) app.setSidebarOpen(false);
+        }}
       >
         <Bot className="h-4 w-4" />
       </Button>
@@ -274,6 +304,59 @@ export function TitleBar() {
       >
         <Settings className="h-4 w-4" />
       </Button>
+      {/* Mobile full-width search overlay */}
+      {mobileSearch && (
+        <div className="absolute inset-0 z-50 flex items-center gap-2 bg-sidebar px-2 sm:hidden">
+          <form
+            onSubmit={(e) => {
+              submitSearch(e);
+            }}
+            className="flex h-7 flex-1 items-center gap-1.5 rounded-md border border-sidebar-border bg-background/70 px-2"
+          >
+            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search in document…"
+              className="h-full w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+            />
+            {app.searchMatches.length > 0 && (
+              <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
+                <span className="tabular-nums">
+                  {app.activeMatch + 1}/{app.searchMatches.length}
+                </span>
+                <button
+                  type="button"
+                  className="rounded p-0.5 hover:bg-accent"
+                  onClick={() => app.gotoMatch(app.activeMatch - 1)}
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  className="rounded p-0.5 hover:bg-accent"
+                  onClick={() => app.gotoMatch(app.activeMatch + 1)}
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+          </form>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 px-2 text-xs"
+            onClick={() => {
+              setQuery("");
+              app.clearSearch();
+              setMobileSearch(false);
+            }}
+          >
+            Done
+          </Button>
+        </div>
+      )}
       <PropertiesModal open={propsOpen} onClose={() => setPropsOpen(false)} />
     </header>
   );

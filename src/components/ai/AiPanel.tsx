@@ -9,6 +9,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
@@ -226,7 +227,7 @@ export function AiPanel() {
   ];
 
   return (
-    <aside className="flex w-[360px] shrink-0 flex-col border-l border-t border-sidebar-border bg-sidebar">
+    <aside className="fixed inset-y-0 right-0 top-[42px] z-40 flex w-[360px] max-w-[88vw] shrink-0 flex-col border-l border-sidebar-border bg-sidebar shadow-xl lg:static lg:top-0 lg:z-auto lg:max-w-none lg:border-t lg:shadow-none">
       {/* header */}
       <div className="flex items-center gap-2 border-b border-sidebar-border px-4 py-2.5">
         <Bot className="h-4 w-4" />
@@ -269,6 +270,15 @@ export function AiPanel() {
             onClick={() => setMessages([])}
           >
             <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 lg:hidden"
+            title="Close"
+            onClick={() => app.setAiOpen(false)}
+          >
+            <X className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>

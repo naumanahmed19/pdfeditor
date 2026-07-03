@@ -11,7 +11,15 @@ export function Sidebar() {
   const [tab, setTab] = useState<"pages" | "outline" | "recent">("pages");
 
   return (
-    <aside className="flex w-[288px] shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground">
+    <aside
+      className={cn(
+        // Mobile: fixed slide-over drawer below the title bar.
+        "fixed bottom-0 left-0 top-[42px] z-40 flex w-[280px] max-w-[85vw] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-transform duration-200 ease-out",
+        // Desktop: static column.
+        "lg:static lg:z-auto lg:w-[288px] lg:max-w-none lg:translate-x-0 lg:border-r-0 lg:shadow-none lg:transition-none",
+        app.sidebarOpen ? "translate-x-0" : "-translate-x-full",
+      )}
+    >
       {app.pdf ? (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center gap-1 px-3 pt-2">
@@ -79,7 +87,10 @@ function RecentList() {
         {app.recentFiles.map((r) => (
           <button
             key={r.id}
-            onClick={() => void app.openRecent(r.id)}
+            onClick={() => {
+              void app.openRecent(r.id);
+              if (app.isMobile) app.setSidebarOpen(false);
+            }}
             title={r.name}
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent"
           >
@@ -144,6 +155,7 @@ function ThumbnailList() {
             onClick={() => {
               app.setScreen("viewer");
               app.scrollToPage(i);
+              if (app.isMobile) app.setSidebarOpen(false);
             }}
           />
         ))}
@@ -240,7 +252,14 @@ function OutlinePanel({ pdf }: { pdf: PDFDocumentProxy }) {
   }
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
-      <OutlineTree nodes={outline} depth={0} onGoto={(p) => app.scrollToPage(p)} />
+      <OutlineTree
+        nodes={outline}
+        depth={0}
+        onGoto={(p) => {
+          app.scrollToPage(p);
+          if (app.isMobile) app.setSidebarOpen(false);
+        }}
+      />
     </div>
   );
 }

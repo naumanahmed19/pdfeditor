@@ -219,11 +219,11 @@ function Shell() {
   }, [app]);
 
   return (
-    <div className="flex h-full flex-col bg-sidebar">
+    <div className="flex h-full flex-col overflow-hidden bg-sidebar">
       <TitleBar />
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <Sidebar />
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-tl-lg border-l border-t bg-background shadow-shell">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background lg:rounded-tl-lg lg:border-l lg:border-t lg:shadow-shell">
           <ContentHeader />
           {app.screen === "viewer" && app.editMode && <EditorToolbar />}
           <div className="min-h-0 flex-1">
@@ -238,6 +238,20 @@ function Shell() {
           </div>
         </main>
         <AiPanel />
+
+        {/* Mobile drawer backdrops */}
+        {app.sidebarOpen && (
+          <div
+            className="fixed inset-0 top-[42px] z-30 bg-black/40 lg:hidden"
+            onClick={() => app.setSidebarOpen(false)}
+          />
+        )}
+        {app.aiOpen && app.isMobile && (
+          <div
+            className="fixed inset-0 top-[42px] z-30 bg-black/40 lg:hidden"
+            onClick={() => app.setAiOpen(false)}
+          />
+        )}
       </div>
       <SignatureModal />
       <Toaster richColors />
