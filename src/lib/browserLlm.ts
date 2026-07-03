@@ -25,6 +25,23 @@ export function browserModelReady(): boolean {
   return ready;
 }
 
+/** Drop the cached engine so the next call reloads (after a GPU crash / OOM). */
+export function resetBrowserEngine(): void {
+  enginePromise = null;
+  ready = false;
+}
+
+/** Turn a raw WebGPU/ORT failure into an actionable message. */
+function friendlyError(err: unknown): Error {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/device is lost|out of memory|mapasync|failed to allocate|oom/i.test(raw)) {
+    return new Error(
+      "The GPU ran out of memory running Gemma 4 (it needs a fair bit of VRAM). Try again, or use a smaller model / a local server (Ollama, LM Studio) in Settings.",
+    );
+  }
+  return err instanceof Error ? err : new Error(raw);
+}
+
 /** Lazily load (and download, once) the Gemma 4 processor + model. */
 export async function getBrowserEngine(onProgress?: (p: LoadProgress) => void) {
   if (!webgpuAvailable()) {
@@ -82,13 +99,20 @@ export async function streamBrowserChat(
   onStatus?: (status: string) => void,
 ): Promise<string> {
   onStatus?.("Preparing the in-browser model…");
-  const { processor, model, tf } = await getBrowserEngine((p) => {
-    onStatus?.(
-      p.progress >= 1
-        ? "Loading Gemma 4 into memory…"
-        : `Downloading Gemma 4 — ${Math.round(p.progress * 100)}% (one-time, then cached)`,
-    );
-  });
+  let engine: { processor: any; model: any; tf: any };
+  try {
+    engine = await getBrowserEngine((p) => {
+      onStatus?.(
+        p.progress >= 1
+          ? "Loading Gemma 4 into memory…"
+          : `Downloading Gemma 4 — ${Math.round(p.progress * 100)}% (one-time, then cached)`,
+      );
+    });
+  } catch (err) {
+    resetBrowserEngine();
+    throw friendlyError(err);
+  }
+  const { processor, model, tf } = engine;
   onStatus?.("");
 
   const chat = foldSystem(messages).map((m) => ({
@@ -124,6 +148,10 @@ export async function streamBrowserChat(
       streamer,
       stopping_criteria: stopper,
     });
+  } catch (err) {
+    // A lost WebGPU device leaves the engine dead — drop it so a retry reloads.
+    resetBrowserEngine();
+    if (!full) throw friendlyError(err);
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }
