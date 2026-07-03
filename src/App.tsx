@@ -8,6 +8,7 @@ import {
   Plus,
   Printer,
   SquarePen,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { AppProvider, useApp } from "./store";
@@ -48,92 +49,113 @@ const SCREEN_TITLES: Record<string, string> = {
 
 function PaneShell({ pane }: { pane: { id: string; docId: string } }) {
   const app = useApp();
+  const isFocused = pane.id === app.activePaneId;
+
+  return (
+    <div
+      className={cn(
+        "h-full min-h-0 min-w-0",
+        isFocused && "ring-1 ring-inset ring-primary/30",
+      )}
+      onPointerDownCapture={() => {
+        if (!isFocused) app.focusPane(pane.id);
+      }}
+    >
+      {isFocused ? (
+        <Viewer key={`v-${pane.docId}`} />
+      ) : (
+        <ReaderPane key={`r-${pane.id}`} docId={pane.docId} />
+      )}
+    </div>
+  );
+}
+
+/** One document segment inside the split main header (replaces per-pane headers). */
+function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
+  const app = useApp();
   const doc = app.docById(pane.docId);
   const isFocused = pane.id === app.activePaneId;
   if (!doc) return null;
 
   return (
     <div
-      className="flex h-full min-h-0 min-w-0 flex-col"
-      onPointerDownCapture={() => {
-        if (!isFocused) app.focusPane(pane.id);
-      }}
+      onClick={() => !isFocused && app.focusPane(pane.id)}
+      className={cn(
+        "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-3",
+        isFocused ? "bg-background" : "bg-muted/30 hover:bg-muted/50",
+      )}
     >
-      <div
-        onClick={() => !isFocused && app.focusPane(pane.id)}
+      <FileText
         className={cn(
-          "flex h-9 shrink-0 cursor-pointer items-center gap-2 border-b px-3",
-          isFocused ? "bg-background" : "bg-muted/40",
+          "h-3.5 w-3.5 shrink-0",
+          isFocused ? "text-foreground" : "text-muted-foreground",
+        )}
+      />
+      <span
+        className={cn(
+          "truncate text-xs",
+          isFocused ? "font-medium text-foreground" : "text-muted-foreground",
         )}
       >
-        <FileText
-          className={cn(
-            "h-3.5 w-3.5 shrink-0",
-            isFocused ? "text-foreground" : "text-muted-foreground",
-          )}
-        />
-        <span
-          className={cn(
-            "truncate text-xs",
-            isFocused ? "font-medium text-foreground" : "text-muted-foreground",
-          )}
-        >
-          {doc.name}
+        {doc.name}
+      </span>
+      {isFocused && app.editMode && (
+        <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 sm:inline dark:text-blue-400">
+          editing
         </span>
-        {isFocused && app.editMode && (
-          <span className="shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
-            editing
-          </span>
+      )}
+      <div
+        className="ml-auto flex shrink-0 items-center gap-1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {isFocused && app.hasAnnotations && (
+          <Button
+            variant="default"
+            size="sm"
+            className="h-6 gap-1 px-2 text-[11px]"
+            onClick={() => void app.saveCurrent()}
+          >
+            <Download className="h-3 w-3" />
+            {app.activeHasHandle ? "Save" : "Save"}
+          </Button>
         )}
-        <div className="ml-auto shrink-0">
-          <Menu>
-            <MenuTrigger
-              className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent"
-              aria-label="Pane menu"
-              onClick={(e) => e.stopPropagation()}
+        <Menu>
+          <MenuTrigger
+            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent"
+            aria-label="Pane menu"
+          >
+            <EllipsisVertical className="h-3.5 w-3.5" />
+          </MenuTrigger>
+          <MenuContent className="min-w-44">
+            <MenuItem
+              onClick={() => {
+                if (isFocused) app.setEditMode(!app.editMode);
+                else app.focusPane(pane.id);
+                app.setScreen("viewer");
+              }}
             >
-              <EllipsisVertical className="h-3.5 w-3.5" />
-            </MenuTrigger>
-            <MenuContent className="min-w-44">
-              {isFocused ? (
-                <MenuItem
-                  onClick={() => {
-                    app.setEditMode(!app.editMode);
-                    app.setScreen("viewer");
-                  }}
-                >
-                  <SquarePen className="h-4 w-4 text-muted-foreground" />
-                  {app.editMode ? "Stop editing" : "Edit this pane"}
-                </MenuItem>
-              ) : (
-                <MenuItem onClick={() => app.focusPane(pane.id)}>
-                  <SquarePen className="h-4 w-4 text-muted-foreground" />
-                  Edit this pane
-                </MenuItem>
-              )}
-              <MenuItem onClick={() => void app.printDoc(pane.docId)}>
-                <Printer className="h-4 w-4 text-muted-foreground" />
-                Print
-              </MenuItem>
-              <MenuItem onClick={() => app.openInPane(pane.docId)}>
-                <Columns2 className="h-4 w-4 text-muted-foreground" />
-                Split this document
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem onClick={() => app.closePane(pane.id)}>
-                <ArrowLeft className="h-4 w-4 text-muted-foreground" />
-                Close pane
-              </MenuItem>
-            </MenuContent>
-          </Menu>
-        </div>
-      </div>
-      <div className="min-h-0 flex-1">
-        {isFocused ? (
-          <Viewer key={`v-${pane.docId}`} />
-        ) : (
-          <ReaderPane key={`r-${pane.id}`} docId={pane.docId} />
-        )}
+              <SquarePen className="h-4 w-4 text-muted-foreground" />
+              {isFocused ? (app.editMode ? "Stop editing" : "Edit") : "Edit this pane"}
+            </MenuItem>
+            <MenuItem onClick={() => void app.printDoc(pane.docId)}>
+              <Printer className="h-4 w-4 text-muted-foreground" />
+              Print
+            </MenuItem>
+            <MenuItem onClick={() => app.openInPane(pane.docId)}>
+              <Columns2 className="h-4 w-4 text-muted-foreground" />
+              Split this document
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem onClick={() => app.closePane(pane.id)}>
+              <X className="h-4 w-4 text-muted-foreground" />
+              Close pane
+            </MenuItem>
+            <MenuItem onClick={() => app.exitSplit()}>
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              Exit split view
+            </MenuItem>
+          </MenuContent>
+        </Menu>
       </div>
     </div>
   );
@@ -212,62 +234,49 @@ function ContentHeader() {
   const app = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Viewer screen with a document open: name + status + doc actions.
+  // Split view: the header IS a row of pane segments (aligned with panes).
+  if (app.screen === "viewer" && app.panes.length >= 2) {
+    return (
+      <div className="sticky top-0 z-20 flex h-11 shrink-0 items-stretch overflow-hidden rounded-tl-lg border-b bg-background/95 backdrop-blur">
+        {app.panes.map((pane, i) => (
+          <div key={pane.id} className={cn("flex min-w-0 flex-1", i > 0 && "border-l")}>
+            <PaneTab pane={pane} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Viewer screen with a single document open: name + status + doc actions.
   if (app.screen === "viewer" && app.pdf) {
-    const split = app.panes.length >= 2;
     return (
       <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-3 backdrop-blur">
-        {split ? (
-          <>
-            <Columns2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="truncate text-sm font-medium">Split view</span>
-            <span className="hidden shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline">
-              {app.panes.length} panes
-            </span>
-          </>
-        ) : (
-          <>
-            <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="truncate text-sm font-medium">{app.docName}</span>
-            {app.hasAnnotations && (
-              <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"
-                title="Unsaved edits"
-              />
-            )}
-            {app.editMode && (
-              <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 sm:inline dark:text-blue-400">
-                Editing
-              </span>
-            )}
-            <span className="hidden shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline">
-              {app.numPages} pages
-            </span>
-          </>
+        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="truncate text-sm font-medium">{app.docName}</span>
+        {app.hasAnnotations && (
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"
+            title="Unsaved edits"
+          />
         )}
+        {app.editMode && (
+          <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 sm:inline dark:text-blue-400">
+            Editing
+          </span>
+        )}
+        <span className="hidden shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline">
+          {app.numPages} pages
+        </span>
         <div className="ml-auto flex items-center gap-1.5">
-          {split ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1.5"
-              title="Exit split view"
-              onClick={() => app.exitSplit()}
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Single view
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              title="Split editor"
-              onClick={() => app.splitView()}
-            >
-              <Columns2 className="h-4 w-4" />
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            title="Split editor"
+            onClick={() => app.splitView()}
+          >
+            <Columns2 className="h-4 w-4" />
+          </Button>
           <DocActions />
         </div>
       </div>
