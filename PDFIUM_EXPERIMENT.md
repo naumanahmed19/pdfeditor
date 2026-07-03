@@ -78,12 +78,25 @@ the document already used. Typing a character that isn't in the subset won't
 render. Great for correcting/replacing words with existing letters; for
 arbitrary new text you'd fall back to re-embedding a font (what we do today).
 
-**Integration work (follow-up PR):** the click currently resolves to a *pdf.js*
-text span; to edit via PDFium we need to map that hit to a PDFium **object
-index** — either hit-test the click point against `getTextObjects()` bounds, or
-match on text + position. Then: `editTextObject` on commit → swap the doc bytes
-→ re-render. Keep the whiteout+overlay path as the fallback when the edit needs
-glyphs outside the subset.
+**Integration — DONE (wired into the editor).** The whiteout+overlay hack is
+gone. In edit-text mode a click now hit-tests the point against
+`getTextObjects()` bounds, opens an inline editor over the run, and on commit
+calls `applyTextEdit` → `editTextObject` swaps the doc bytes → the page
+re-renders from real content. Details:
+
+- **Store** (`store.tsx`): `applyTextEdit(page, objectIndex, text)` rewrites the
+  base bytes and reloads pdf.js. Undo/redo is unified onto one timeline —
+  each history step carries a `bytesHistory` base snapshot (`{bytes, pdf}`);
+  annotation-only steps reuse the same reference (no copy/reload), a text edit
+  pushes a new base, and undo restores both annotations and bytes/pdf together.
+- **Viewer** (`Viewer.tsx`): `onTextLayerClick` → hit-test → `InlineTextEditor`
+  (a transient textarea, not a persisted annotation) → commit/cancel.
+- **Fallback:** if `editTextObject` fails (font can't take new glyphs) the user
+  is told to overlay a correction with the Text tool.
+
+Verified end-to-end: click a line → inline editor prefilled with the run text →
+type → Enter rewrites it in place; pdf.js re-extract confirms the change; Ctrl+Z
+restores the previous bytes; edited bytes persist across reload.
 
 ## Cost
 

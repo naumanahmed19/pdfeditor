@@ -38,9 +38,12 @@ Annotations are overlaid live and **baked into the PDF on save** (correct on
 rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 
 - **Add text** boxes that **auto-grow** to fit what you type (width then wrap).
-- **Edit existing text** in place: click a line and it's covered with a
-  page-color-matched patch and reopened as an editable box — with the original
-  **font family, size, bold/italic and ink color auto-detected** from the page.
+- **Edit existing text** truly in place (PDFium): click a line and edit it
+  inline — the original content-stream text object is **rewritten in its own
+  font, size, color and position**. No whiteout patch and no overlay copy; the
+  old text is genuinely replaced, so nothing is left behind to extract. If a
+  line uses a subset-embedded font that can't take new glyphs, it says so —
+  overlay a correction with the Text tool there instead.
 - **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
   **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
 - **Signatures**: draw, type (script fonts), or upload an image — saved for
@@ -160,8 +163,10 @@ save-in-place work there too.
   the roadmap — see [TODO.md](TODO.md)).
 - The reference (non-focused) split pane is read-only and shows the saved
   document; edit by focusing that pane.
-- Editing text that uses a subset-embedded custom font falls back to the closest
-  bundled/standard font.
+- In-place text editing reuses a run's own embedded font. If that font is a
+  subset (only the glyphs the document already used), characters outside the
+  subset can't be typed — the editor says so; overlay a correction with the
+  Text tool instead.
 
 - OCR fetches its language model once from a CDN (cached); the recognition
   itself runs locally, so your document is never uploaded.

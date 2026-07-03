@@ -25,6 +25,7 @@ import type {
 import { loadPdf, searchDocument, extractAllText } from "./lib/pdf";
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
+import type { TextObject } from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
 import {
@@ -43,6 +44,12 @@ export interface PendingStamp {
   aspect: number; // height / width
 }
 
+/** The document's base bytes + its parsed pdf.js proxy at a point in history. */
+interface BaseState {
+  bytes: Uint8Array;
+  pdf: PDFDocumentProxy;
+}
+
 interface OpenDoc {
   id: string;
   name: string;
@@ -50,6 +57,13 @@ interface OpenDoc {
   pdf: PDFDocumentProxy;
   annotations: AnnotationMap;
   history: AnnotationMap[];
+  /**
+   * Base bytes/pdf aligned index-for-index with `history`. Annotation-only
+   * steps reuse the same reference (no copy, no reload); a real in-place text
+   * edit pushes a new base. This unifies undo across overlay edits and true
+   * content-stream edits on one timeline.
+   */
+  bytesHistory: BaseState[];
   historyIndex: number;
   currentPage: number;
   /** AcroForm field values entered by the user, keyed by field name. */
@@ -138,6 +152,14 @@ interface AppStore {
   bakeToBytes: () => Promise<Uint8Array | null>;
   downloadCurrent: () => Promise<void>;
   printCurrent: () => Promise<void>;
+
+  /** In-place text editing via PDFium (replaces the whiteout+overlay hack). */
+  getPageTextObjects: (pageIndex: number) => Promise<TextObject[]>;
+  applyTextEdit: (
+    pageIndex: number,
+    objectIndex: number,
+    newText: string,
+  ) => Promise<void>;
 
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
@@ -264,6 +286,47 @@ function docHasEdits(d: OpenDoc): boolean {
   );
 }
 
+const HISTORY_CAP = 60;
+
+/**
+ * Append a new undo step. Trims any redone tail, carries the current base
+ * (bytes/pdf) forward unless a new one is supplied (an in-place text edit),
+ * and keeps `history`/`bytesHistory` aligned. Returns the doc patch.
+ */
+function pushHistory(
+  d: OpenDoc,
+  nextAnnotations: AnnotationMap,
+  nextBase?: BaseState,
+): Partial<OpenDoc> {
+  const trimHist = d.history.slice(0, d.historyIndex + 1);
+  const trimBase = d.bytesHistory.slice(0, d.historyIndex + 1);
+  const base =
+    nextBase ??
+    trimBase[trimBase.length - 1] ?? { bytes: d.bytes, pdf: d.pdf };
+  const history = [...trimHist, nextAnnotations].slice(-HISTORY_CAP);
+  const bytesHistory = [...trimBase, base].slice(-HISTORY_CAP);
+  return {
+    annotations: nextAnnotations,
+    history,
+    bytesHistory,
+    historyIndex: history.length - 1,
+    bytes: base.bytes,
+    pdf: base.pdf,
+  };
+}
+
+/** Destroy every distinct pdf proxy a doc still references, except `keep`. */
+function destroyDocProxies(d: OpenDoc, keep?: PDFDocumentProxy) {
+  const seen = new Set<PDFDocumentProxy>();
+  const kill = (p?: PDFDocumentProxy) => {
+    if (!p || p === keep || seen.has(p)) return;
+    seen.add(p);
+    p.destroy().catch(() => {});
+  };
+  kill(d.pdf);
+  for (const b of d.bytesHistory) kill(b.pdf);
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem(THEME_KEY) as "light" | "dark") || "light",
@@ -367,15 +430,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pushAnnotations = useCallback(
     (next: AnnotationMap) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return {
-          annotations: next,
-          history: appended,
-          historyIndex: appended.length - 1,
-        };
-      });
+      updateDoc(activeTabId, (d) => pushHistory(d, next));
     },
     [activeTabId, updateDoc],
   );
@@ -385,15 +440,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addAnnotation = useCallback(
     (page: number, ann: Annotation) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const next = {
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
           ...d.annotations,
           [page]: [...(d.annotations[page] ?? []), ann],
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
-      });
+        }),
+      );
     },
     [activeTabId, updateDoc],
   );
@@ -401,15 +453,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addAnnotationsMany = useCallback(
     (page: number, anns: Annotation[]) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const next = {
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
           ...d.annotations,
           [page]: [...(d.annotations[page] ?? []), ...anns],
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
-      });
+        }),
+      );
     },
     [activeTabId, updateDoc],
   );
@@ -417,15 +466,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateAnnotation = useCallback(
     (page: number, ann: Annotation) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const next = {
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
           ...d.annotations,
           [page]: (d.annotations[page] ?? []).map((a) => (a.id === ann.id ? ann : a)),
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
-      });
+        }),
+      );
     },
     [activeTabId, updateDoc],
   );
@@ -436,15 +482,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateDoc(activeTabId, (d) => {
         const list = d.annotations[page] ?? [];
         const target = list.find((a) => a.id === id);
-        const next = {
+        return pushHistory(d, {
           ...d.annotations,
           [page]: list.filter(
             (a) => a.id !== id && !(target?.groupId && a.groupId === target.groupId),
           ),
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
+        });
       });
       setSelected(null);
     },
@@ -453,26 +496,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const clearAnnotations = useCallback(() => {
     if (!activeTabId) return;
-    updateDoc(activeTabId, { annotations: {}, history: [{}], historyIndex: 0 });
+    updateDoc(activeTabId, (d) => ({
+      annotations: {},
+      history: [{}],
+      bytesHistory: [{ bytes: d.bytes, pdf: d.pdf }],
+      historyIndex: 0,
+    }));
     setSelected(null);
   }, [activeTabId, updateDoc]);
 
   const undo = useCallback(() => {
-    if (!activeTabId) return;
-    updateDoc(activeTabId, (d) => {
-      const next = Math.max(0, d.historyIndex - 1);
-      return { historyIndex: next, annotations: d.history[next] ?? {} };
+    if (!active) return;
+    const target = Math.max(0, active.historyIndex - 1);
+    const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
+    const pdfChanged = base.pdf !== active.pdf;
+    updateDoc(active.id, {
+      historyIndex: target,
+      annotations: active.history[target] ?? {},
+      bytes: base.bytes,
+      pdf: base.pdf,
     });
     setSelected(null);
-  }, [activeTabId, updateDoc]);
+    if (pdfChanged) setDocVersion((v) => v + 1);
+  }, [active, updateDoc]);
 
   const redo = useCallback(() => {
-    if (!activeTabId) return;
-    updateDoc(activeTabId, (d) => {
-      const next = Math.min(d.history.length - 1, d.historyIndex + 1);
-      return { historyIndex: next, annotations: d.history[next] ?? {} };
+    if (!active) return;
+    const target = Math.min(active.history.length - 1, active.historyIndex + 1);
+    const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
+    const pdfChanged = base.pdf !== active.pdf;
+    updateDoc(active.id, {
+      historyIndex: target,
+      annotations: active.history[target] ?? {},
+      bytes: base.bytes,
+      pdf: base.pdf,
     });
-  }, [activeTabId, updateDoc]);
+    if (pdfChanged) setDocVersion((v) => v + 1);
+  }, [active, updateDoc]);
 
   const hasAnnotations = useMemo(
     () => (active ? docHasEdits(active) : false),
@@ -524,6 +584,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           pdf: pdfDoc,
           annotations: {},
           history: [{}],
+          bytesHistory: [{ bytes, pdf: pdfDoc }],
           historyIndex: 0,
           currentPage: 0,
           formValues: {},
@@ -945,12 +1006,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         const nextBytes = await op(base);
         const nextPdf = await loadPdf(nextBytes);
-        active.pdf.destroy().catch(() => {});
+        destroyDocProxies(active, nextPdf);
         updateDoc(id, {
           bytes: nextBytes,
           pdf: nextPdf,
           annotations: {},
           history: [{}],
+          bytesHistory: [{ bytes: nextBytes, pdf: nextPdf }],
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
@@ -970,6 +1032,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
           `${label} failed: ${err instanceof Error ? err.message : "unknown error"}`,
         );
       }
+    },
+    [active, updateDoc],
+  );
+
+  /** Read the editable text runs on a page (via PDFium), for hit-testing. */
+  const getPageTextObjects = useCallback(
+    async (pageIndex: number) => {
+      if (!active) return [];
+      const { getTextObjects } = await import("./lib/pdfium");
+      return getTextObjects(active.bytes, pageIndex);
+    },
+    [active],
+  );
+
+  /**
+   * True in-place text edit: rewrite the content-stream text object via PDFium,
+   * keeping its font/size/color/position — no whiteout, no overlay copy, and
+   * the original text is genuinely replaced. Pushes one undo step; pending
+   * overlay annotations are left untouched (they still bake on save).
+   */
+  const applyTextEdit = useCallback(
+    async (pageIndex: number, objectIndex: number, newText: string) => {
+      if (!active) return;
+      const id = active.id;
+      const { editTextObject } = await import("./lib/pdfium");
+      const nextBytes = await editTextObject(
+        active.bytes,
+        pageIndex,
+        objectIndex,
+        newText,
+      );
+      const nextPdf = await loadPdf(nextBytes);
+      // Keep the current annotations; only the base bytes/pdf advance. The old
+      // pdf proxy stays referenced by earlier history entries for undo.
+      updateDoc(id, (d) =>
+        pushHistory(d, d.annotations, { bytes: nextBytes, pdf: nextPdf }),
+      );
+      setDocVersion((v) => v + 1);
+      setSelected(null);
+      void persistDoc({
+        id,
+        name: active.name,
+        bytes: nextBytes,
+        lastOpened: Date.now(),
+        open: true,
+      });
     },
     [active, updateDoc],
   );
@@ -1009,12 +1117,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Commit in-app state to the saved bytes.
       if (docHasEdits(active)) {
         const nextPdf = await loadPdf(baked);
-        active.pdf.destroy().catch(() => {});
+        destroyDocProxies(active, nextPdf);
         updateDoc(active.id, {
           bytes: baked,
           pdf: nextPdf,
           annotations: {},
           history: [{}],
+          bytesHistory: [{ bytes: baked, pdf: nextPdf }],
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
@@ -1070,12 +1179,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const next = await addOcrTextLayer(base, ocr);
       const nextPdf = await loadPdf(next);
-      active.pdf.destroy().catch(() => {});
+      destroyDocProxies(active, nextPdf);
       updateDoc(id, {
         bytes: next,
         pdf: nextPdf,
         annotations: {},
         history: [{}],
+        bytesHistory: [{ bytes: next, pdf: nextPdf }],
         historyIndex: 0,
         formValues: {},
         fieldOps: {},
@@ -1240,6 +1350,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     openTreeFile,
     applyBytesOp,
     bakeToBytes,
+    getPageTextObjects,
+    applyTextEdit,
     downloadCurrent,
     printCurrent,
     ocrBusy,
@@ -1310,7 +1422,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSignatureModalOpen,
   };
 
-  // Dev-only hook for driving the app from automated tests.
+  // Dev-only hook for driving the app from automated tests. Reassigned every
+  // render so the exposed closures always see current state (no stale `active`).
   useEffect(() => {
     if (import.meta.env.DEV) {
       (window as any).__pdfwb = {
@@ -1324,10 +1437,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         exitSplit,
         setFolderRoot,
         runOcrText,
-        state: () => ({ activeTabId, activePaneId, panes }),
+        openBytes,
+        getPageTextObjects,
+        applyTextEdit,
+        undo,
+        redo,
+        state: () => ({
+          activeTabId,
+          activePaneId,
+          panes,
+          bytesLen: active?.bytes.length ?? 0,
+          historyIndex: active?.historyIndex ?? -1,
+          historyLen: active?.history.length ?? 0,
+        }),
       };
     }
-  }, [switchTab, setEditMode]);
+  });
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

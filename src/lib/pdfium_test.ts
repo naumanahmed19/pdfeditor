@@ -29,6 +29,17 @@ async function samplePage(): Promise<Uint8Array> {
   return doc.save();
 }
 
+/** A small multi-line text PDF, for exercising the in-place editor UI. */
+export async function makeEditablePdf(): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([420, 260]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("Invoice #1042", { x: 40, y: 200, size: 22, font });
+  page.drawText("Billed to: Acme Corporation", { x: 40, y: 150, size: 14, font });
+  page.drawText("Amount due: $250.00", { x: 40, y: 110, size: 14, font });
+  return doc.save();
+}
+
 async function extractText(bytes: Uint8Array): Promise<string> {
   GlobalWorkerOptions.workerSrc = workerUrl;
   const pdf = await getDocument({ data: bytes.slice() }).promise;

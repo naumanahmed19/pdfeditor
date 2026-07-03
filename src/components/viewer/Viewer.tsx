@@ -19,7 +19,7 @@ import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { pdfjsLib } from "../../lib/pdf";
 import { toast } from "sonner";
 import { useApp } from "../../store";
-import type { Annotation, TextAnnotation, WhiteoutAnnotation } from "../../types";
+import type { Annotation, TextAnnotation } from "../../types";
 import { cn, uid } from "../../lib/utils";
 
 const PAGE_GAP = 24;
@@ -37,88 +37,6 @@ function warnWhiteoutOnce() {
       "The covered text still exists inside the saved PDF and can be selected or extracted. Don't use whiteout to redact confidential information.",
     duration: 9000,
   });
-}
-
-const WELL_MATCHED_FONT =
-  /helvetica|arial|liberation\s?sans|times|liberation\s?serif|courier|liberation\s?mono|calibri|carlito|cambria|caladea/i;
-const warnedFonts = new Set<string>();
-
-const FAMILY_LABEL: Record<string, string> = {
-  helvetica: "Helvetica",
-  times: "Times",
-  courier: "Courier",
-  carlito: "Carlito (Calibri-compatible)",
-  caladea: "Caladea (Cambria-compatible)",
-};
-
-/**
- * Sample the rendered page around a text run: background color from the
- * rect's perimeter (median), text color from inner pixels that differ
- * strongly from the background (average). Falls back to white/dark.
- */
-function sampleTextRunColors(
-  canvas: HTMLCanvasElement | null,
-  pageRect: DOMRect,
-  spanRect: DOMRect,
-): { bg: string; text: string } {
-  const fallback = { bg: "#ffffff", text: "#111111" };
-  if (!canvas || !canvas.width) return fallback;
-  try {
-    const sx = canvas.width / pageRect.width;
-    const sy = canvas.height / pageRect.height;
-    const pad = Math.max(2, Math.round(4 * sx));
-    const ex = Math.max(0, Math.round((spanRect.left - pageRect.left) * sx) - pad);
-    const ey = Math.max(0, Math.round((spanRect.top - pageRect.top) * sy) - pad);
-    const ew = Math.min(canvas.width - ex, Math.round(spanRect.width * sx) + pad * 2);
-    const eh = Math.min(canvas.height - ey, Math.round(spanRect.height * sy) + pad * 2);
-    if (ew < 4 || eh < 4) return fallback;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return fallback;
-    const img = ctx.getImageData(ex, ey, ew, eh).data;
-    const at = (px: number, py: number) => (py * ew + px) * 4;
-
-    // Background: median of perimeter pixels.
-    const perim: number[] = [];
-    const stepX = Math.max(1, Math.floor(ew / 48));
-    const stepY = Math.max(1, Math.floor(eh / 24));
-    for (let px = 0; px < ew; px += stepX) perim.push(at(px, 0), at(px, eh - 1));
-    for (let py = 0; py < eh; py += stepY) perim.push(at(0, py), at(ew - 1, py));
-    const median = (vals: number[]) => {
-      const s = [...vals].sort((a, b) => a - b);
-      return s[s.length >> 1];
-    };
-    const bg = [0, 1, 2].map((c) => median(perim.map((i) => img[i + c])));
-
-    // Text: average of inner pixels far from the background color.
-    let tr = 0, tg = 0, tb = 0, tn = 0;
-    for (let py = pad; py < eh - pad; py += 2) {
-      for (let px = pad; px < ew - pad; px += 2) {
-        const i = at(px, py);
-        const dist =
-          Math.abs(img[i] - bg[0]) +
-          Math.abs(img[i + 1] - bg[1]) +
-          Math.abs(img[i + 2] - bg[2]);
-        if (dist > 140) {
-          tr += img[i];
-          tg += img[i + 1];
-          tb += img[i + 2];
-          tn++;
-        }
-      }
-    }
-    const hex = (r: number, g: number, b: number) =>
-      "#" +
-      [r, g, b]
-        .map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0"))
-        .join("");
-    const bgLum = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) / 255;
-    return {
-      bg: hex(bg[0], bg[1], bg[2]),
-      text: tn > 8 ? hex(tr / tn, tg / tn, tb / tn) : bgLum > 0.5 ? "#111111" : "#f5f5f5",
-    };
-  } catch {
-    return fallback;
-  }
 }
 
 /** CSS font properties for displaying a text annotation on screen. */
@@ -604,6 +522,8 @@ function PageView({
   const [visible, setVisible] = useState(false);
   const renderTask = useRef<{ cancel: () => void } | null>(null);
   const [textLayerReady, setTextLayerReady] = useState(0);
+  const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const w = baseDims.width * scale;
   const h = baseDims.height * scale;
@@ -732,127 +652,73 @@ function PageView({
   const textSelectable =
     (app.tool === "select" || app.tool === "edittext") && !app.pendingStamp;
 
-  // "Edit existing text": clicking a rendered text line covers it with a
-  // whiteout and opens an editable text box with the same content on top.
+  // "Edit existing text": clicking a text run maps the click to the real
+  // PDFium content-stream text object and opens an inline editor over it. On
+  // commit the object's string is rewritten in place (same font/size/color/
+  // position) — no whiteout patch, no overlay copy, original text truly gone.
   const onTextLayerClick = async (e: React.MouseEvent) => {
-    if (app.tool !== "edittext") return;
-    const span = (e.target as HTMLElement).closest(
-      ".textLayer span",
-    ) as HTMLElement | null;
-    if (!span || !span.textContent?.trim() || !wrapRef.current) return;
+    if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
     const pr = wrapRef.current.getBoundingClientRect();
-    const sr = span.getBoundingClientRect();
-    const x = (sr.left - pr.left) / scale;
-    const y = (sr.top - pr.top) / scale;
-    const wPts = sr.width / scale;
-    const hPts = sr.height / scale;
-    // Match the patch to the page background and the retyped text to the
-    // original ink color (handles light text on dark backgrounds).
-    const colors = sampleTextRunColors(canvasRef.current, pr, sr);
-    const computed = getComputedStyle(span);
-    const fontPx = parseFloat(computed.fontSize);
-    const fontSize = Math.max(
-      6,
-      Math.round((Number.isFinite(fontPx) ? fontPx : sr.height * 0.85) / scale),
-    );
+    const xPt = (e.clientX - pr.left) / scale;
+    const yPt = baseDims.height - (e.clientY - pr.top) / scale; // bottom-left origin
 
-    // Detect the original font so the replacement matches: generic family
-    // from pdf.js text styles, weight/slant from the embedded font's name,
-    // and the exact loaded @font-face for pixel-true on-screen display.
-    let fontFamily: TextAnnotation["fontFamily"] = "helvetica";
-    let bold = false;
-    let italic = false;
-    let displayFontCss: string | undefined = computed.fontFamily || undefined;
+    let objs;
     try {
-      const page = await pdf.getPage(pageIndex + 1);
-      const tc = await page.getTextContent();
-      const spans = Array.from(
-        textLayerRef.current?.querySelectorAll(":scope > span") ?? [],
-      );
-      const item = tc.items[spans.indexOf(span)] as any;
-      if (item?.fontName) {
-        const style = (tc as any).styles?.[item.fontName];
-        const generic = String(style?.fontFamily ?? "");
-        if (/monospace/i.test(generic)) fontFamily = "courier";
-        else if (/(^|[^-])serif/i.test(generic) && !/sans-serif/i.test(generic))
-          fontFamily = "times";
-        try {
-          const loaded = page.commonObjs.get(item.fontName) as { name?: string };
-          const name = loaded?.name ?? "";
-          bold = /bold|black|heavy|semi|demi/i.test(name);
-          italic = /italic|oblique/i.test(name);
-          if (/times|georgia|garamond|roman|book|serif/i.test(name) && !/sans/i.test(name))
-            fontFamily = "times";
-          if (/courier|mono/i.test(name)) fontFamily = "courier";
-
-          // Bundled metric-compatible replacements for the Office defaults.
-          // Use the full bundled font on screen too (instead of the embedded
-          // subset) so newly typed characters render in the same face.
-          if (/calibri|carlito/i.test(name)) {
-            fontFamily = "carlito";
-            displayFontCss = undefined;
-          } else if (/cambria|caladea/i.test(name)) {
-            fontFamily = "caladea";
-            displayFontCss = undefined;
-          }
-
-          // Warn (once per font) when the original font has no close
-          // substitute among the embeddable standard fonts.
-          const readable = name
-            .replace(/^[A-Z]{6}\+/, "") // subset prefix, e.g. "ABCDEF+"
-            .replace(/[-_]\d+$/, ""); // subset suffix, e.g. "-2000"
-          if (readable && !WELL_MATCHED_FONT.test(readable) && !warnedFonts.has(readable)) {
-            warnedFonts.add(readable);
-            toast.warning(`Font “${readable}” is not available`, {
-              description: `It's only partially embedded in this PDF, so edited text uses the closest match (${FAMILY_LABEL[fontFamily ?? "helvetica"]}) and may look slightly different — especially in the saved file.`,
-              duration: 8000,
-            });
-          }
-        } catch {
-          /* font object not resolved yet — keep generic detection */
-        }
-      }
+      objs = await app.getPageTextObjects(pageIndex);
     } catch {
-      /* detection is best-effort */
+      toast.error("Couldn't read this page's text for editing.");
+      return;
     }
+    // Smallest text run whose bounds contain the click point.
+    const hit = objs
+      .filter(
+        (o) =>
+          o.text.trim() &&
+          xPt >= o.left &&
+          xPt <= o.right &&
+          yPt >= o.bottom &&
+          yPt <= o.top,
+      )
+      .sort(
+        (a, b) =>
+          (a.right - a.left) * (a.top - a.bottom) -
+          (b.right - b.left) * (b.top - b.bottom),
+      )[0];
+    if (!hit) {
+      toast.info("Click directly on a line of text to edit it.");
+      return;
+    }
+    const [r, g, b] = hit.color;
+    setInlineEdit({
+      objectIndex: hit.index,
+      original: hit.text,
+      left: hit.left * scale,
+      top: (baseDims.height - hit.top) * scale,
+      width: Math.max((hit.right - hit.left) * scale, 24),
+      height: Math.max((hit.top - hit.bottom) * scale, hit.fontSize * scale),
+      fontPx: hit.fontSize * scale,
+      color: `rgb(${r}, ${g}, ${b})`,
+    });
+  };
 
-    // Pair the whiteout with the retyped text: the whiteout is locked in
-    // place (clicks pass through) and both are removed together.
-    const groupId = uid();
-    const whiteout: WhiteoutAnnotation = {
-      id: uid(),
-      kind: "whiteout",
-      x: x - 1.5,
-      y: y - 1.5,
-      w: wPts + 3,
-      h: hPts + 3,
-      color: colors.bg,
-      groupId,
-      locked: true,
-    };
-    const textAnn: TextAnnotation = {
-      id: uid(),
-      kind: "text",
-      groupId,
-      x,
-      y: y - 1,
-      w: Math.max(wPts + 12, 60),
-      h: Math.max(hPts * 1.1, fontSize * 1.3),
-      text: span.textContent,
-      fontSize,
-      color: colors.text,
-      fontFamily,
-      bold,
-      italic,
-      displayFontCss,
-    };
-    app.addAnnotations(pageIndex, [whiteout, textAnn]);
-    app.setSelected({ page: pageIndex, id: textAnn.id });
-    app.setEditRequestId(textAnn.id);
-    app.setTool("select");
-    toast.info(
-      "Original line covered — edit the text box, then drag to fine-tune. Undo with Ctrl+Z.",
-    );
+  const commitInlineEdit = async (text: string) => {
+    const edit = inlineEdit;
+    if (!edit) return;
+    if (text === edit.original || !text.trim()) {
+      setInlineEdit(null);
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await app.applyTextEdit(pageIndex, edit.objectIndex, text);
+    } catch {
+      toast.error(
+        "This text can't be edited in place — its font isn't fully embeddable. Use the Text tool to add a correction on top instead.",
+      );
+    } finally {
+      setSavingEdit(false);
+      setInlineEdit(null);
+    }
   };
 
   return (
@@ -886,7 +752,95 @@ function PageView({
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
+      {inlineEdit && (
+        <InlineTextEditor
+          edit={inlineEdit}
+          saving={savingEdit}
+          onCommit={commitInlineEdit}
+          onCancel={() => setInlineEdit(null)}
+        />
+      )}
     </div>
+  );
+}
+
+interface InlineEdit {
+  objectIndex: number;
+  original: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  fontPx: number;
+  color: string;
+}
+
+/**
+ * Inline editor shown over a text run while editing it in place. It's a
+ * transient input (not a persisted annotation) — on commit the underlying
+ * PDFium text object is rewritten and the page re-renders from real bytes.
+ */
+function InlineTextEditor({
+  edit,
+  saving,
+  onCommit,
+  onCancel,
+}: {
+  edit: InlineEdit;
+  saving: boolean;
+  onCommit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [value, setValue] = useState(edit.original);
+  const done = useRef(false);
+
+  useEffect(() => {
+    const t = ref.current;
+    if (t) {
+      t.focus();
+      t.select();
+    }
+  }, []);
+
+  // Commit once — guard against Enter followed by the unmount blur firing twice.
+  const finish = () => {
+    if (done.current) return;
+    done.current = true;
+    onCommit(value);
+  };
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      disabled={saving}
+      spellCheck={false}
+      onChange={(e) => setValue(e.target.value)}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          finish();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          done.current = true;
+          onCancel();
+        }
+      }}
+      onBlur={finish}
+      className="absolute z-30 resize-none overflow-hidden whitespace-pre rounded-[2px] bg-white leading-none shadow-sm outline outline-2 outline-primary"
+      style={{
+        left: edit.left,
+        top: edit.top,
+        width: Math.max(edit.width + 16, 60),
+        height: Math.max(edit.height + 6, edit.fontPx + 8),
+        fontSize: edit.fontPx,
+        color: edit.color,
+        padding: "1px 3px",
+        fontFamily: "Helvetica, Arial, sans-serif",
+      }}
+    />
   );
 }
 
