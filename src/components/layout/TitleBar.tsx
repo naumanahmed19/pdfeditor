@@ -9,7 +9,7 @@ import {
   FileText,
   FolderOpen,
   LayoutGrid,
-  Menu as MenuIcon,
+  PanelLeft,
   Printer,
   Scissors,
   Search,
@@ -56,7 +56,7 @@ export function TitleBar() {
           if (next) app.setAiOpen(false);
         }}
       >
-        <MenuIcon className="h-4 w-4" />
+        <PanelLeft className="h-4 w-4" />
       </Button>
       <div className="flex items-center px-1 text-sm font-semibold" title="PDF Workbench">
         <FileText className="h-4 w-4 shrink-0" />
