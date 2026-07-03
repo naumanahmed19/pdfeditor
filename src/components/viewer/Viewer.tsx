@@ -603,32 +603,54 @@ function PageView({
     };
   }, [pdf, pageIndex, scale, visible]);
 
-  // Search highlighting on the text layer
+  // Search highlighting on the text layer — wraps only the matched
+  // substring in a mark, not the whole text run.
   useEffect(() => {
     const textDiv = textLayerRef.current;
     if (!textDiv) return;
-    const spans = Array.from(textDiv.querySelectorAll("span"));
-    spans.forEach((s) => s.classList.remove("search-hit", "search-hit-active"));
-    if (!app.searchQuery.trim()) return;
+    const spans = Array.from(
+      textDiv.querySelectorAll<HTMLElement>(":scope > span"),
+    );
+    // Restore any previously marked spans to their original text.
+    for (const s of spans) {
+      if (s.dataset.searchOriginal !== undefined) {
+        s.textContent = s.dataset.searchOriginal;
+        delete s.dataset.searchOriginal;
+      }
+    }
+    const q = app.searchQuery.trim().toLowerCase();
+    if (!q) return;
     const pageMatches = app.searchMatches.filter((m) => m.page === pageIndex);
     if (!pageMatches.length) return;
+
     const active = app.searchMatches[app.activeMatch];
-    const q = app.searchQuery.toLowerCase();
-    spans.forEach((s) => {
-      if (s.textContent?.toLowerCase().includes(q)) {
-        s.classList.add("search-hit");
+    const hitSpans = spans.filter((s) =>
+      s.textContent?.toLowerCase().includes(q),
+    );
+    const activeIdx =
+      active && active.page === pageIndex
+        ? pageMatches.findIndex((m) => m.itemIndex === active.itemIndex)
+        : -1;
+
+    hitSpans.forEach((span, spanIdx) => {
+      const text = span.textContent ?? "";
+      const lower = text.toLowerCase();
+      span.dataset.searchOriginal = text;
+      const frag = document.createDocumentFragment();
+      let pos = 0;
+      let at: number;
+      while ((at = lower.indexOf(q, pos)) !== -1) {
+        if (at > pos) frag.appendChild(document.createTextNode(text.slice(pos, at)));
+        const mark = document.createElement("span");
+        mark.className =
+          spanIdx === activeIdx ? "search-mark search-mark-active" : "search-mark";
+        mark.textContent = text.slice(at, at + q.length);
+        frag.appendChild(mark);
+        pos = at + q.length;
       }
+      if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+      span.replaceChildren(frag);
     });
-    if (active && active.page === pageIndex) {
-      const hit = spans.filter((s) =>
-        s.textContent?.toLowerCase().includes(q),
-      );
-      const idx = pageMatches.findIndex(
-        (m) => m.itemIndex === active.itemIndex,
-      );
-      const el = hit[idx] ?? hit[0];
-      el?.classList.add("search-hit-active");
-    }
   }, [
     app.searchQuery,
     app.searchMatches,

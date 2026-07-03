@@ -125,13 +125,13 @@ body {
   border-radius: 2px;
 }
 
-.textLayer span.search-hit {
+.textLayer .search-mark {
   background: rgba(250, 204, 21, 0.5);
   color: transparent;
   border-radius: 2px;
 }
 
-.textLayer span.search-hit-active {
+.textLayer .search-mark-active {
   background: rgba(249, 115, 22, 0.6);
 }
 
