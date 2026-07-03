@@ -770,9 +770,9 @@ function PageView({
         onClick={onTextLayerClick}
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
-      <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
-      {/* Object editing lives on the Select tool (in edit mode). Rendered below
-          the annotation layer so your own annotations stay clickable on top. */}
+      {/* Object editing lives on the Select tool (in edit mode). Rendered
+          BELOW the form and annotation layers so form fields and your own
+          annotations keep priority — clicks that miss them fall through here. */}
       {app.editMode && app.tool === "select" && visible && (
         <ObjectLayer
           pdf={pdf}
@@ -781,6 +781,7 @@ function PageView({
           canvasRef={canvasRef}
         />
       )}
+      <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
       {inlineEdit && (
         <InlineTextEditor
@@ -1671,6 +1672,7 @@ function FieldDesigner({
         touchAction: app.tool === "select" ? "none" : "auto",
       }}
       className={cn(
+        "group",
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
         !isSelected && app.tool === "select" && "hover:ring-1 hover:ring-blue-400/60",
       )}
@@ -1682,7 +1684,14 @@ function FieldDesigner({
           field.kind === "radio" ? "rounded-full" : "rounded-[2px]",
         )}
       >
-        <span className="absolute -top-[15px] left-0 whitespace-nowrap text-[9px] font-medium leading-none text-sky-600">
+        {/* Field name — hidden by default so it doesn't overlap the form's own
+            labels; revealed on hover or when the field is selected. */}
+        <span
+          className={cn(
+            "pointer-events-none absolute -top-[15px] left-0 z-10 whitespace-nowrap rounded-sm bg-sky-600 px-1 text-[9px] font-medium leading-[1.4] text-white opacity-0 transition-opacity",
+            isSelected ? "opacity-100" : "group-hover:opacity-100",
+          )}
+        >
           {displayName}
           {op?.newName && op.newName !== field.name ? " (renamed)" : ""}
         </span>
