@@ -93,6 +93,19 @@ body {
   scrollbar-width: thin;
 }
 
+/* pdf.js appends this canvas to <body> for text measurement; its own
+   stylesheet (which we don't import) normally hides it. Keep it out of
+   view without affecting canvas-space text measurement. */
+canvas.hiddenCanvasElement {
+  position: fixed !important;
+  top: 0;
+  left: 0;
+  width: 0 !important;
+  height: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none;
+}
+
 /* ---------- pdf.js text layer ---------- */
 .textLayer {
   position: absolute;
