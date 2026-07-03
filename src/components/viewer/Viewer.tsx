@@ -997,15 +997,9 @@ function ObjectProperties({
   const widths = [...new Set([0.5, 1, 1.5, 2, 3, 4, 6, obj.strokeWidth].filter((w) => w > 0))].sort(
     (a, b) => a - b,
   );
-  // Above the selection, or below when it's too close to the top edge.
-  const top = obj.rect.top > 48 ? obj.rect.top - 46 : obj.rect.top + obj.rect.height + 8;
 
   return (
-    <div
-      className="absolute z-20 flex items-center gap-2 rounded-lg border bg-background px-2 py-1.5 shadow-lg"
-      style={{ left: obj.rect.left, top }}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
+    <>
       <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         {kindLabel}
       </span>
@@ -1063,7 +1057,7 @@ function ObjectProperties({
       >
         <Trash2 className="h-3.5 w-3.5" />
       </Button>
-    </div>
+    </>
   );
 }
 
@@ -1437,27 +1431,50 @@ function ObjectLayer({
 
       {/* Contextual properties popover for the selected object. */}
       {selObj && !drag && (
-        <ObjectProperties
-          obj={selObj}
-          busy={busy}
-          onFillPreview={setPreviewHex}
-          onStyle={(patch) => {
-            setBusy(true);
-            app
-              .applyObjectStyle(pageIndex, selObj.index, patch)
-              .catch(() => toast.error("Couldn't restyle that object."))
-              .finally(() => setBusy(false));
-          }}
-          onDelete={() => {
-            const idx = selObj.index;
-            setSel(null);
-            setBusy(true);
-            app
-              .removeObjectAt(pageIndex, idx)
-              .catch(() => toast.error("Couldn't delete that object."))
-              .finally(() => setBusy(false));
-          }}
-        />
+        <Popover open onOpenChange={(o: boolean) => !o && setSel(null)}>
+          <PopoverContent
+            anchor={{
+              getBoundingClientRect: () => {
+                const lr = layerRef.current?.getBoundingClientRect();
+                const l = lr?.left ?? 0;
+                const t = lr?.top ?? 0;
+                return new DOMRect(
+                  l + selObj.rect.left,
+                  t + selObj.rect.top,
+                  selObj.rect.width,
+                  selObj.rect.height,
+                );
+              },
+            }}
+            side="top"
+            align="start"
+            sideOffset={8}
+            className="flex items-center gap-2 px-2 py-1.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <ObjectProperties
+              obj={selObj}
+              busy={busy}
+              onFillPreview={setPreviewHex}
+              onStyle={(patch) => {
+                setBusy(true);
+                app
+                  .applyObjectStyle(pageIndex, selObj.index, patch)
+                  .catch(() => toast.error("Couldn't restyle that object."))
+                  .finally(() => setBusy(false));
+              }}
+              onDelete={() => {
+                const idx = selObj.index;
+                setSel(null);
+                setBusy(true);
+                app
+                  .removeObjectAt(pageIndex, idx)
+                  .catch(() => toast.error("Couldn't delete that object."))
+                  .finally(() => setBusy(false));
+              }}
+            />
+          </PopoverContent>
+        </Popover>
       )}
 
       {/* Drag preview: dim the original, float a ghost of the content. */}
