@@ -413,20 +413,28 @@ export async function editTextObject(
 
 // --- Page objects: enumerate / move / resize / delete ---------------------
 
+const FPDF_PAGEOBJ_PATH = 2;
 const FPDF_PAGEOBJ_IMAGE = 3;
 
-/** Any editable page object (text or image), page space, origin bottom-left. */
+/** RGBA 0–255, or null if the object has no such color. */
+export type Rgba = [number, number, number, number] | null;
+
+/** An editable page object (text, image or vector path), origin bottom-left. */
 export interface PageObject {
   index: number;
-  kind: "text" | "image";
-  /** Text content ("" for images). */
+  kind: "text" | "image" | "path";
+  /** Text content ("" for non-text). */
   text: string;
   left: number;
   bottom: number;
   right: number;
   top: number;
-  /** Font size for text (0 for images). */
+  /** Font size for text (0 otherwise). */
   fontSize: number;
+  /** Fill color (text ink / path fill), if any. */
+  fill: Rgba;
+  /** Stroke color (path outline), if any. */
+  stroke: Rgba;
 }
 
 /** A 2x3 affine matrix { a b c d e f } in PDF page space. */
@@ -453,13 +461,30 @@ export async function getPageObjects(
     const textPage = mod.FPDFText_LoadPage(page);
     const f4 = rt.wasmExports.malloc(16);
     const fs = rt.wasmExports.malloc(4);
+    const c4 = rt.wasmExports.malloc(16); // 4 uints for a color read
+    const readColor = (get: (o: number, r: number, g: number, b: number, a: number) => boolean, obj: number): Rgba => {
+      if (!get(obj, c4, c4 + 4, c4 + 8, c4 + 12)) return null;
+      const a = rt.getValue(c4 + 12, "i32") & 0xff;
+      if (a === 0) return null; // fully transparent = "no color"
+      return [
+        rt.getValue(c4, "i32") & 0xff,
+        rt.getValue(c4 + 4, "i32") & 0xff,
+        rt.getValue(c4 + 8, "i32") & 0xff,
+        a,
+      ];
+    };
     const out: PageObject[] = [];
     try {
       const count = mod.FPDFPage_CountObjects(page);
       for (let i = 0; i < count; i++) {
         const obj = mod.FPDFPage_GetObject(page, i);
         const type = mod.FPDFPageObj_GetType(obj);
-        if (type !== FPDF_PAGEOBJ_TEXT && type !== FPDF_PAGEOBJ_IMAGE) continue;
+        if (
+          type !== FPDF_PAGEOBJ_TEXT &&
+          type !== FPDF_PAGEOBJ_IMAGE &&
+          type !== FPDF_PAGEOBJ_PATH
+        )
+          continue;
         if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
         let text = "";
         let fontSize = 0;
@@ -476,22 +501,45 @@ export async function getPageObjects(
         }
         out.push({
           index: i,
-          kind: type === FPDF_PAGEOBJ_TEXT ? "text" : "image",
+          kind:
+            type === FPDF_PAGEOBJ_TEXT
+              ? "text"
+              : type === FPDF_PAGEOBJ_IMAGE
+                ? "image"
+                : "path",
           text,
           left: rt.getValue(f4, "float"),
           bottom: rt.getValue(f4 + 4, "float"),
           right: rt.getValue(f4 + 8, "float"),
           top: rt.getValue(f4 + 12, "float"),
           fontSize,
+          fill: type === FPDF_PAGEOBJ_IMAGE ? null : readColor(mod.FPDFPageObj_GetFillColor, obj),
+          stroke: type === FPDF_PAGEOBJ_PATH ? readColor(mod.FPDFPageObj_GetStrokeColor, obj) : null,
         });
       }
       return out;
     } finally {
       rt.wasmExports.free(f4);
       rt.wasmExports.free(fs);
+      rt.wasmExports.free(c4);
       mod.FPDFText_ClosePage(textPage);
       mod.FPDF_ClosePage(page);
     }
+  });
+}
+
+/** Set the fill and/or stroke color (RGBA 0–255) of a page object. */
+export async function setObjectColor(
+  bytes: Uint8Array,
+  pageIndex: number,
+  objectIndex: number,
+  colors: { fill?: [number, number, number, number]; stroke?: [number, number, number, number] },
+): Promise<Uint8Array> {
+  return editPage(bytes, pageIndex, (mod, page) => {
+    const obj = mod.FPDFPage_GetObject(page, objectIndex);
+    if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+    if (colors.fill) mod.FPDFPageObj_SetFillColor(obj, ...colors.fill);
+    if (colors.stroke) mod.FPDFPageObj_SetStrokeColor(obj, ...colors.stroke);
   });
 }
 

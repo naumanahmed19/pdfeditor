@@ -173,6 +173,14 @@ interface AppStore {
     m: PdfiumMatrix,
   ) => Promise<void>;
   removeObjectAt: (pageIndex: number, objectIndex: number) => Promise<void>;
+  applyObjectColor: (
+    pageIndex: number,
+    objectIndex: number,
+    colors: {
+      fill?: [number, number, number, number];
+      stroke?: [number, number, number, number];
+    },
+  ) => Promise<void>;
 
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
@@ -1121,11 +1129,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitInPlace],
   );
 
-  /** Delete an existing object (text or image) from the page. */
+  /** Delete an existing object (text, image or path) from the page. */
   const removeObjectAt = useCallback(
     async (pageIndex: number, objectIndex: number) => {
       const { removeObject } = await import("./lib/pdfium");
       await commitInPlace((b) => removeObject(b, pageIndex, objectIndex));
+    },
+    [commitInPlace],
+  );
+
+  /** Recolor an existing object's fill and/or stroke (RGBA 0–255). */
+  const applyObjectColor = useCallback(
+    async (
+      pageIndex: number,
+      objectIndex: number,
+      colors: {
+        fill?: [number, number, number, number];
+        stroke?: [number, number, number, number];
+      },
+    ) => {
+      const { setObjectColor } = await import("./lib/pdfium");
+      await commitInPlace((b) => setObjectColor(b, pageIndex, objectIndex, colors));
     },
     [commitInPlace],
   );
@@ -1403,6 +1427,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     getPageObjects,
     applyObjectTransform,
     removeObjectAt,
+    applyObjectColor,
     downloadCurrent,
     printCurrent,
     ocrBusy,
@@ -1495,6 +1520,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         getPageObjects,
         applyObjectTransform,
         removeObjectAt,
+        applyObjectColor,
         undo,
         redo,
         state: () => ({

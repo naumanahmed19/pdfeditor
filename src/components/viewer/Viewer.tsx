@@ -887,9 +887,11 @@ function InlineTextEditor({
 
 interface ScreenObj {
   index: number;
-  kind: "text" | "image";
+  kind: "text" | "image" | "path";
   pdf: { left: number; bottom: number; right: number; top: number };
   rect: { left: number; top: number; width: number; height: number };
+  fill: [number, number, number, number] | null;
+  stroke: [number, number, number, number] | null;
 }
 
 type Corner = "nw" | "ne" | "sw" | "se";
@@ -897,9 +899,10 @@ const HANDLE = 9; // px hit radius for resize handles
 
 /**
  * Object editor (active on the Select tool in edit mode): click any existing
- * text run or image to select it, drag to move, drag a corner (images) to
- * resize, or press Delete to remove it. Everything commits through PDFium
- * (transformObject/removeObject) — true content-stream edits, unified undo.
+ * text run, image or vector shape (rectangles, lines, fills) to select it, drag
+ * to move, drag a corner (images/shapes) to resize, recolor via the color chip,
+ * or press Delete to remove it. Everything commits through PDFium — true
+ * content-stream edits, unified undo.
  */
 function ObjectLayer({
   pdf,
@@ -959,6 +962,8 @@ function ObjectLayer({
               width: Math.abs(x2 - x1),
               height: Math.abs(y2 - y1),
             },
+            fill: o.fill,
+            stroke: o.stroke,
           };
         });
         if (alive) setObjects(mapped);
@@ -1042,8 +1047,8 @@ function ObjectLayer({
     const px = e.clientX - lr.left;
     const py = e.clientY - lr.top;
 
-    // Resize handle of the current selection (images only)?
-    if (selObj && selObj.kind === "image") {
+    // Resize handle of the current selection (images and shapes)?
+    if (selObj && (selObj.kind === "image" || selObj.kind === "path")) {
       const c = cornerAt(selObj, px, py);
       if (c) {
         e.preventDefault();
@@ -1221,9 +1226,9 @@ function ObjectLayer({
         />
       ))}
 
-      {/* Resize handles for a selected image. */}
+      {/* Resize handles for a selected image or shape. */}
       {selObj &&
-        selObj.kind === "image" &&
+        (selObj.kind === "image" || selObj.kind === "path") &&
         !drag &&
         (["nw", "ne", "sw", "se"] as Corner[]).map((c) => {
           const r = selObj.rect;
@@ -1238,6 +1243,60 @@ function ObjectLayer({
             />
           );
         })}
+
+      {/* Color control for a selected text/shape object (images have no color). */}
+      {selObj &&
+        !drag &&
+        (selObj.fill || selObj.stroke) &&
+        (() => {
+          const cur = (selObj.fill ?? selObj.stroke)!;
+          const hex =
+            "#" +
+            cur
+              .slice(0, 3)
+              .map((v) => v.toString(16).padStart(2, "0"))
+              .join("");
+          const useFill = !!selObj.fill;
+          return (
+            <div
+              className="absolute z-10 flex items-center gap-1.5 rounded-md border bg-background px-1.5 py-1 shadow-md"
+              style={{ left: selObj.rect.left, top: Math.max(2, selObj.rect.top - 32) }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <span className="text-[10px] font-medium text-muted-foreground">
+                {selObj.kind === "text" ? "Text color" : useFill ? "Fill" : "Stroke"}
+              </span>
+              <label
+                className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded border border-border"
+                style={{ backgroundColor: hex }}
+                title="Change color"
+              >
+                <input
+                  type="color"
+                  defaultValue={hex}
+                  disabled={busy}
+                  className="absolute -inset-2 cursor-pointer opacity-0"
+                  onBlur={(e) => {
+                    const h = e.target.value;
+                    if (h.toLowerCase() === hex.toLowerCase()) return;
+                    const rgb: [number, number, number, number] = [
+                      parseInt(h.slice(1, 3), 16),
+                      parseInt(h.slice(3, 5), 16),
+                      parseInt(h.slice(5, 7), 16),
+                      255,
+                    ];
+                    const idx = selObj.index;
+                    setBusy(true);
+                    app
+                      .applyObjectColor(pageIndex, idx, useFill ? { fill: rgb } : { stroke: rgb })
+                      .catch(() => toast.error("Couldn't recolor that object."))
+                      .finally(() => setBusy(false));
+                  }}
+                />
+              </label>
+            </div>
+          );
+        })()}
 
       {/* Drag preview: dim the original, float a ghost of the content. */}
       {drag && (
