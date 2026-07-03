@@ -143,7 +143,7 @@ export function EditorToolbar() {
   // stroke width only for drawing tools.
   const showFontControls = app.tool === "text" || !!selectedText;
   const showStroke = ["ink", "rect", "ellipse", "line"].includes(app.tool);
-  const showColor = showFontControls || showStroke;
+  const showColor = showFontControls || showStroke || app.tool === "highlight";
   // Fill applies to the rectangle/ellipse tools and to a selected rect/ellipse.
   const showFill =
     app.tool === "rect" || app.tool === "ellipse" || !!selectedShape;

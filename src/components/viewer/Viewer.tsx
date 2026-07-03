@@ -243,7 +243,7 @@ export function Viewer() {
           y: (r.top - pr.top) / effectiveScale,
           w: r.width / effectiveScale,
           h: r.height / effectiveScale,
-          color: "#facc15",
+          color: app.toolColor,
         });
         perPage.set(idx, list);
       }
@@ -2146,7 +2146,7 @@ function AnnotationLayer({
           app.addAnnotation(pageIndex, {
             ...base,
             kind: "highlight",
-            color: "#facc15",
+            color: app.toolColor,
           });
         } else if (app.tool === "whiteout") {
           app.addAnnotation(pageIndex, { ...base, kind: "whiteout" });
