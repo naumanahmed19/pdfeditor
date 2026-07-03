@@ -32,7 +32,7 @@ export function Sidebar() {
             label="Recent"
           />
           {app.pdf && (
-            <>
+            <div className="ml-auto flex items-center gap-1">
               <TabButton
                 active={activeTab === "pages"}
                 onClick={() => setTab("pages")}
@@ -47,7 +47,7 @@ export function Sidebar() {
                 label="Outline"
                 iconOnly
               />
-            </>
+            </div>
           )}
         </div>
         {app.pdf && activeTab === "pages" ? (
