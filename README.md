@@ -116,7 +116,8 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 
 ## AI assistant
 
-A right-side, collapsible panel backed by a **local** model by default.
+A right-side, collapsible panel backed by a **local** model by default — with a
+zero-setup option that needs no server at all.
 
 - **Chat** about the open document (its text is extracted and sent as context).
 - **Quick actions**: summarize, key points, explain page.
@@ -125,8 +126,14 @@ A right-side, collapsible panel backed by a **local** model by default.
 - **Insert** any AI answer into the page as a text box.
 - Streaming responses, persisted chat history, connection status, and an
   in-panel **model switcher**.
-- **Providers**: **Ollama** (default, model `gemma3`), **LM Studio**, or any
-  OpenAI-compatible endpoint — configured under **Settings**.
+- **Providers**:
+  - **Built-in (Gemma, in-browser)** — the **default**; runs **Gemma 2 (2B)**
+    entirely in the browser via WebLLM/WebGPU. No Ollama, LM Studio, API key or
+    setup — the model downloads once (~1.4 GB, then cached) and works offline.
+    Needs WebGPU (Chrome/Edge or the desktop app).
+  - **Ollama** (model `gemma3`), **LM Studio**, or any OpenAI-compatible
+    endpoint — for users who already run a local/remote model server.
+  - Switch and configure under **Settings**.
 
 ---
 

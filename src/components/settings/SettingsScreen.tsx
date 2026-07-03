@@ -9,6 +9,11 @@ import { checkConnection, DEFAULT_MODEL } from "../../lib/ai";
 import type { ProviderKind } from "../../types";
 
 const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
+  {
+    value: "browser",
+    label: "Built-in (Gemma)",
+    hint: "Runs in your browser — no setup. Downloads once (~1.4 GB), needs WebGPU (Chrome/Edge/desktop app).",
+  },
   { value: "ollama", label: "Ollama", hint: "Local models via Ollama (default port 11434)" },
   { value: "lmstudio", label: "LM Studio", hint: "Local models via LM Studio server (default port 1234)" },
   { value: "openai_compatible", label: "Custom API", hint: "Any OpenAI-compatible endpoint" },
@@ -134,16 +139,27 @@ export function SettingsScreen() {
             </>
           )}
 
-          <Row
-            title="Model"
-            description={`Default is “${DEFAULT_MODEL}”. If the exact name isn't installed, the closest installed match is used.`}
-          >
-            <Input
-              className="w-64"
-              value={s.model}
-              onChange={(e) => app.setSettings({ ...s, model: e.target.value })}
-            />
-          </Row>
+          {s.provider === "browser" ? (
+            <Row
+              title="Model"
+              description="Gemma 2 (2B) runs in your browser via WebGPU. It downloads once (~1.4 GB) on first use, then works offline — no server or API key."
+            >
+              <span className="rounded-md border border-input px-2 py-1 text-xs text-muted-foreground">
+                Gemma 2 · built-in
+              </span>
+            </Row>
+          ) : (
+            <Row
+              title="Model"
+              description={`Default is “${DEFAULT_MODEL}”. If the exact name isn't installed, the closest installed match is used.`}
+            >
+              <Input
+                className="w-64"
+                value={s.model}
+                onChange={(e) => app.setSettings({ ...s, model: e.target.value })}
+              />
+            </Row>
+          )}
 
           <Row
             title="Connection"
@@ -160,7 +176,7 @@ export function SettingsScreen() {
             </Button>
           </Row>
 
-          {models.length > 0 && (
+          {s.provider !== "browser" && models.length > 0 && (
             <div className="border-t px-4 py-3">
               <p className="pb-2 text-xs font-medium text-muted-foreground">
                 Installed models — click to use

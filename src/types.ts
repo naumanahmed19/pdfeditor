@@ -142,7 +142,11 @@ export type Annotation =
 /** Annotations keyed by 0-based page index. */
 export type AnnotationMap = Record<number, Annotation[]>;
 
-export type ProviderKind = "ollama" | "lmstudio" | "openai_compatible";
+export type ProviderKind =
+  | "browser"
+  | "ollama"
+  | "lmstudio"
+  | "openai_compatible";
 
 export interface AppSettings {
   provider: ProviderKind;

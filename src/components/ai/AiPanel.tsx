@@ -144,17 +144,30 @@ export function AiPanel() {
         ];
 
         abortRef.current = new AbortController();
+        let streaming = false;
         await streamChat(
           app.settings,
           history,
           (delta) => {
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantMsg.id ? { ...m, content: m.content + delta } : m,
+                m.id === assistantMsg.id
+                  ? { ...m, content: (streaming ? m.content : "") + delta }
+                  : m,
+              ),
+            );
+            streaming = true;
+          },
+          abortRef.current.signal,
+          // Download / load progress for the in-browser model (before tokens).
+          (status) => {
+            if (streaming) return;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsg.id ? { ...m, content: status } : m,
               ),
             );
           },
-          abortRef.current.signal,
         );
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
@@ -166,7 +179,9 @@ export function AiPanel() {
                     ...m,
                     content:
                       m.content ||
-                      `⚠️ ${msg}\n\nCheck that ${app.settings.provider === "ollama" ? "Ollama" : app.settings.provider === "lmstudio" ? "LM Studio" : "your API"} is running and the model "${app.settings.model}" is available (Settings).`,
+                      (app.settings.provider === "browser"
+                        ? `⚠️ ${msg}`
+                        : `⚠️ ${msg}\n\nCheck that ${app.settings.provider === "ollama" ? "Ollama" : app.settings.provider === "lmstudio" ? "LM Studio" : "your API"} is running and the model "${app.settings.model}" is available (Settings).`),
                   }
                 : m,
             ),
@@ -378,11 +393,13 @@ export function AiPanel() {
           />
           <div className="flex items-center justify-between gap-2 px-2 pb-2">
             <span className="px-1.5 text-[11px] text-muted-foreground">
-              {app.settings.provider === "ollama"
-                ? "Ollama (local)"
-                : app.settings.provider === "lmstudio"
-                  ? "LM Studio (local)"
-                  : "Custom API"}
+              {app.settings.provider === "browser"
+                ? "Gemma (in-browser)"
+                : app.settings.provider === "ollama"
+                  ? "Ollama (local)"
+                  : app.settings.provider === "lmstudio"
+                    ? "LM Studio (local)"
+                    : "Custom API"}
             </span>
             {busy ? (
               <Button variant="outline" size="icon" className="h-7 w-7" onClick={stop} title="Stop">
