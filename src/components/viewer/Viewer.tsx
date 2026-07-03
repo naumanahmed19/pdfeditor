@@ -23,6 +23,7 @@ import { useApp } from "../../store";
 import type { Annotation, FormFieldAnnotation, TextAnnotation } from "../../types";
 import { cn, uid } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
@@ -2329,8 +2330,6 @@ function FieldProperties({
   const isCheck = ann.fieldType === "checkbox";
   const sm = "h-7 text-xs px-2";
   const lbl = "text-[10px] font-medium text-muted-foreground";
-  const check =
-    "h-3.5 w-3.5 rounded border-input text-primary focus:ring-1 focus:ring-ring";
 
   return (
     <div
@@ -2377,20 +2376,16 @@ function FieldProperties({
 
       <div className="flex gap-3">
         <label className="flex items-center gap-1.5 text-[11px]">
-          <input
-            type="checkbox"
-            className={check}
+          <Checkbox
             checked={!!ann.required}
-            onChange={(e) => onPatch({ required: e.target.checked })}
+            onCheckedChange={(v: boolean) => onPatch({ required: v })}
           />
           Required
         </label>
         <label className="flex items-center gap-1.5 text-[11px]">
-          <input
-            type="checkbox"
-            className={check}
+          <Checkbox
             checked={!!ann.readOnly}
-            onChange={(e) => onPatch({ readOnly: e.target.checked })}
+            onCheckedChange={(v: boolean) => onPatch({ readOnly: v })}
           />
           Read-only
         </label>
@@ -2398,11 +2393,9 @@ function FieldProperties({
 
       {isCheck && (
         <label className="flex items-center gap-1.5 text-[11px]">
-          <input
-            type="checkbox"
-            className={check}
+          <Checkbox
             checked={ann.defaultValue === "true"}
-            onChange={(e) => onPatch({ defaultValue: e.target.checked ? "true" : undefined })}
+            onCheckedChange={(v: boolean) => onPatch({ defaultValue: v ? "true" : undefined })}
           />
           Checked by default
         </label>
@@ -2442,11 +2435,9 @@ function FieldProperties({
       {isText && (
         <div className="flex items-end gap-2">
           <label className="flex items-center gap-1.5 text-[11px]">
-            <input
-              type="checkbox"
-              className={check}
+            <Checkbox
               checked={!!ann.multiline}
-              onChange={(e) => onPatch({ multiline: e.target.checked })}
+              onCheckedChange={(v: boolean) => onPatch({ multiline: v })}
             />
             Multiline
           </label>
