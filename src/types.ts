@@ -149,6 +149,18 @@ export interface SavedSignature {
   createdAt: number;
 }
 
+/** A node in the opened-folder tree (directories and PDF files only). */
+export interface FolderNode {
+  name: string;
+  path: string;
+  kind: "dir" | "file";
+  children?: FolderNode[];
+  /** FileSystemFileHandle when opened via the File System Access API. */
+  handle?: unknown;
+  /** File when opened via a <input webkitdirectory> fallback. */
+  file?: File;
+}
+
 export type Screen =
   | "viewer"
   | "organize"

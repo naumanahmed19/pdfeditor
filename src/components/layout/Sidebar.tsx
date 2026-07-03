@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import {
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   Columns2,
   Files,
   FileText,
+  Folder,
+  FolderOpen,
   History,
+  Loader2,
   Plus,
   X,
 } from "lucide-react";
@@ -12,14 +17,16 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useApp, type RecentFile } from "../../store";
 import { cn } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
-import type { OutlineNode, Screen } from "../../types";
+import type { FolderNode, OutlineNode } from "../../types";
 
 export function Sidebar() {
   const app = useApp();
-  const [tab, setTab] = useState<"pages" | "outline" | "recent">("recent");
+  const [tab, setTab] = useState<"pages" | "outline" | "recent" | "files">(
+    "recent",
+  );
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
-  const activeTab = app.pdf ? tab : "recent";
+  const activeTab = tab === "files" ? "files" : app.pdf ? tab : "recent";
 
   return (
     <aside
@@ -39,26 +46,37 @@ export function Sidebar() {
             icon={<History className="h-3.5 w-3.5" />}
             label="Recent"
           />
-          {app.pdf && (
-            <div className="ml-auto flex items-center gap-1">
-              <TabButton
-                active={activeTab === "pages"}
-                onClick={() => setTab("pages")}
-                icon={<Files className="h-4 w-4" />}
-                label="Pages"
-                iconOnly
-              />
-              <TabButton
-                active={activeTab === "outline"}
-                onClick={() => setTab("outline")}
-                icon={<BookOpen className="h-4 w-4" />}
-                label="Outline"
-                iconOnly
-              />
-            </div>
-          )}
+          <div className="ml-auto flex items-center gap-1">
+            <TabButton
+              active={activeTab === "files"}
+              onClick={() => setTab("files")}
+              icon={<Folder className="h-4 w-4" />}
+              label="Folder"
+              iconOnly
+            />
+            {app.pdf && (
+              <>
+                <TabButton
+                  active={activeTab === "pages"}
+                  onClick={() => setTab("pages")}
+                  icon={<Files className="h-4 w-4" />}
+                  label="Pages"
+                  iconOnly
+                />
+                <TabButton
+                  active={activeTab === "outline"}
+                  onClick={() => setTab("outline")}
+                  icon={<BookOpen className="h-4 w-4" />}
+                  label="Outline"
+                  iconOnly
+                />
+              </>
+            )}
+          </div>
         </div>
-        {app.pdf && activeTab === "pages" ? (
+        {activeTab === "files" ? (
+          <FolderPanel />
+        ) : app.pdf && activeTab === "pages" ? (
           <ThumbnailList />
         ) : app.pdf && activeTab === "outline" ? (
           <OutlinePanel pdf={app.pdf} />
@@ -326,6 +344,108 @@ export function Thumbnail({
         {pageIndex + 1}
       </span>
     </div>
+  );
+}
+
+function FolderPanel() {
+  const app = useApp();
+
+  if (!app.folderRoot) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-start gap-2 px-4 py-4">
+        <button
+          onClick={() => void app.openFolder()}
+          disabled={app.folderBusy}
+          className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+        >
+          {app.folderBusy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <FolderOpen className="h-3.5 w-3.5" />
+          )}
+          Open folder
+        </button>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Browse a folder of PDFs — including nested subfolders — and open any
+          file from the tree.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1.5 px-3 pb-1 pt-1">
+        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium" title={app.folderRoot.name}>
+          {app.folderRoot.name}
+        </span>
+        <button
+          onClick={() => void app.openFolder()}
+          title="Open another folder"
+          className="rounded p-1 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={() => app.closeFolder()}
+          title="Close folder"
+          className="rounded p-1 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+        {(app.folderRoot.children ?? []).map((n) => (
+          <FolderTreeNode key={n.path} node={n} depth={0} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
+  const app = useApp();
+  const [open, setOpen] = useState(depth < 1);
+  const pad = 6 + depth * 12;
+
+  if (node.kind === "dir") {
+    return (
+      <div>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          style={{ paddingLeft: pad }}
+          className="flex w-full items-center gap-1 rounded-md py-1 pr-2 text-left text-xs text-sidebar-foreground transition-colors hover:bg-sidebar-accent"
+        >
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate">{node.name}</span>
+        </button>
+        {open &&
+          (node.children ?? []).map((c) => (
+            <FolderTreeNode key={c.path} node={c} depth={depth + 1} />
+          ))}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => {
+        void app.openTreeFile(node);
+        if (app.isMobile) app.setSidebarOpen(false);
+      }}
+      title={node.name}
+      style={{ paddingLeft: pad + 18 }}
+      className="flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-xs text-sidebar-foreground transition-colors hover:bg-sidebar-accent"
+    >
+      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate">{node.name}</span>
+    </button>
   );
 }
 

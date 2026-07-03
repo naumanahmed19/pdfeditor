@@ -15,6 +15,7 @@ import type {
   AnnotationMap,
   AppSettings,
   ExistingFieldOp,
+  FolderNode,
   FontFamilyKind,
   SavedSignature,
   Screen,
@@ -22,6 +23,7 @@ import type {
   ToolKind,
 } from "./types";
 import { loadPdf, searchDocument } from "./lib/pdf";
+import { pickFolder, readNode } from "./lib/folder";
 import { bakeAnnotations } from "./lib/pdftools";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
@@ -121,6 +123,13 @@ interface AppStore {
   recentFiles: RecentFile[];
   openRecent: (id: string) => Promise<void>;
   closeDocument: () => void;
+
+  /** Opened folder tree (PDFs only, nested folders included). */
+  folderRoot: FolderNode | null;
+  folderBusy: boolean;
+  openFolder: () => Promise<void>;
+  closeFolder: () => void;
+  openTreeFile: (node: FolderNode) => Promise<void>;
   /** Bake pending annotations, then run a structural pdf-lib op on the bytes. */
   applyBytesOp: (
     op: (bytes: Uint8Array) => Promise<Uint8Array>,
@@ -478,6 +487,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
+  const [folderRoot, setFolderRoot] = useState<FolderNode | null>(null);
+  const [folderBusy, setFolderBusy] = useState(false);
   const docHandles = useRef(new Map<string, any>());
 
   const refreshRecent = useCallback(async () => {
@@ -553,9 +564,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [openBytes],
   );
 
+  const openFolder = useCallback(async () => {
+    setFolderBusy(true);
+    try {
+      const root = await pickFolder();
+      if (root) setFolderRoot(root);
+    } catch (err) {
+      toast.error(
+        `Could not open folder: ${err instanceof Error ? err.message : "error"}`,
+      );
+    } finally {
+      setFolderBusy(false);
+    }
+  }, []);
+
+  const closeFolder = useCallback(() => setFolderRoot(null), []);
+
   const registerFileHandle = useCallback((id: string, handle: unknown) => {
     docHandles.current.set(id, handle);
   }, []);
+
+  const openTreeFile = useCallback(
+    async (node: FolderNode) => {
+      if (node.kind !== "file") return;
+      try {
+        const { bytes, name, handle } = await readNode(node);
+        const id = await openBytes(bytes, name);
+        if (id && handle) docHandles.current.set(id, handle);
+      } catch (err) {
+        toast.error(
+          `Could not open ${node.name}: ${err instanceof Error ? err.message : "error"}`,
+        );
+      }
+    },
+    [openBytes],
+  );
 
   const requestOpen = useCallback(async () => {
     const picker = (window as any).showOpenFilePicker;
@@ -1099,6 +1142,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     recentFiles,
     openRecent,
     closeDocument,
+    folderRoot,
+    folderBusy,
+    openFolder,
+    closeFolder,
+    openTreeFile,
     applyBytesOp,
     bakeToBytes,
     downloadCurrent,
@@ -1181,6 +1229,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         openInPane,
         focusPane,
         exitSplit,
+        setFolderRoot,
         state: () => ({ activeTabId, activePaneId, panes }),
       };
     }
