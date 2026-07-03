@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, Files, FileText, History } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { useApp } from "../../store";
+import { useApp, type RecentFile } from "../../store";
 import { cn } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
 import type { OutlineNode, Screen } from "../../types";
@@ -72,8 +72,10 @@ function timeAgo(ts: number): string {
 
 function RecentList() {
   const app = useApp();
+  const openDocs = app.recentFiles.filter((r) => r.open);
+  const closedDocs = app.recentFiles.filter((r) => !r.open);
 
-  if (!app.recentFiles.length) {
+  if (!openDocs.length && !closedDocs.length) {
     return (
       <p className="px-4 py-3 text-xs text-muted-foreground">
         No recent files yet.
@@ -83,46 +85,73 @@ function RecentList() {
 
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
-      <div className="flex flex-col gap-0.5">
-        {app.recentFiles.map((r) => {
-          const isActive = r.id === app.activeTabId;
-          return (
-            <button
-              key={r.id}
-              onClick={() => {
-                void app.openRecent(r.id);
-                if (app.isMobile) app.setSidebarOpen(false);
-              }}
-              title={r.name}
-              className={cn(
-                "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
-                isActive
-                  ? "bg-sidebar-accent font-medium text-foreground"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent",
-              )}
-            >
-              <FileText
-                className={cn(
-                  "h-3.5 w-3.5 shrink-0",
-                  isActive ? "text-foreground" : "text-muted-foreground",
-                )}
-              />
-              <span className="min-w-0 flex-1 truncate">{r.name}</span>
-              {r.open ? (
-                <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
-                  title="Currently open"
-                />
-              ) : (
-                <span className="shrink-0 text-[10px] text-muted-foreground">
-                  {timeAgo(r.lastOpened)}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      {openDocs.length > 0 && (
+        <div className="pb-1">
+          <SectionLabel>Open</SectionLabel>
+          <div className="flex flex-col gap-0.5">
+            {openDocs.map((r) => (
+              <RecentRow key={r.id} r={r} />
+            ))}
+          </div>
+        </div>
+      )}
+      {closedDocs.length > 0 && (
+        <div className={openDocs.length ? "pt-2" : ""}>
+          <SectionLabel>Recently closed</SectionLabel>
+          <div className="flex flex-col gap-0.5">
+            {closedDocs.map((r) => (
+              <RecentRow key={r.id} r={r} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+function RecentRow({ r }: { r: RecentFile }) {
+  const app = useApp();
+  const isActive = r.id === app.activeTabId;
+  return (
+    <button
+      onClick={() => {
+        void app.openRecent(r.id);
+        if (app.isMobile) app.setSidebarOpen(false);
+      }}
+      title={r.name}
+      className={cn(
+        "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+        isActive
+          ? "bg-sidebar-accent font-medium text-foreground"
+          : "text-sidebar-foreground hover:bg-sidebar-accent",
+      )}
+    >
+      <FileText
+        className={cn(
+          "h-3.5 w-3.5 shrink-0",
+          isActive ? "text-foreground" : "text-muted-foreground",
+        )}
+      />
+      <span className="min-w-0 flex-1 truncate">{r.name}</span>
+      {r.open ? (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+          title="Currently open"
+        />
+      ) : (
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          {timeAgo(r.lastOpened)}
+        </span>
+      )}
+    </button>
   );
 }
 
