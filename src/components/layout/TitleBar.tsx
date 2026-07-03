@@ -58,9 +58,6 @@ export function TitleBar() {
       >
         <PanelLeft className="h-4 w-4" />
       </Button>
-      <div className="flex items-center px-1 text-sm font-semibold" title="PDF Workbench">
-        <FileText className="h-4 w-4 shrink-0" />
-      </div>
 
       <Menu>
         <MenuTrigger className="h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground">
