@@ -127,9 +127,9 @@ zero-setup option that needs no server at all.
 - Streaming responses, persisted chat history, connection status, and an
   in-panel **model switcher**.
 - **Providers**:
-  - **Built-in (Gemma, in-browser)** — the **default**; runs **Gemma 2 (2B)**
+  - **Built-in (Gemma, in-browser)** — the **default**; runs **Gemma 3 (1B)**
     entirely in the browser via WebLLM/WebGPU. No Ollama, LM Studio, API key or
-    setup — the model downloads once (~1.4 GB, then cached) and works offline.
+    setup — the model downloads once (~1 GB, then cached) and works offline.
     Needs WebGPU (Chrome/Edge or the desktop app).
   - **Ollama** (model `gemma3`), **LM Studio**, or any OpenAI-compatible
     endpoint — for users who already run a local/remote model server.

@@ -4,9 +4,10 @@
 // the browser after the first download.
 import type { ChatMessage } from "../types";
 
-// Newest Gemma runnable in-browser today (Gemma 3/4 aren't available in WebLLM).
-export const BROWSER_MODEL_ID = "gemma-2-2b-it-q4f16_1-MLC";
-export const BROWSER_MODEL_LABEL = "Gemma 2 (in-browser)";
+// Newest Gemma runnable in-browser today: Gemma 3 (1B), instruction-tuned.
+// (There is no "Gemma 4"; Gemma 3 is Google's latest — ai.google.dev/gemma.)
+export const BROWSER_MODEL_ID = "gemma3-1b-it-q4f16_1-MLC";
+export const BROWSER_MODEL_LABEL = "Gemma 3 (in-browser)";
 
 /** WebLLM needs WebGPU (Chrome/Edge, or the desktop app's WebView2). */
 export function webgpuAvailable(): boolean {

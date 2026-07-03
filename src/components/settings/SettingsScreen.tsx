@@ -12,7 +12,7 @@ const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   {
     value: "browser",
     label: "Built-in (Gemma)",
-    hint: "Runs in your browser — no setup. Downloads once (~1.4 GB), needs WebGPU (Chrome/Edge/desktop app).",
+    hint: "Runs in your browser — no setup. Downloads once (~1 GB), needs WebGPU (Chrome/Edge/desktop app).",
   },
   { value: "ollama", label: "Ollama", hint: "Local models via Ollama (default port 11434)" },
   { value: "lmstudio", label: "LM Studio", hint: "Local models via LM Studio server (default port 1234)" },
@@ -142,10 +142,10 @@ export function SettingsScreen() {
           {s.provider === "browser" ? (
             <Row
               title="Model"
-              description="Gemma 2 (2B) runs in your browser via WebGPU. It downloads once (~1.4 GB) on first use, then works offline — no server or API key."
+              description="Gemma 3 (1B) runs in your browser via WebGPU. It downloads once (~1 GB) on first use, then works offline — no server or API key."
             >
               <span className="rounded-md border border-input px-2 py-1 text-xs text-muted-foreground">
-                Gemma 2 · built-in
+                Gemma 3 · built-in
               </span>
             </Row>
           ) : (
