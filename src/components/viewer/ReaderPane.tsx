@@ -7,14 +7,7 @@ import {
   useState,
 } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import {
-  ArrowLeftRight,
-  ChevronLeft,
-  ChevronRight,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
 import { pdfjsLib } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
@@ -106,31 +99,6 @@ export function ReaderPane({ docId }: { docId: string }) {
 
   return (
     <div className="flex h-full min-w-0 flex-col bg-muted/40 dark:bg-background">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur">
-        <span className="truncate text-xs font-medium text-muted-foreground">
-          {doc.name}
-        </span>
-        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-          reference
-        </span>
-        <div className="ml-auto flex items-center gap-0.5">
-          <button
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Swap with the editable pane"
-            onClick={() => app.swapSplit()}
-          >
-            <ArrowLeftRight className="h-3.5 w-3.5" />
-          </button>
-          <button
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Close split view"
-            onClick={() => app.closeSplit()}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-
       <div className="relative min-h-0 flex-1">
         <div
           ref={containerRef}

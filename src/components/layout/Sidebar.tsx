@@ -174,18 +174,16 @@ function RecentRow({ r }: { r: RecentFile }) {
             title="Currently open"
           />
           <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-            {!isActive && r.id !== app.splitTabId && (
-              <button
-                className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                title="Open side-by-side"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  app.openInSplit(r.id);
-                }}
-              >
-                <Columns2 className="h-3 w-3" />
-              </button>
-            )}
+            <button
+              className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="Open in a split pane"
+              onClick={(e) => {
+                e.stopPropagation();
+                app.openInPane(r.id);
+              }}
+            >
+              <Columns2 className="h-3 w-3" />
+            </button>
             <button
               className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               title="Close document"

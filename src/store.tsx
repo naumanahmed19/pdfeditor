@@ -82,12 +82,20 @@ interface AppStore {
   switchTab: (id: string) => void;
   closeTab: (id: string) => void;
 
-  /** Second document shown side-by-side (read-only reference pane). */
-  splitTabId: string | null;
-  openInSplit: (id: string) => void;
-  closeSplit: () => void;
-  swapSplit: () => void;
-  /** Read a specific open document by id (for the split pane). */
+  /** Editor panes for split view. Empty = single view (uses activeTabId). */
+  panes: Array<{ id: string; docId: string }>;
+  activePaneId: string | null;
+  /** Split the current document into a new pane (VS Code style). */
+  splitView: () => void;
+  /** Open a document in a new pane. */
+  openInPane: (docId: string) => void;
+  /** Make a pane the focused (editable) one. */
+  focusPane: (paneId: string) => void;
+  closePane: (paneId: string) => void;
+  exitSplit: () => void;
+  /** Bake + print a specific document. */
+  printDoc: (docId: string) => Promise<void>;
+  /** Read a specific open document by id. */
   docById: (id: string) => {
     id: string;
     name: string;
@@ -255,7 +263,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [screen, setScreen] = useState<Screen>("viewer");
   const [docs, setDocs] = useState<OpenDoc[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [splitTabId, setSplitTabId] = useState<string | null>(null);
+  const [panes, setPanes] = useState<Array<{ id: string; docId: string }>>([]);
+  const [activePaneId, setActivePaneId] = useState<string | null>(null);
+  const MAX_PANES = 4;
   const [docVersion, setDocVersion] = useState(0);
 
   const active = docs.find((d) => d.id === activeTabId) ?? null;
@@ -613,13 +623,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const switchTab = useCallback(
     (id: string) => {
-      if (id === activeTabId) return;
+      // In split view, load the document into the focused pane.
+      if (panes.length > 0 && activePaneId) {
+        setPanes((prev) =>
+          prev.map((p) => (p.id === activePaneId ? { ...p, docId: id } : p)),
+        );
+      }
+      if (id === activeTabId) {
+        setScreen("viewer");
+        return;
+      }
       setActiveTabId(id);
       setDocVersion((v) => v + 1);
       resetTransient();
       setScreen("viewer");
     },
-    [activeTabId, resetTransient],
+    [activeTabId, panes.length, activePaneId, resetTransient],
   );
 
   const closeTab = useCallback(
@@ -642,38 +661,128 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         return next;
       });
-      if (id === splitTabId || id === activeTabId) setSplitTabId(null);
+      // Drop panes that referenced the closed doc; collapse if < 2 remain.
+      setPanes((prev) => {
+        const next = prev.filter((p) => p.docId !== id);
+        if (next.length < 2) {
+          setActivePaneId(null);
+          return [];
+        }
+        return next;
+      });
       setDocVersion((v) => v + 1);
       resetTransient();
       docHandles.current.delete(id);
       void markDocClosed(id).then(refreshRecent);
     },
-    [docs, activeTabId, splitTabId, resetTransient, refreshRecent],
+    [docs, activeTabId, resetTransient, refreshRecent],
   );
 
   const closeDocument = useCallback(() => {
     if (activeTabId) closeTab(activeTabId);
   }, [activeTabId, closeTab]);
 
-  const openInSplit = useCallback(
-    (id: string) => {
-      if (!docs.some((d) => d.id === id) || id === activeTabId) return;
-      setSplitTabId(id);
+  const splitView = useCallback(() => {
+    if (!activeTabId) return;
+    setPanes((prev) => {
+      if (prev.length === 0) {
+        const p1 = uid();
+        const p2 = uid();
+        setActivePaneId(p1);
+        return [
+          { id: p1, docId: activeTabId },
+          { id: p2, docId: activeTabId },
+        ];
+      }
+      if (prev.length >= MAX_PANES) return prev;
+      return [...prev, { id: uid(), docId: activeTabId }];
+    });
+    setScreen("viewer");
+  }, [activeTabId]);
+
+  const openInPane = useCallback(
+    (docId: string) => {
+      if (!docs.some((d) => d.id === docId) || !activeTabId) return;
+      setPanes((prev) => {
+        if (prev.length === 0) {
+          const p1 = uid();
+          const p2 = uid();
+          setActivePaneId(p1);
+          return [
+            { id: p1, docId: activeTabId },
+            { id: p2, docId },
+          ];
+        }
+        if (prev.length >= MAX_PANES) return prev;
+        return [...prev, { id: uid(), docId }];
+      });
       setScreen("viewer");
     },
     [docs, activeTabId],
   );
 
-  const closeSplit = useCallback(() => setSplitTabId(null), []);
+  const focusPane = useCallback((paneId: string) => {
+    setPanes((prev) => {
+      const pane = prev.find((p) => p.id === paneId);
+      if (pane) {
+        setActivePaneId(paneId);
+        setActiveTabId(pane.docId);
+        setDocVersion((v) => v + 1);
+        resetTransient();
+      }
+      return prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const swapSplit = useCallback(() => {
-    if (!splitTabId || !activeTabId) return;
-    const a = activeTabId;
-    setActiveTabId(splitTabId);
-    setSplitTabId(a);
-    setDocVersion((v) => v + 1);
-    resetTransient();
-  }, [splitTabId, activeTabId, resetTransient]);
+  const closePane = useCallback((paneId: string) => {
+    setPanes((prev) => {
+      const next = prev.filter((p) => p.id !== paneId);
+      if (next.length < 2) {
+        const remain = next[0] ?? prev.find((p) => p.id !== paneId);
+        if (remain) setActiveTabId(remain.docId);
+        setActivePaneId(null);
+        return [];
+      }
+      if (paneId === activePaneId) {
+        setActivePaneId(next[0].id);
+        setActiveTabId(next[0].docId);
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePaneId]);
+
+  const exitSplit = useCallback(() => {
+    setPanes([]);
+    setActivePaneId(null);
+  }, []);
+
+  const printDoc = useCallback(
+    async (docId: string) => {
+      const d = docs.find((x) => x.id === docId);
+      if (!d) return;
+      let bytes = d.bytes;
+      if (docHasEdits(d)) {
+        bytes = await bakeAnnotations(d.bytes, d.annotations, d.formValues, d.fieldOps);
+      }
+      const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const iframe = document.createElement("iframe");
+      iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+      iframe.src = url;
+      iframe.onload = () => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        setTimeout(() => {
+          document.body.removeChild(iframe);
+          URL.revokeObjectURL(url);
+        }, 60_000);
+      };
+      document.body.appendChild(iframe);
+    },
+    [docs],
+  );
 
   const docById = useCallback(
     (id: string) => {
@@ -938,10 +1047,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeTabId,
     switchTab,
     closeTab,
-    splitTabId,
-    openInSplit,
-    closeSplit,
-    swapSplit,
+    panes,
+    activePaneId,
+    splitView,
+    openInPane,
+    focusPane,
+    closePane,
+    exitSplit,
+    printDoc,
     docById,
     docName: active?.name ?? null,
     docBytes: active?.bytes ?? null,
