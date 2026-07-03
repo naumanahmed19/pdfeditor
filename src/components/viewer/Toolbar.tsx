@@ -19,6 +19,7 @@ import {
   TextCursorInput,
   Type,
   Undo2,
+  X,
 } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
@@ -30,6 +31,7 @@ import { cn } from "../../lib/utils";
 import type {
   FontFamilyKind,
   FormFieldAnnotation,
+  ShapeAnnotation,
   TextAnnotation,
   ToolKind,
 } from "../../types";
@@ -115,6 +117,24 @@ export function EditorToolbar() {
     }
   };
 
+  // A selected rect/ellipse annotation (fillable shapes).
+  const selectedShape = (() => {
+    if (!app.selected) return null;
+    const ann = (app.annotations[app.selected.page] ?? []).find(
+      (a) => a.id === app.selected!.id,
+    );
+    return ann && (ann.kind === "rect" || ann.kind === "ellipse") ? ann : null;
+  })();
+
+  const patchSelectedShape = (patch: Partial<ShapeAnnotation>) => {
+    if (selectedShape && app.selected) {
+      app.updateAnnotation(app.selected.page, {
+        ...selectedShape,
+        ...patch,
+      } as ShapeAnnotation);
+    }
+  };
+
   const fontFamily = selectedText?.fontFamily ?? app.fontFamily;
   const isBold = selectedText ? !!selectedText.bold : app.fontBold;
   const isItalic = selectedText ? !!selectedText.italic : app.fontItalic;
@@ -124,6 +144,14 @@ export function EditorToolbar() {
   const showFontControls = app.tool === "text" || !!selectedText;
   const showStroke = ["ink", "rect", "ellipse", "line"].includes(app.tool);
   const showColor = showFontControls || showStroke;
+  // Fill applies to the rectangle/ellipse tools and to a selected rect/ellipse.
+  const showFill =
+    app.tool === "rect" || app.tool === "ellipse" || !!selectedShape;
+  const fillValue = selectedShape ? selectedShape.fill ?? null : app.toolFill;
+  const setFill = (v: string | null) => {
+    if (selectedShape) patchSelectedShape({ fill: v ?? undefined });
+    else app.setToolFill(v);
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
@@ -314,12 +342,43 @@ export function EditorToolbar() {
             aria-label="Stroke width"
             className="h-7 w-[4.75rem] px-2 text-xs"
           >
-            {[1, 2, 3, 4, 6, 8].map((w) => (
+            {[0, 1, 2, 3, 4, 6, 8].map((w) => (
               <option key={w} value={w}>
-                {w}px
+                {w === 0 ? "No border" : `${w}px`}
               </option>
             ))}
           </Select>
+        )}
+        {showFill && (
+          <div className="flex items-center gap-1 rounded-md border border-input px-1.5 py-0.5">
+            <span className="text-[10px] font-medium text-muted-foreground">Fill</span>
+            {fillValue ? (
+              <>
+                <input
+                  type="color"
+                  value={fillValue}
+                  onChange={(e) => setFill(e.target.value)}
+                  title="Fill color"
+                  className="h-5 w-5 cursor-pointer rounded border border-input bg-background p-0.5"
+                />
+                <button
+                  title="Remove fill"
+                  onClick={() => setFill(null)}
+                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </>
+            ) : (
+              <button
+                title="Add a fill color"
+                onClick={() => setFill(fillValue || app.toolColor || "#3b82f6")}
+                className="rounded px-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                None
+              </button>
+            )}
+          </div>
         )}
         {selectedFormField && (
           <>

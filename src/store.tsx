@@ -201,6 +201,9 @@ interface AppStore {
   setTool: (t: ToolKind) => void;
   toolColor: string;
   setToolColor: (c: string) => void;
+  /** Fill color for new rect/ellipse shapes; null = no fill. */
+  toolFill: string | null;
+  setToolFill: (c: string | null) => void;
   strokeWidth: number;
   setStrokeWidth: (w: number) => void;
   fontSize: number;
@@ -384,6 +387,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [editMode, setEditModeState] = useState(false);
   const [tool, setTool] = useState<ToolKind>("select");
   const [toolColor, setToolColor] = useState("#e11d48");
+  // Fill color for new rect/ellipse shapes; null = no fill (outline only).
+  const [toolFill, setToolFill] = useState<string | null>(null);
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [fontSize, setFontSize] = useState(14);
   const [fontFamily, setFontFamily] = useState<FontFamilyKind>("helvetica");
@@ -1436,6 +1441,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTool,
     toolColor,
     setToolColor,
+    toolFill,
+    setToolFill,
     strokeWidth,
     setStrokeWidth,
     fontSize,

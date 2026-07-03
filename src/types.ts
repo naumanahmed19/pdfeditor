@@ -62,6 +62,8 @@ export interface ShapeAnnotation extends BaseAnnotation {
   kind: "rect" | "ellipse" | "line";
   color: string;
   strokeWidth: number;
+  /** Fill color for rect/ellipse; omitted = no fill (outline only). */
+  fill?: string;
 }
 
 export interface InkAnnotation extends BaseAnnotation {

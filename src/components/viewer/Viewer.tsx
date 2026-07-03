@@ -2133,6 +2133,8 @@ function AnnotationLayer({
             kind: app.tool,
             color: app.toolColor,
             strokeWidth: app.strokeWidth,
+            // Fill applies to rect/ellipse only (a line can't be filled).
+            ...(app.tool !== "line" && app.toolFill ? { fill: app.toolFill } : {}),
           });
         }
       }
@@ -2447,7 +2449,8 @@ function AnnotationItem({
         <div
           className="h-full w-full"
           style={{
-            border: `${ann.strokeWidth * scale}px solid ${ann.color}`,
+            border: ann.strokeWidth > 0 ? `${ann.strokeWidth * scale}px solid ${ann.color}` : undefined,
+            backgroundColor: ann.fill,
           }}
         />
       );
@@ -2457,7 +2460,8 @@ function AnnotationItem({
         <div
           className="h-full w-full rounded-[50%]"
           style={{
-            border: `${ann.strokeWidth * scale}px solid ${ann.color}`,
+            border: ann.strokeWidth > 0 ? `${ann.strokeWidth * scale}px solid ${ann.color}` : undefined,
+            backgroundColor: ann.fill,
           }}
         />
       );

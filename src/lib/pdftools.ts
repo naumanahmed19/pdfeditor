@@ -586,24 +586,28 @@ async function drawAnnotation(
     }
     case "rect": {
       const c = hexToRgb01(ann.color);
+      const f = ann.fill ? hexToRgb01(ann.fill) : null;
       page.drawRectangle({
         x: r.x,
         y: r.y,
         width: r.w,
         height: r.h,
-        borderColor: rgb(c.r, c.g, c.b),
+        color: f ? rgb(f.r, f.g, f.b) : undefined,
+        borderColor: ann.strokeWidth > 0 ? rgb(c.r, c.g, c.b) : undefined,
         borderWidth: ann.strokeWidth,
       });
       break;
     }
     case "ellipse": {
       const c = hexToRgb01(ann.color);
+      const f = ann.fill ? hexToRgb01(ann.fill) : null;
       page.drawEllipse({
         x: r.x + r.w / 2,
         y: r.y + r.h / 2,
         xScale: r.w / 2,
         yScale: r.h / 2,
-        borderColor: rgb(c.r, c.g, c.b),
+        color: f ? rgb(f.r, f.g, f.b) : undefined,
+        borderColor: ann.strokeWidth > 0 ? rgb(c.r, c.g, c.b) : undefined,
         borderWidth: ann.strokeWidth,
       });
       break;
