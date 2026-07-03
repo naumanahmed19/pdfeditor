@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Files, FileText, History } from "lucide-react";
+import { BookOpen, Files, FileText, History, Plus } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useApp, type RecentFile } from "../../store";
 import { cn } from "../../lib/utils";
@@ -87,7 +87,16 @@ function RecentList() {
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
       {openDocs.length > 0 && (
         <div className="pb-1">
-          <SectionLabel>Open</SectionLabel>
+          <div className="flex items-center justify-between pr-0.5">
+            <SectionLabel>Open</SectionLabel>
+            <button
+              title="Open a PDF"
+              onClick={() => void app.requestOpen()}
+              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <div className="flex flex-col gap-0.5">
             {openDocs.map((r) => (
               <RecentRow key={r.id} r={r} />
