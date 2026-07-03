@@ -3,20 +3,14 @@ import { ToggleGroup as BaseToggleGroup } from "@base-ui-components/react/toggle
 import { Toggle as BaseToggle } from "@base-ui-components/react/toggle";
 import { cn } from "../../lib/utils";
 
-/**
- * Single-select segmented control built on Base UI. Renders a muted track by
- * default; pass a plain className to embed it inside an existing track.
- */
+/** Single-select segmented control, styled like the default shadcn toggle group. */
 export const ToggleGroup = React.forwardRef<
   React.ElementRef<typeof BaseToggleGroup>,
   React.ComponentPropsWithoutRef<typeof BaseToggleGroup>
 >(({ className, ...props }, ref) => (
   <BaseToggleGroup
     ref={ref}
-    className={cn(
-      "inline-flex items-center gap-0.5 rounded-md bg-muted p-0.5",
-      className,
-    )}
+    className={cn("flex items-center gap-1", className)}
     {...props}
   />
 ));
@@ -29,9 +23,10 @@ export const ToggleGroupItem = React.forwardRef<
   <BaseToggle
     ref={ref}
     className={cn(
-      "flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors",
-      "hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-      "data-[pressed]:bg-background data-[pressed]:text-foreground data-[pressed]:shadow-sm",
+      "inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium text-muted-foreground transition-colors",
+      "hover:bg-muted hover:text-foreground",
+      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      "data-[pressed]:bg-accent data-[pressed]:text-accent-foreground",
       "disabled:pointer-events-none disabled:opacity-50",
       className,
     )}
