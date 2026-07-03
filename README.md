@@ -1,62 +1,117 @@
 # PDF Workbench
 
-A professional PDF reader & editor with local-AI assistance, styled after the
-Outreach Workbench shell (same theme, layout and component patterns).
+A professional, local-first PDF **reader, editor, form designer and organizer**
+with a built-in **local-AI assistant** — runs in the browser and ships as a
+Windows desktop app. Styled after the Outreach Workbench shell (same theme,
+layout and component patterns).
 
 ![stack](https://img.shields.io/badge/stack-React%2018%20%2B%20Vite%20%2B%20Tailwind-blue)
+![engine](https://img.shields.io/badge/pdf-pdf.js%20%2B%20pdf--lib-orange)
+![desktop](https://img.shields.io/badge/desktop-Tauri%202-brightgreen)
 
-## Features
+Everything runs client-side. Documents never leave your machine except as
+context sent to the AI endpoint you configure (which can be fully local).
 
-**Reader**
-- Open PDFs via drag & drop or file picker; multi-document tabs with
-  session restore and a recent-files list (IndexedDB)
-- Password-protected PDFs, clickable links (URLs + internal destinations)
-- Continuous scrolling viewer with lazy page rendering (pdf.js)
-- Selectable text layer, full-document search with highlights & prev/next
-- Page thumbnails, outline navigation, document properties (editable metadata)
-- Zoom, fit-width/fit-page, fullscreen, page jump, print, dark/light theme
-- Keyboard shortcuts: Ctrl+O/F/S/P, +/−, PageUp/PageDown, Home/End
-- **Form filling**: AcroForm text fields, checkboxes, radios and dropdowns,
-  saved into the PDF
+---
 
-**Editor** (annotations are baked into the PDF on save)
-- Edit existing text: click any line with the edit-text tool — it's covered
-  with a whiteout and reopened as an editable text box in place, with the
-  original font family, size, bold and italic auto-detected
-- Bundled metric-compatible fonts (SIL OFL): Carlito (Calibri) and Caladea
-  (Cambria) are auto-selected when the original document uses those Office
-  fonts, shown on screen and fully embedded into the saved PDF; a warning
-  toast appears when a font has no close substitute
-- Text boxes, highlights, freehand ink, rectangles, ellipses, lines
-- Whiteout (cover & retype), image stamps
-- Signatures: draw, type (script fonts) or upload — saved for reuse
-- Move/resize/delete annotations, undo/redo (Ctrl+Z / Ctrl+Shift+Z)
-- Correct baking on rotated pages
+## Reader
 
-**Tools**
-- Merge PDFs and PNG/JPG images (each image becomes a page)
-- Split into single pages (zip), extract ranges ("1-3, 5"), export pages
-  as high-res PNGs (zip)
-- Organize: drag-and-drop reorder, rotate, duplicate, delete, insert blank
-  pages or pages from another PDF
-- Watermark (text, opacity, color, diagonal) and page numbering
+- **Open** PDFs by drag & drop, file picker, folder browser, or a recent-files
+  list — plus password-protected PDFs (prompts for the password).
+- **Continuous scrolling** viewer with lazy per-page rendering (pdf.js),
+  fit-width / fit-page / manual zoom, fullscreen, and a floating page/zoom pill.
+- **Selectable text layer** and **full-document search** that highlights the
+  matched word (not the whole line) with prev/next and a match counter.
+- **Clickable links** — external URLs open in a new tab; internal links jump to
+  the target page.
+- **Navigation**: page thumbnails, document outline/bookmarks, page jump.
+- **Document properties** dialog (file info, page size) with editable
+  Title/Author metadata.
+- **Print** and **dark / light theme**.
+- **Keyboard shortcuts**: `Ctrl/⌘+O` open, `+F` search, `+S` save, `+P` print,
+  `+`/`−` zoom, `PageUp`/`PageDown`, `Home`/`End`, arrow keys nudge a selected
+  annotation, `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo.
 
-**Desktop app (Tauri)**
-- `bun tauri build` produces a Windows installer (NSIS `.exe` + `.msi`)
-  in `src-tauri/target/release/bundle/` — requires the Rust toolchain
-- Save-in-place: files opened via the picker (Chromium / desktop app) are
-  saved back to the original file; otherwise an edited copy downloads
+## Editor
 
-**AI assistant** (right-side panel)
-- Chat about the open document (text is extracted and sent as context)
-- Quick actions: summarize, key points, explain page
-- Select text in the PDF → rewrite / fix grammar / translate / explain
-- Insert any AI answer into the page as a text box
-- Providers: **Ollama** (default, model `gemma3`), **LM Studio**, or any
-  OpenAI-compatible endpoint — with model discovery, connection status and
-  streaming responses. Configure under **Settings**.
+Annotations are overlaid live and **baked into the PDF on save** (correct on
+rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 
-## Run
+- **Add text** boxes that **auto-grow** to fit what you type (width then wrap).
+- **Edit existing text** in place: click a line and it's covered with a
+  page-color-matched patch and reopened as an editable box — with the original
+  **font family, size, bold/italic and ink color auto-detected** from the page.
+- **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
+  **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
+- **Signatures**: draw, type (script fonts), or upload an image — saved for
+  reuse and placed anywhere.
+- **Fonts**: the 14 standard PDF fonts plus bundled metric-compatible
+  **Carlito (Calibri)** and **Caladea (Cambria)** (SIL OFL) — auto-selected for
+  Office documents and fully embedded on save; a warning appears when a font has
+  no close substitute.
+- Move / resize / delete / **nudge** annotations, aspect-locked image resize,
+  full **undo/redo** history per document.
+
+## Forms
+
+- **Fill** existing AcroForm fields — text, checkbox, radio, dropdown — with
+  values saved into the PDF.
+- **Design** forms: a Field menu places **text fields, checkboxes, radio groups
+  and dropdowns** as draggable placeholders; set name, options and radio values
+  in the toolbar. On save they become real AcroForm fields (tall text fields
+  become multiline).
+- **Edit existing fields**: move, resize, rename or delete a document's fields;
+  changes are written back to the form on save.
+
+## Tools
+
+- **Merge** PDFs — and PNG/JPG **images** (each image becomes a page).
+- **Split & extract**: split into single pages (zip), extract a range
+  (`1-3, 5, 8-10`), or export every page as a **high-res PNG** (zip).
+- **Organize pages**: drag-and-drop reorder, rotate, duplicate, delete, insert
+  blank pages, or **insert pages from another PDF**.
+- **Watermark** (text, opacity, color, diagonal) and **page numbering**.
+
+## Workspace
+
+- **Multi-document tabs** — open many PDFs at once; switch, close, and reopen
+  from the sidebar.
+- **Split view** — VS Code-style **up to 4 panes** side by side; split the same
+  document or open different ones. The focused pane is fully editable; each pane
+  has its own menu (edit, print, split, close). Panes stack vertically on mobile.
+- **Sidebar workspace** (left): an **Open** list of current documents (active one
+  highlighted, close on hover, "open side-by-side" per document), a
+  **folder browser** (see below), and **Recently closed** for quick reopening —
+  plus per-document **Pages** (thumbnails) and **Outline** tabs.
+- **Folder browser** — open a whole folder and browse its PDFs as a collapsible
+  tree, including **nested subfolders**; open files are highlighted in place.
+  Uses the File System Access API (with save-in-place) where available, and falls
+  back to `webkitdirectory` elsewhere.
+- **Session restore & recents** — open tabs and recent files persist across
+  reloads (IndexedDB); an unsaved-edits guard warns before closing.
+- **Save**: writes **in place** to the original file when opened via the picker
+  or a folder handle (Chromium / desktop app); otherwise downloads an edited
+  copy. "Download a copy" is always available.
+- Responsive layout (sidebars become drawers on mobile) and an error-recovery
+  screen.
+
+## AI assistant
+
+A right-side, collapsible panel backed by a **local** model by default.
+
+- **Chat** about the open document (its text is extracted and sent as context).
+- **Quick actions**: summarize, key points, explain page.
+- **Selection actions**: select text in the PDF → rewrite / fix grammar /
+  translate / explain.
+- **Insert** any AI answer into the page as a text box.
+- Streaming responses, persisted chat history, connection status, and an
+  in-panel **model switcher**.
+- **Providers**: **Ollama** (default, model `gemma3`), **LM Studio**, or any
+  OpenAI-compatible endpoint — configured under **Settings**.
+
+---
+
+## Run (web)
 
 ```bash
 bun install
@@ -64,17 +119,45 @@ bun run dev        # http://127.0.0.1:5173
 bun run build      # production build in dist/
 ```
 
-For AI features run one of:
-- [Ollama](https://ollama.com): `ollama pull gemma3` (works out of the box)
+For AI features, run a local model server:
+
+- [Ollama](https://ollama.com): `ollama pull gemma3` (works out of the box).
 - LM Studio: enable the local server (Developer tab); enable CORS if needed —
-  the dev server also proxies `/proxy/ollama` and `/proxy/lmstudio` as a
-  CORS fallback.
+  the dev server also proxies `/proxy/ollama` and `/proxy/lmstudio` as a CORS
+  fallback.
 
-## Notes
+## Build the desktop app (Tauri)
 
-- Documents never leave the browser except as context sent to the AI endpoint
-  you configure.
+Produces a Windows installer (NSIS `.exe` + `.msi`) in
+`src-tauri/target/release/bundle/`. Requires the Rust toolchain and MSVC build
+tools.
+
+```bash
+bun run tauri build
+```
+
+The desktop app runs on WebView2 (Chromium), so folder browsing and
+save-in-place work there too.
+
+## Tech
+
+- **React 18 + Vite + TypeScript + Tailwind**, base-ui (shadcn-style) primitives.
+- **pdf.js** for rendering/text/search; **pdf-lib** (+ fontkit) for editing,
+  merging, splitting, forms and saving; **JSZip** for zip exports.
+- State in a single React context store; persistence via IndexedDB and
+  localStorage. No backend.
+
+## Notes & limitations
+
 - Structural operations (rotate/delete/reorder/watermark) bake any pending
   annotations into the document first, then apply.
-- Text annotations are embedded with Helvetica (WinAnsi); unsupported glyphs
-  are replaced with `?`.
+- **Whiteout hides, it doesn't redact** — the covered text still exists in the
+  saved PDF. Don't use it to remove confidential content (true redaction is on
+  the roadmap — see [TODO.md](TODO.md)).
+- The reference (non-focused) split pane is read-only and shows the saved
+  document; edit by focusing that pane.
+- Editing text that uses a subset-embedded custom font falls back to the closest
+  bundled/standard font.
+
+See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, OCR for scanned
+PDFs, true redaction, and a PDFium evaluation).
