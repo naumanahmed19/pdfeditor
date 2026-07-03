@@ -18,6 +18,22 @@ Replace it with a dedicated form-builder experience:
 - [ ] Live preview toggle (design ↔ fill) without leaving the builder
 - [ ] Validation: duplicate field names, empty dropdown options, overlaps
 
+## Evaluate @embedpdf/pdfium (PDFium engine)
+
+EmbedPDF (embedpdf.com, MIT) is an actively maintained PDFium-WASM binding +
+viewer framework — v2.14.x as of mid-2026, near-complete PDFium API surface
+(text geometry, annotations, forms). Evaluation plan:
+
+- [ ] Short term: lazy-loaded PDFium rasterization for "Export pages as PNG"
+      and as a render-fallback for documents pdf.js draws incorrectly
+      (~5 MB WASM, load only on demand)
+- [ ] Long term: benchmark their engine + plugins (selection, search,
+      annotations, forms) against our pdf.js stack as a potential migration —
+      only worth it if fidelity/perf wins are clear, since edit-text font
+      detection, form designer/filler and search marks are wired to pdf.js APIs
+- [ ] Desktop build alternative: pdfium-render (Rust) on the Tauri backend for
+      native-speed rasterization without WASM bundle cost
+
 ## Other deferred items
 
 - [ ] OCR for scanned PDFs (tesseract.js) — enables search/edit/AI on scans
