@@ -4,6 +4,7 @@ import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
+import { Slider } from "../ui/slider";
 import { cn } from "../../lib/utils";
 import { checkConnection, DEFAULT_MODEL } from "../../lib/ai";
 import { ACCENTS } from "../../lib/accents";
@@ -13,7 +14,7 @@ const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   {
     value: "browser",
     label: "Built-in (Gemma 4)",
-    hint: "Runs in your browser — no setup. Downloads once (~2 GB), needs WebGPU (Chrome/Edge/desktop app).",
+    hint: "Runs in your browser — no setup. Downloads once (~2 GB). Uses your GPU (WebGPU) when available, otherwise CPU (slower).",
   },
   { value: "ollama", label: "Ollama", hint: "Local models via Ollama (default port 11434)" },
   { value: "lmstudio", label: "LM Studio", hint: "Local models via LM Studio server (default port 1234)" },
@@ -163,7 +164,7 @@ export function SettingsScreen() {
           {s.provider === "browser" ? (
             <Row
               title="Model"
-              description="Gemma 4 (E2B) runs in your browser via WebGPU (Transformers.js). It downloads once (~2 GB) on first use, then works offline — no server or API key."
+              description="Gemma 4 (E2B) runs in your browser via Transformers.js — GPU (WebGPU) when available, otherwise CPU. It downloads once (~2 GB) on first use, then works offline — no server or API key."
             >
               <span className="rounded-md border border-input px-2 py-1 text-xs text-muted-foreground">
                 Gemma 4 · built-in
@@ -224,14 +225,15 @@ export function SettingsScreen() {
 
         <Panel title="Generation">
           <Row title="Temperature" description="Lower is more focused, higher more creative.">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="range"
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <Slider
+                className="w-40"
+                aria-label="Temperature"
                 min={0}
                 max={1}
                 step={0.1}
                 value={s.temperature}
-                onChange={(e) => app.setSettings({ ...s, temperature: Number(e.target.value) })}
+                onValueChange={(v) => app.setSettings({ ...s, temperature: v })}
               />
               <span className="w-6 tabular-nums">{s.temperature.toFixed(1)}</span>
             </div>

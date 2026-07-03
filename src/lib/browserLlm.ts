@@ -1,33 +1,42 @@
 // Zero-config, fully local AI: Google's Gemma 4 (E2B) running in the browser via
-// Transformers.js on WebGPU. No Ollama / LM Studio / API key needed. The model
-// (ONNX, q4f16) downloads once from the Hugging Face hub and is cached; it then
-// works offline.
+// Transformers.js. No Ollama / LM Studio / API key needed. The model (ONNX)
+// downloads once from the Hugging Face hub and is cached; it then works offline.
+//
+// Generation runs in a dedicated Web Worker (browserLlm.worker.ts) so the heavy
+// GPU/CPU work never blocks the UI, and it picks WebGPU when available with an
+// automatic CPU (WASM) fallback for machines without a GPU.
 import type { ChatMessage } from "../types";
 
-// Gemma 4 E2B, ONNX build for Transformers.js / WebGPU (Google's latest Gemma).
 export const BROWSER_MODEL_ID = "onnx-community/gemma-4-E2B-it-ONNX";
 export const BROWSER_MODEL_LABEL = "Gemma 4 (in-browser)";
 
-/** Transformers.js WebGPU needs WebGPU (Chrome/Edge, or the desktop WebView2). */
+/** WebGPU gives the fast path; without it we still run on CPU (WASM), just slower. */
 export function webgpuAvailable(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
 
-export interface LoadProgress {
-  progress: number; // 0..1
-  text: string;
-}
-
-let enginePromise: Promise<{ processor: any; model: any; tf: any }> | null = null;
+let worker: Worker | null = null;
 let ready = false;
 
 export function browserModelReady(): boolean {
   return ready;
 }
 
-/** Drop the cached engine so the next call reloads (after a GPU crash / OOM). */
+function getWorker(): Worker {
+  if (!worker) {
+    worker = new Worker(new URL("./browserLlm.worker.ts", import.meta.url), {
+      type: "module",
+    });
+  }
+  return worker;
+}
+
+/** Drop the worker so the next call reloads (after a GPU crash / OOM). */
 export function resetBrowserEngine(): void {
-  enginePromise = null;
+  if (worker) {
+    worker.terminate();
+    worker = null;
+  }
   ready = false;
 }
 
@@ -36,124 +45,82 @@ function friendlyError(err: unknown): Error {
   const raw = err instanceof Error ? err.message : String(err);
   if (/device is lost|out of memory|mapasync|failed to allocate|oom/i.test(raw)) {
     return new Error(
-      "The GPU ran out of memory running Gemma 4 (it needs a fair bit of VRAM). Try again, or use a smaller model / a local server (Ollama, LM Studio) in Settings.",
+      "The GPU ran out of memory running Gemma 4. Try again — it should fall back to CPU — or use a local server (Ollama, LM Studio) in Settings.",
     );
   }
   return err instanceof Error ? err : new Error(raw);
 }
 
-/** Lazily load (and download, once) the Gemma 4 processor + model. */
-export async function getBrowserEngine(onProgress?: (p: LoadProgress) => void) {
-  if (!webgpuAvailable()) {
-    throw new Error(
-      "This browser has no WebGPU support, which the built-in Gemma 4 model needs. Use Chrome or Edge (or the desktop app), or switch to Ollama / LM Studio in Settings.",
-    );
-  }
-  if (!enginePromise) {
-    enginePromise = (async () => {
-      const tf = await import("@huggingface/transformers");
-      const progress_callback = (info: any) => {
-        if (info?.status === "progress" && typeof info.progress === "number") {
-          onProgress?.({ progress: info.progress / 100, text: info.file ?? "" });
-        }
-      };
-      const processor = await tf.AutoProcessor.from_pretrained(BROWSER_MODEL_ID, {
-        progress_callback,
-      });
-      const model = await tf.Gemma4ForConditionalGeneration.from_pretrained(
-        BROWSER_MODEL_ID,
-        { dtype: "q4f16", device: "webgpu", progress_callback },
-      );
-      ready = true;
-      return { processor, model, tf };
-    })();
-    enginePromise.catch(() => {
-      enginePromise = null; // allow retry after a failed / interrupted load
-    });
-  }
-  return enginePromise;
+/** Gemma's chat template accepts system/user/assistant turns directly. */
+function toChat(messages: ChatMessage[]) {
+  return messages.map((m) => ({ role: m.role, content: m.content }));
 }
 
-/** Gemma's chat template has no "system" role — fold it into the first user turn. */
-function foldSystem(messages: ChatMessage[]): ChatMessage[] {
-  const sys = messages
-    .filter((m) => m.role === "system")
-    .map((m) => m.content)
-    .join("\n\n")
-    .trim();
-  const rest = messages.filter((m) => m.role !== "system");
-  if (sys) {
-    const i = rest.findIndex((m) => m.role === "user");
-    if (i >= 0) rest[i] = { ...rest[i], content: `${sys}\n\n${rest[i].content}` };
-    else rest.unshift({ role: "user", content: sys });
-  }
-  return rest;
-}
-
-/** Stream a chat completion from the in-browser Gemma 4 model. */
-export async function streamBrowserChat(
+/** Stream a chat completion from the in-browser Gemma 4 model (via the worker). */
+export function streamBrowserChat(
   messages: ChatMessage[],
   temperature: number,
   onToken: (text: string) => void,
   signal?: AbortSignal,
   onStatus?: (status: string) => void,
 ): Promise<string> {
+  const w = getWorker();
   onStatus?.("Preparing the in-browser model…");
-  let engine: { processor: any; model: any; tf: any };
-  try {
-    engine = await getBrowserEngine((p) => {
-      onStatus?.(
-        p.progress >= 1
-          ? "Loading Gemma 4 into memory…"
-          : `Downloading Gemma 4 — ${Math.round(p.progress * 100)}% (one-time, then cached)`,
-      );
+
+  return new Promise<string>((resolve, reject) => {
+    let full = "";
+    let firstToken = true;
+
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data || {};
+      switch (d.type) {
+        case "progress":
+          onStatus?.(
+            `Downloading Gemma 4 — ${Math.round(d.progress ?? 0)}% (one-time, then cached)`,
+          );
+          break;
+        case "status":
+          onStatus?.(d.text ?? "");
+          break;
+        case "ready":
+          ready = true;
+          onStatus?.("Generating…");
+          break;
+        case "token":
+          if (firstToken) {
+            firstToken = false;
+            onStatus?.("");
+          }
+          full += d.delta ?? "";
+          onToken(d.delta ?? "");
+          break;
+        case "done":
+        case "stopped":
+          cleanup();
+          resolve(full);
+          break;
+        case "error":
+          cleanup();
+          resetBrowserEngine();
+          if (!full) reject(friendlyError(new Error(d.message)));
+          else resolve(full);
+          break;
+      }
+    };
+
+    const onAbort = () => w.postMessage({ type: "stop" });
+    const cleanup = () => {
+      w.removeEventListener("message", onMessage);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    w.addEventListener("message", onMessage);
+    signal?.addEventListener("abort", onAbort);
+    w.postMessage({
+      type: "generate",
+      messages: toChat(messages),
+      temperature,
+      maxTokens: 512,
     });
-  } catch (err) {
-    resetBrowserEngine();
-    throw friendlyError(err);
-  }
-  const { processor, model, tf } = engine;
-  onStatus?.("");
-
-  const chat = foldSystem(messages).map((m) => ({
-    role: m.role,
-    content: [{ type: "text", text: m.content }],
-  }));
-  const inputs = await processor.apply_chat_template(chat, {
-    add_generation_prompt: true,
-    tokenize: true,
-    return_dict: true,
   });
-
-  const stopper = new tf.InterruptableStoppingCriteria();
-  const onAbort = () => stopper.interrupt();
-  signal?.addEventListener("abort", onAbort);
-
-  let full = "";
-  const streamer = new tf.TextStreamer(processor.tokenizer, {
-    skip_prompt: true,
-    skip_special_tokens: true,
-    callback_function: (text: string) => {
-      full += text;
-      onToken(text);
-    },
-  });
-
-  try {
-    await model.generate({
-      ...inputs,
-      max_new_tokens: 1024,
-      do_sample: temperature > 0,
-      temperature: temperature > 0 ? temperature : undefined,
-      streamer,
-      stopping_criteria: stopper,
-    });
-  } catch (err) {
-    // A lost WebGPU device leaves the engine dead — drop it so a retry reloads.
-    resetBrowserEngine();
-    if (!full) throw friendlyError(err);
-  } finally {
-    signal?.removeEventListener("abort", onAbort);
-  }
-  return full;
 }

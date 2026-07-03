@@ -102,17 +102,13 @@ export async function checkConnection(settings: AppSettings): Promise<{
   if (settings.provider === "browser") {
     const { webgpuAvailable, BROWSER_MODEL_LABEL, browserModelReady } =
       await import("./browserLlm");
-    if (!webgpuAvailable()) {
-      return {
-        ok: false,
-        models: [],
-        error:
-          "This browser has no WebGPU. Use Chrome/Edge or the desktop app, or switch provider in Settings.",
-      };
-    }
+    const gpu = webgpuAvailable();
+    const label = browserModelReady()
+      ? BROWSER_MODEL_LABEL
+      : `${BROWSER_MODEL_LABEL} — downloads on first use`;
     return {
       ok: true,
-      models: [browserModelReady() ? BROWSER_MODEL_LABEL : `${BROWSER_MODEL_LABEL} — downloads on first use`],
+      models: [gpu ? label : `${label} (CPU mode — slower, no WebGPU)`],
     };
   }
   try {
