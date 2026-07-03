@@ -768,6 +768,14 @@ function PageView({
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
+      {app.tool === "object" && visible && (
+        <ObjectLayer
+          pdf={pdf}
+          pageIndex={pageIndex}
+          scale={scale}
+          canvasRef={canvasRef}
+        />
+      )}
       {inlineEdit && (
         <InlineTextEditor
           edit={inlineEdit}
@@ -867,6 +875,391 @@ function InlineTextEditor({
         fontFamily: "Helvetica, Arial, sans-serif",
       }}
     />
+  );
+}
+
+interface ScreenObj {
+  index: number;
+  kind: "text" | "image";
+  pdf: { left: number; bottom: number; right: number; top: number };
+  rect: { left: number; top: number; width: number; height: number };
+}
+
+type Corner = "nw" | "ne" | "sw" | "se";
+const HANDLE = 9; // px hit radius for resize handles
+
+/**
+ * Object editor: in the "object" tool, click any existing text run or image to
+ * select it, drag to move, drag a corner (images) to resize, or press Delete to
+ * remove it. Everything commits through PDFium (transformObject/removeObject) —
+ * true content-stream edits, on the unified undo timeline.
+ */
+function ObjectLayer({
+  pdf,
+  pageIndex,
+  scale,
+  canvasRef,
+}: {
+  pdf: PDFDocumentProxy;
+  pageIndex: number;
+  scale: number;
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+}) {
+  const app = useApp();
+  const layerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<any>(null);
+  const [objects, setObjects] = useState<ScreenObj[]>([]);
+  const [sel, setSel] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Live drag state: the moving/resizing box + a ghost image of the content.
+  const [drag, setDrag] = useState<null | {
+    orig: ScreenObj["rect"];
+    box: ScreenObj["rect"];
+    ghost?: string;
+  }>(null);
+  const dragRef = useRef<null | {
+    mode: "move" | "resize";
+    corner?: Corner;
+    startX: number;
+    startY: number;
+    obj: ScreenObj;
+    box: ScreenObj["rect"];
+  }>(null);
+
+  // (Re)load object rects whenever the page bytes change (pdf proxy swaps).
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const page = await pdf.getPage(pageIndex + 1);
+        const viewport = page.getViewport({ scale });
+        viewportRef.current = viewport;
+        const objs = await app.getPageObjects(pageIndex);
+        const mapped: ScreenObj[] = objs.map((o) => {
+          const [x1, y1, x2, y2] = viewport.convertToViewportRectangle([
+            o.left,
+            o.bottom,
+            o.right,
+            o.top,
+          ]);
+          return {
+            index: o.index,
+            kind: o.kind,
+            pdf: { left: o.left, bottom: o.bottom, right: o.right, top: o.top },
+            rect: {
+              left: Math.min(x1, x2),
+              top: Math.min(y1, y2),
+              width: Math.abs(x2 - x1),
+              height: Math.abs(y2 - y1),
+            },
+          };
+        });
+        if (alive) setObjects(mapped);
+      } catch {
+        if (alive) setObjects([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdf, pageIndex, scale]);
+
+  const selObj = objects.find((o) => o.index === sel) ?? null;
+
+  // Delete removes the selected object.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)
+        return;
+      if ((e.key === "Delete" || e.key === "Backspace") && sel != null && !busy) {
+        e.preventDefault();
+        setBusy(true);
+        const idx = sel;
+        setSel(null);
+        app
+          .removeObjectAt(pageIndex, idx)
+          .catch(() => toast.error("Couldn't delete that object."))
+          .finally(() => setBusy(false));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sel, busy, app, pageIndex]);
+
+  const cornerAt = (o: ScreenObj, px: number, py: number): Corner | null => {
+    const { left, top, width, height } = o.rect;
+    const pts: Record<Corner, [number, number]> = {
+      nw: [left, top],
+      ne: [left + width, top],
+      sw: [left, top + height],
+      se: [left + width, top + height],
+    };
+    for (const c of Object.keys(pts) as Corner[]) {
+      const [hx, hy] = pts[c];
+      if (Math.abs(px - hx) <= HANDLE && Math.abs(py - hy) <= HANDLE) return c;
+    }
+    return null;
+  };
+
+  // Grab a bitmap of the object's content from the rendered page canvas.
+  const cropGhost = (rect: ScreenObj["rect"]): string | undefined => {
+    const canvas = canvasRef.current;
+    if (!canvas || !canvas.width) return undefined;
+    const s = canvas.width / (layerRef.current?.clientWidth || canvas.width);
+    const sw = Math.max(1, Math.round(rect.width * s));
+    const sh = Math.max(1, Math.round(rect.height * s));
+    const tmp = document.createElement("canvas");
+    tmp.width = sw;
+    tmp.height = sh;
+    const ctx = tmp.getContext("2d");
+    if (!ctx) return undefined;
+    ctx.drawImage(
+      canvas,
+      Math.round(rect.left * s),
+      Math.round(rect.top * s),
+      sw,
+      sh,
+      0,
+      0,
+      sw,
+      sh,
+    );
+    return tmp.toDataURL();
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (busy) return;
+    const lr = layerRef.current!.getBoundingClientRect();
+    const px = e.clientX - lr.left;
+    const py = e.clientY - lr.top;
+
+    // Resize handle of the current selection (images only)?
+    if (selObj && selObj.kind === "image") {
+      const c = cornerAt(selObj, px, py);
+      if (c) {
+        e.preventDefault();
+        try {
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          /* pointer capture is best-effort */
+        }
+        dragRef.current = {
+          mode: "resize",
+          corner: c,
+          startX: e.clientX,
+          startY: e.clientY,
+          obj: selObj,
+          box: selObj.rect,
+        };
+        setDrag({ orig: selObj.rect, box: selObj.rect, ghost: cropGhost(selObj.rect) });
+        return;
+      }
+    }
+
+    // Otherwise pick the smallest object under the point → select + move.
+    const hit = objects
+      .filter(
+        (o) =>
+          px >= o.rect.left &&
+          px <= o.rect.left + o.rect.width &&
+          py >= o.rect.top &&
+          py <= o.rect.top + o.rect.height,
+      )
+      .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0];
+    if (!hit) {
+      setSel(null);
+      return;
+    }
+    e.preventDefault();
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* pointer capture is best-effort */
+    }
+    setSel(hit.index);
+    dragRef.current = {
+      mode: "move",
+      startX: e.clientX,
+      startY: e.clientY,
+      obj: hit,
+      box: hit.rect,
+    };
+    setDrag({ orig: hit.rect, box: hit.rect, ghost: cropGhost(hit.rect) });
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (d.mode === "move") {
+      const box = { ...d.obj.rect, left: d.obj.rect.left + dx, top: d.obj.rect.top + dy };
+      d.box = box;
+      setDrag((p) => (p ? { ...p, box } : p));
+    } else {
+      // Aspect-locked resize about the opposite corner.
+      const r = d.obj.rect;
+      const anchor = {
+        x: d.corner === "nw" || d.corner === "sw" ? r.left + r.width : r.left,
+        y: d.corner === "nw" || d.corner === "ne" ? r.top + r.height : r.top,
+      };
+      const ox = (d.corner === "ne" || d.corner === "se" ? r.left + r.width : r.left) - anchor.x;
+      const oy = (d.corner === "sw" || d.corner === "se" ? r.top + r.height : r.top) - anchor.y;
+      const nx = e.clientX - (layerRef.current!.getBoundingClientRect().left + anchor.x);
+      const ny = e.clientY - (layerRef.current!.getBoundingClientRect().top + anchor.y);
+      const denom = ox * ox + oy * oy;
+      let s = denom ? (nx * ox + ny * oy) / denom : 1;
+      s = Math.max(0.05, s);
+      const nw = r.width * s;
+      const nh = r.height * s;
+      const box = {
+        left: Math.min(anchor.x, anchor.x + Math.sign(ox || 1) * nw),
+        top: Math.min(anchor.y, anchor.y + Math.sign(oy || 1) * nh),
+        width: nw,
+        height: nh,
+      };
+      d.box = box;
+      setDrag((p) => (p ? { ...p, box } : p));
+    }
+  };
+
+  const onPointerUp = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) {
+      setDrag(null);
+      return;
+    }
+    const vp = viewportRef.current;
+    const box = d.box; // live box from the ref (not stale React state)
+    setDrag(null);
+    if (!vp || !box) return;
+    const moved =
+      Math.abs(box.left - d.obj.rect.left) > 1 ||
+      Math.abs(box.top - d.obj.rect.top) > 1 ||
+      Math.abs(box.width - d.obj.rect.width) > 1;
+    if (!moved) return;
+
+    setBusy(true);
+    (async () => {
+      try {
+        if (d.mode === "move") {
+          // Screen delta → page-space translation (rotation-correct).
+          const [ax, ay] = vp.convertToPdfPoint(0, 0);
+          const [bx, by] = vp.convertToPdfPoint(
+            box.left - d.obj.rect.left,
+            box.top - d.obj.rect.top,
+          );
+          await app.applyObjectTransform(pageIndex, d.obj.index, {
+            a: 1,
+            b: 0,
+            c: 0,
+            d: 1,
+            e: bx - ax,
+            f: by - ay,
+          });
+        } else {
+          const s = box.width / d.obj.rect.width;
+          // Anchor = the screen-opposite corner, in PDF page space. Corners are
+          // named in SCREEN space, so the Y axis is flipped: a screen-bottom
+          // (s*) handle drags the PDF bottom, anchoring the PDF top, etc.
+          const p = d.obj.pdf;
+          const ax = d.corner === "nw" || d.corner === "sw" ? p.right : p.left;
+          const ay = d.corner === "nw" || d.corner === "ne" ? p.bottom : p.top;
+          await app.applyObjectTransform(pageIndex, d.obj.index, {
+            a: s,
+            b: 0,
+            c: 0,
+            d: s,
+            e: ax * (1 - s),
+            f: ay * (1 - s),
+          });
+        }
+      } catch {
+        toast.error("Couldn't edit that object.");
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  return (
+    <div
+      ref={layerRef}
+      className="absolute inset-0 z-20"
+      style={{ cursor: busy ? "wait" : "default", touchAction: "none" }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
+      {/* Hover/selectable outlines for each object. */}
+      {objects.map((o) => (
+        <div
+          key={o.index}
+          className={cn(
+            "absolute rounded-[1px]",
+            o.index === sel
+              ? "outline outline-2 outline-primary"
+              : "hover:outline hover:outline-1 hover:outline-primary/50",
+          )}
+          style={{
+            left: o.rect.left,
+            top: o.rect.top,
+            width: o.rect.width,
+            height: o.rect.height,
+            cursor: "move",
+          }}
+        />
+      ))}
+
+      {/* Resize handles for a selected image. */}
+      {selObj &&
+        selObj.kind === "image" &&
+        !drag &&
+        (["nw", "ne", "sw", "se"] as Corner[]).map((c) => {
+          const r = selObj.rect;
+          const x = c === "ne" || c === "se" ? r.left + r.width : r.left;
+          const y = c === "sw" || c === "se" ? r.top + r.height : r.top;
+          const cur = c === "nw" || c === "se" ? "nwse-resize" : "nesw-resize";
+          return (
+            <div
+              key={c}
+              className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border border-white bg-primary shadow"
+              style={{ left: x, top: y, cursor: cur }}
+            />
+          );
+        })}
+
+      {/* Drag preview: dim the original, float a ghost of the content. */}
+      {drag && (
+        <>
+          <div
+            className="absolute bg-white/60"
+            style={{
+              left: drag.orig.left,
+              top: drag.orig.top,
+              width: drag.orig.width,
+              height: drag.orig.height,
+            }}
+          />
+          {drag.ghost && (
+            <img
+              src={drag.ghost}
+              alt=""
+              className="absolute opacity-90 outline-dashed outline-1 outline-primary"
+              style={{
+                left: drag.box.left,
+                top: drag.box.top,
+                width: drag.box.width,
+                height: drag.box.height,
+              }}
+            />
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

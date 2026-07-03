@@ -411,6 +411,151 @@ export async function editTextObject(
   }
 }
 
+// --- Page objects: enumerate / move / resize / delete ---------------------
+
+const FPDF_PAGEOBJ_IMAGE = 3;
+
+/** Any editable page object (text or image), page space, origin bottom-left. */
+export interface PageObject {
+  index: number;
+  kind: "text" | "image";
+  /** Text content ("" for images). */
+  text: string;
+  left: number;
+  bottom: number;
+  right: number;
+  top: number;
+  /** Font size for text (0 for images). */
+  fontSize: number;
+}
+
+/** A 2x3 affine matrix { a b c d e f } in PDF page space. */
+export interface Matrix {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
+/**
+ * Enumerate the movable objects on a page — text runs and images — with their
+ * exact bounds. Used to hit-test clicks in the object editor.
+ */
+export async function getPageObjects(
+  bytes: Uint8Array,
+  pageIndex: number,
+): Promise<PageObject[]> {
+  return withDoc(bytes, (mod, doc) => {
+    const rt = rtx(mod);
+    const page = mod.FPDF_LoadPage(doc, pageIndex);
+    const textPage = mod.FPDFText_LoadPage(page);
+    const f4 = rt.wasmExports.malloc(16);
+    const fs = rt.wasmExports.malloc(4);
+    const out: PageObject[] = [];
+    try {
+      const count = mod.FPDFPage_CountObjects(page);
+      for (let i = 0; i < count; i++) {
+        const obj = mod.FPDFPage_GetObject(page, i);
+        const type = mod.FPDFPageObj_GetType(obj);
+        if (type !== FPDF_PAGEOBJ_TEXT && type !== FPDF_PAGEOBJ_IMAGE) continue;
+        if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
+        let text = "";
+        let fontSize = 0;
+        if (type === FPDF_PAGEOBJ_TEXT) {
+          const need = mod.FPDFTextObj_GetText(obj, textPage, 0, 0);
+          if (need > 0) {
+            const b = rt.wasmExports.malloc(need * 2);
+            mod.FPDFTextObj_GetText(obj, textPage, b, need);
+            text = readUtf16(mod, b, need * 2);
+            rt.wasmExports.free(b);
+          }
+          mod.FPDFTextObj_GetFontSize(obj, fs);
+          fontSize = rt.getValue(fs, "float");
+        }
+        out.push({
+          index: i,
+          kind: type === FPDF_PAGEOBJ_TEXT ? "text" : "image",
+          text,
+          left: rt.getValue(f4, "float"),
+          bottom: rt.getValue(f4 + 4, "float"),
+          right: rt.getValue(f4 + 8, "float"),
+          top: rt.getValue(f4 + 12, "float"),
+          fontSize,
+        });
+      }
+      return out;
+    } finally {
+      rt.wasmExports.free(f4);
+      rt.wasmExports.free(fs);
+      mod.FPDFText_ClosePage(textPage);
+      mod.FPDF_ClosePage(page);
+    }
+  });
+}
+
+/** Open a page, run an edit, regenerate its content, and save to fresh bytes. */
+async function editPage(
+  bytes: Uint8Array,
+  pageIndex: number,
+  fn: (mod: WrappedPdfiumModule, page: number) => void,
+): Promise<Uint8Array> {
+  const mod = await getPdfium();
+  const rt = rtx(mod);
+  const filePtr = toHeap(mod, bytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, "");
+  if (!doc) {
+    rt.wasmExports.free(filePtr);
+    throw new Error(`PDFium: could not open document (err ${mod.FPDF_GetLastError()})`);
+  }
+  try {
+    const page = mod.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`PDFium: could not load page ${pageIndex}`);
+    try {
+      fn(mod, page);
+      mod.FPDFPage_GenerateContent(page);
+    } finally {
+      mod.FPDF_ClosePage(page);
+    }
+    return saveAsCopy(mod, doc);
+  } finally {
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+}
+
+/**
+ * Apply an affine transform to the page object at `objectIndex` (in page
+ * space) — used to move (translate) or resize (scale) an existing text run or
+ * image. Returns fresh PDF bytes.
+ */
+export async function transformObject(
+  bytes: Uint8Array,
+  pageIndex: number,
+  objectIndex: number,
+  m: Matrix,
+): Promise<Uint8Array> {
+  return editPage(bytes, pageIndex, (mod, page) => {
+    const obj = mod.FPDFPage_GetObject(page, objectIndex);
+    if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+    mod.FPDFPageObj_Transform(obj, m.a, m.b, m.c, m.d, m.e, m.f);
+  });
+}
+
+/** Delete the page object at `objectIndex` from the content stream. */
+export async function removeObject(
+  bytes: Uint8Array,
+  pageIndex: number,
+  objectIndex: number,
+): Promise<Uint8Array> {
+  return editPage(bytes, pageIndex, (mod, page) => {
+    const obj = mod.FPDFPage_GetObject(page, objectIndex);
+    if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+    if (mod.FPDFPage_RemoveObject(page, obj)) mod.FPDFPageObj_Destroy(obj);
+  });
+}
+
 /** Serialize the (possibly modified) document to bytes via FPDF_SaveAsCopy. */
 function saveAsCopy(mod: WrappedPdfiumModule, doc: number): Uint8Array {
   const rt = rtx(mod);

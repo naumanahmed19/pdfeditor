@@ -58,6 +58,25 @@ export async function makeMultiPagePdf(pages = 5): Promise<Uint8Array> {
   return doc.save();
 }
 
+/** A PDF with a text run and an embedded image, for the object editor. */
+export async function makeObjectPdf(): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([400, 300]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("Movable heading", { x: 40, y: 250, size: 20, font });
+  // 1x1 red PNG, drawn as a 120x80 box.
+  const png = await doc.embedPng(
+    Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      ),
+      (c) => c.charCodeAt(0),
+    ),
+  );
+  page.drawImage(png, { x: 40, y: 80, width: 120, height: 80 });
+  return doc.save();
+}
+
 async function extractText(bytes: Uint8Array): Promise<string> {
   GlobalWorkerOptions.workerSrc = workerUrl;
   const pdf = await getDocument({ data: bytes.slice() }).promise;

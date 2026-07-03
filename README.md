@@ -44,6 +44,11 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
   old text is genuinely replaced, so nothing is left behind to extract. If a
   line uses a subset-embedded font that can't take new glyphs, it says so —
   overlay a correction with the Text tool there instead.
+- **Move, resize & delete existing objects** (PDFium): the **object tool** lets
+  you click any existing text run or image on the page, **drag to move it**, drag
+  a corner to **resize images** (aspect-locked), or press **Delete** to remove
+  it — real content-stream edits with a live drag preview, on the same undo
+  timeline.
 - **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
   **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
 - **Signatures**: draw, type (script fonts), or upload an image — saved for

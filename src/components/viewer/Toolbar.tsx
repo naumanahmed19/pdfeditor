@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import {
   Bold,
+  BoxSelect,
   Circle,
   CircleDot,
   Eraser,
@@ -36,6 +37,7 @@ import type {
 
 const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   { key: "select", icon: MousePointer2, label: "Select / move (text selection)" },
+  { key: "object", icon: BoxSelect, label: "Move/resize existing objects (text & images)" },
   { key: "text", icon: Type, label: "Add text" },
   { key: "edittext", icon: TextCursorInput, label: "Edit existing text (click a line)" },
   { key: "highlight", icon: Highlighter, label: "Highlight" },

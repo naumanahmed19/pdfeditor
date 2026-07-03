@@ -33,6 +33,7 @@ Nothing is wired into the app UI yet — this branch only proves the engine.
 | Rasterize    | ✅ crisp text/vectors; a 200×120 pt page at 3× (600×360) in ~40–70 ms |
 | **Redaction**| ✅ **destructive** — redacted text is gone from the saved bytes (pdf.js re-extract drops `SECRET-12345`, keeps `PUBLIC line`) and a black box is painted in place |
 | **Edit text**| ✅ **in-place** — `Hello World` → `Howdy PDFium!` keeping the exact font (Helvetica), size (24), color and position; the original string is gone from the stream, no whiteout patch |
+| **Objects**  | ✅ **move / resize / delete** any text run or image (`getPageObjects` + `FPDFPageObj_Transform` / `FPDFPage_RemoveObject`) — the object tool, with a ghost drag preview, on the unified undo timeline |
 
 ## How redaction works (the non-obvious part)
 

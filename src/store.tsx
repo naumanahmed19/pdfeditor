@@ -25,7 +25,11 @@ import type {
 import { loadPdf, searchDocument, extractAllText } from "./lib/pdf";
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
-import type { TextObject } from "./lib/pdfium";
+import type {
+  Matrix as PdfiumMatrix,
+  PageObject,
+  TextObject,
+} from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
 import {
@@ -160,6 +164,15 @@ interface AppStore {
     objectIndex: number,
     newText: string,
   ) => Promise<void>;
+
+  /** Object editing via PDFium: move/resize/delete existing text & images. */
+  getPageObjects: (pageIndex: number) => Promise<PageObject[]>;
+  applyObjectTransform: (
+    pageIndex: number,
+    objectIndex: number,
+    m: PdfiumMatrix,
+  ) => Promise<void>;
+  removeObjectAt: (pageIndex: number, objectIndex: number) => Promise<void>;
 
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
@@ -1045,29 +1058,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [active],
   );
 
+  /** Read the movable objects (text + images) on a page, for the object tool. */
+  const getPageObjects = useCallback(
+    async (pageIndex: number) => {
+      if (!active) return [];
+      const { getPageObjects: read } = await import("./lib/pdfium");
+      return read(active.bytes, pageIndex);
+    },
+    [active],
+  );
+
   /**
-   * True in-place text edit: rewrite the content-stream text object via PDFium,
-   * keeping its font/size/color/position — no whiteout, no overlay copy, and
-   * the original text is genuinely replaced. Pushes one undo step; pending
-   * overlay annotations are left untouched (they still bake on save).
+   * Commit an in-place PDFium byte edit: swap the base bytes/pdf onto the undo
+   * timeline while KEEPING the current annotations (they still bake on save).
+   * No docVersion bump — the page re-renders in place from the new `pdf` prop,
+   * so there's no remount flash or scroll jump.
    */
-  const applyTextEdit = useCallback(
-    async (pageIndex: number, objectIndex: number, newText: string) => {
+  const commitInPlace = useCallback(
+    async (make: (bytes: Uint8Array) => Promise<Uint8Array>) => {
       if (!active) return;
       const id = active.id;
-      const { editTextObject } = await import("./lib/pdfium");
-      const nextBytes = await editTextObject(
-        active.bytes,
-        pageIndex,
-        objectIndex,
-        newText,
-      );
+      const nextBytes = await make(active.bytes);
       const nextPdf = await loadPdf(nextBytes);
-      // Keep the current annotations; only the base bytes/pdf advance. The old
-      // pdf proxy stays referenced by earlier history entries for undo.
-      // NB: we deliberately do NOT bump docVersion — that key remounts every
-      // page (blank flash + scroll jump). A text edit never changes the page
-      // count, so swapping the `pdf` prop re-renders the page in place.
       updateDoc(id, (d) =>
         pushHistory(d, d.annotations, { bytes: nextBytes, pdf: nextPdf }),
       );
@@ -1081,6 +1093,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     },
     [active, updateDoc],
+  );
+
+  /**
+   * True in-place text edit: rewrite the content-stream text object via PDFium,
+   * keeping its font/size/color/position — no whiteout, no overlay copy, and
+   * the original text is genuinely replaced.
+   */
+  const applyTextEdit = useCallback(
+    async (pageIndex: number, objectIndex: number, newText: string) => {
+      const { editTextObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => editTextObject(b, pageIndex, objectIndex, newText));
+    },
+    [commitInPlace],
+  );
+
+  /** Move/resize an existing object (text or image) via an affine transform. */
+  const applyObjectTransform = useCallback(
+    async (pageIndex: number, objectIndex: number, m: PdfiumMatrix) => {
+      const { transformObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => transformObject(b, pageIndex, objectIndex, m));
+    },
+    [commitInPlace],
+  );
+
+  /** Delete an existing object (text or image) from the page. */
+  const removeObjectAt = useCallback(
+    async (pageIndex: number, objectIndex: number) => {
+      const { removeObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => removeObject(b, pageIndex, objectIndex));
+    },
+    [commitInPlace],
   );
 
   const downloadCurrent = useCallback(async () => {
@@ -1353,6 +1396,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     bakeToBytes,
     getPageTextObjects,
     applyTextEdit,
+    getPageObjects,
+    applyObjectTransform,
+    removeObjectAt,
     downloadCurrent,
     printCurrent,
     ocrBusy,
@@ -1441,6 +1487,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         openBytes,
         getPageTextObjects,
         applyTextEdit,
+        getPageObjects,
+        applyObjectTransform,
+        removeObjectAt,
         undo,
         redo,
         state: () => ({
