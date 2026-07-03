@@ -27,6 +27,7 @@ import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
 import type {
   Matrix as PdfiumMatrix,
+  ObjectStyle as PdfiumObjectStyle,
   PageObject,
   TextObject,
 } from "./lib/pdfium";
@@ -173,13 +174,10 @@ interface AppStore {
     m: PdfiumMatrix,
   ) => Promise<void>;
   removeObjectAt: (pageIndex: number, objectIndex: number) => Promise<void>;
-  applyObjectColor: (
+  applyObjectStyle: (
     pageIndex: number,
     objectIndex: number,
-    colors: {
-      fill?: [number, number, number, number];
-      stroke?: [number, number, number, number];
-    },
+    style: PdfiumObjectStyle,
   ) => Promise<void>;
 
   /** OCR the active document into a searchable text layer. */
@@ -1138,18 +1136,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitInPlace],
   );
 
-  /** Recolor an existing object's fill and/or stroke (RGBA 0–255). */
-  const applyObjectColor = useCallback(
-    async (
-      pageIndex: number,
-      objectIndex: number,
-      colors: {
-        fill?: [number, number, number, number];
-        stroke?: [number, number, number, number];
-      },
-    ) => {
-      const { setObjectColor } = await import("./lib/pdfium");
-      await commitInPlace((b) => setObjectColor(b, pageIndex, objectIndex, colors));
+  /** Restyle an existing object's fill/stroke color and/or stroke width. */
+  const applyObjectStyle = useCallback(
+    async (pageIndex: number, objectIndex: number, style: PdfiumObjectStyle) => {
+      const { setObjectStyle } = await import("./lib/pdfium");
+      await commitInPlace((b) => setObjectStyle(b, pageIndex, objectIndex, style));
     },
     [commitInPlace],
   );
@@ -1427,7 +1418,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     getPageObjects,
     applyObjectTransform,
     removeObjectAt,
-    applyObjectColor,
+    applyObjectStyle,
     downloadCurrent,
     printCurrent,
     ocrBusy,
@@ -1520,7 +1511,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         getPageObjects,
         applyObjectTransform,
         removeObjectAt,
-        applyObjectColor,
+        applyObjectStyle,
         undo,
         redo,
         state: () => ({

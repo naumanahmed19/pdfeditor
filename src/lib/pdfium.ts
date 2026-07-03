@@ -435,6 +435,8 @@ export interface PageObject {
   fill: Rgba;
   /** Stroke color (path outline), if any. */
   stroke: Rgba;
+  /** Stroke width in points (paths). */
+  strokeWidth: number;
 }
 
 /** A 2x3 affine matrix { a b c d e f } in PDF page space. */
@@ -515,6 +517,10 @@ export async function getPageObjects(
           fontSize,
           fill: type === FPDF_PAGEOBJ_IMAGE ? null : readColor(mod.FPDFPageObj_GetFillColor, obj),
           stroke: type === FPDF_PAGEOBJ_PATH ? readColor(mod.FPDFPageObj_GetStrokeColor, obj) : null,
+          strokeWidth:
+            type === FPDF_PAGEOBJ_PATH && mod.FPDFPageObj_GetStrokeWidth(obj, fs)
+              ? rt.getValue(fs, "float")
+              : 0,
         });
       }
       return out;
@@ -528,18 +534,26 @@ export async function getPageObjects(
   });
 }
 
-/** Set the fill and/or stroke color (RGBA 0–255) of a page object. */
-export async function setObjectColor(
+/** Style edits for a page object. */
+export interface ObjectStyle {
+  fill?: [number, number, number, number];
+  stroke?: [number, number, number, number];
+  strokeWidth?: number;
+}
+
+/** Set the fill/stroke color (RGBA 0–255) and/or stroke width of a page object. */
+export async function setObjectStyle(
   bytes: Uint8Array,
   pageIndex: number,
   objectIndex: number,
-  colors: { fill?: [number, number, number, number]; stroke?: [number, number, number, number] },
+  style: ObjectStyle,
 ): Promise<Uint8Array> {
   return editPage(bytes, pageIndex, (mod, page) => {
     const obj = mod.FPDFPage_GetObject(page, objectIndex);
     if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
-    if (colors.fill) mod.FPDFPageObj_SetFillColor(obj, ...colors.fill);
-    if (colors.stroke) mod.FPDFPageObj_SetStrokeColor(obj, ...colors.stroke);
+    if (style.fill) mod.FPDFPageObj_SetFillColor(obj, ...style.fill);
+    if (style.stroke) mod.FPDFPageObj_SetStrokeColor(obj, ...style.stroke);
+    if (style.strokeWidth != null) mod.FPDFPageObj_SetStrokeWidth(obj, style.strokeWidth);
   });
 }
 

@@ -12,6 +12,7 @@ import {
   FileText,
   Maximize,
   Minimize,
+  Trash2,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -892,6 +893,7 @@ interface ScreenObj {
   rect: { left: number; top: number; width: number; height: number };
   fill: [number, number, number, number] | null;
   stroke: [number, number, number, number] | null;
+  strokeWidth: number;
 }
 
 /**
@@ -946,6 +948,112 @@ function ColorChip({
           }}
         />
       </label>
+    </div>
+  );
+}
+
+const toHex = (c: [number, number, number, number]) =>
+  "#" + c.slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join("");
+const rgbaOf = (h: string): [number, number, number, number] => [
+  parseInt(h.slice(1, 3), 16),
+  parseInt(h.slice(3, 5), 16),
+  parseInt(h.slice(5, 7), 16),
+  255,
+];
+
+/**
+ * Contextual properties panel shown above a selected page object: the relevant
+ * fields for that object (fill/stroke color, stroke width), its size, and a
+ * delete action. Anchored to the selection like a shadcn popover.
+ */
+function ObjectProperties({
+  obj,
+  busy,
+  onFillPreview,
+  onStyle,
+  onDelete,
+}: {
+  obj: ScreenObj;
+  busy: boolean;
+  onFillPreview: (hex: string | null) => void;
+  onStyle: (patch: {
+    fill?: [number, number, number, number];
+    stroke?: [number, number, number, number];
+    strokeWidth?: number;
+  }) => void;
+  onDelete: () => void;
+}) {
+  const wPt = Math.round(obj.pdf.right - obj.pdf.left);
+  const hPt = Math.round(obj.pdf.top - obj.pdf.bottom);
+  const kindLabel = obj.kind === "text" ? "Text" : obj.kind === "image" ? "Image" : "Shape";
+  const hasStroke = obj.kind === "path" && !!obj.stroke && obj.strokeWidth > 0;
+  const widths = [...new Set([0.5, 1, 1.5, 2, 3, 4, 6, obj.strokeWidth].filter((w) => w > 0))].sort(
+    (a, b) => a - b,
+  );
+  // Above the selection, or below when it's too close to the top edge.
+  const top = obj.rect.top > 48 ? obj.rect.top - 46 : obj.rect.top + obj.rect.height + 8;
+
+  return (
+    <div
+      className="absolute z-20 flex items-center gap-2 rounded-lg border bg-background px-2 py-1.5 shadow-lg"
+      style={{ left: obj.rect.left, top }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {kindLabel}
+      </span>
+      {obj.fill && (
+        <ColorChip
+          label={obj.kind === "text" ? "Text" : "Fill"}
+          hex={toHex(obj.fill)}
+          disabled={busy}
+          onPreview={(h) => {
+            if (obj.kind === "path") onFillPreview(h);
+          }}
+          onPick={(h) => {
+            onFillPreview(null);
+            onStyle({ fill: rgbaOf(h) });
+          }}
+        />
+      )}
+      {hasStroke && (
+        <ColorChip
+          label="Stroke"
+          hex={toHex(obj.stroke!)}
+          disabled={busy}
+          onPreview={() => {}}
+          onPick={(h) => onStyle({ stroke: rgbaOf(h) })}
+        />
+      )}
+      {hasStroke && (
+        <label className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+          Width
+          <select
+            className="h-6 rounded border border-input bg-background px-1 text-xs text-foreground"
+            value={String(obj.strokeWidth || 1)}
+            disabled={busy}
+            onChange={(e) => onStyle({ strokeWidth: Number(e.target.value) })}
+          >
+            {widths.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <span className="whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">
+        {wPt}×{hPt} pt
+      </span>
+      <div className="h-4 w-px bg-border" />
+      <button
+        className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+        title="Delete object"
+        disabled={busy}
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
@@ -1023,6 +1131,7 @@ function ObjectLayer({
             },
             fill: o.fill,
             stroke: o.stroke,
+            strokeWidth: o.strokeWidth,
           };
         });
         if (alive) setObjects(mapped);
@@ -1317,49 +1426,30 @@ function ObjectLayer({
           );
         })}
 
-      {/* Color control for a selected text/shape object (images have no color). */}
-      {selObj &&
-        !drag &&
-        (selObj.fill || selObj.stroke) &&
-        (() => {
-          const cur = (selObj.fill ?? selObj.stroke)!;
-          const hex =
-            "#" +
-            cur
-              .slice(0, 3)
-              .map((v) => v.toString(16).padStart(2, "0"))
-              .join("");
-          const useFill = !!selObj.fill;
-          const idx = selObj.index;
-          return (
-            <div
-              className="absolute"
-              style={{ left: selObj.rect.left, top: Math.max(2, selObj.rect.top - 32) }}
-            >
-              <ColorChip
-                label={selObj.kind === "text" ? "Text color" : useFill ? "Fill" : "Stroke"}
-                hex={hex}
-                disabled={busy}
-                onPreview={(h) => setPreviewHex(h)}
-                onPick={(h) => {
-                  setPreviewHex(null);
-                  if (h.toLowerCase() === hex.toLowerCase()) return;
-                  const rgb: [number, number, number, number] = [
-                    parseInt(h.slice(1, 3), 16),
-                    parseInt(h.slice(3, 5), 16),
-                    parseInt(h.slice(5, 7), 16),
-                    255,
-                  ];
-                  setBusy(true);
-                  app
-                    .applyObjectColor(pageIndex, idx, useFill ? { fill: rgb } : { stroke: rgb })
-                    .catch(() => toast.error("Couldn't recolor that object."))
-                    .finally(() => setBusy(false));
-                }}
-              />
-            </div>
-          );
-        })()}
+      {/* Contextual properties popover for the selected object. */}
+      {selObj && !drag && (
+        <ObjectProperties
+          obj={selObj}
+          busy={busy}
+          onFillPreview={setPreviewHex}
+          onStyle={(patch) => {
+            setBusy(true);
+            app
+              .applyObjectStyle(pageIndex, selObj.index, patch)
+              .catch(() => toast.error("Couldn't restyle that object."))
+              .finally(() => setBusy(false));
+          }}
+          onDelete={() => {
+            const idx = selObj.index;
+            setSel(null);
+            setBusy(true);
+            app
+              .removeObjectAt(pageIndex, idx)
+              .catch(() => toast.error("Couldn't delete that object."))
+              .finally(() => setBusy(false));
+          }}
+        />
+      )}
 
       {/* Drag preview: dim the original, float a ghost of the content. */}
       {drag && (
