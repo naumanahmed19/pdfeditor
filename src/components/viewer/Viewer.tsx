@@ -51,6 +51,76 @@ const FAMILY_LABEL: Record<string, string> = {
   caladea: "Caladea (Cambria-compatible)",
 };
 
+/**
+ * Sample the rendered page around a text run: background color from the
+ * rect's perimeter (median), text color from inner pixels that differ
+ * strongly from the background (average). Falls back to white/dark.
+ */
+function sampleTextRunColors(
+  canvas: HTMLCanvasElement | null,
+  pageRect: DOMRect,
+  spanRect: DOMRect,
+): { bg: string; text: string } {
+  const fallback = { bg: "#ffffff", text: "#111111" };
+  if (!canvas || !canvas.width) return fallback;
+  try {
+    const sx = canvas.width / pageRect.width;
+    const sy = canvas.height / pageRect.height;
+    const pad = Math.max(2, Math.round(4 * sx));
+    const ex = Math.max(0, Math.round((spanRect.left - pageRect.left) * sx) - pad);
+    const ey = Math.max(0, Math.round((spanRect.top - pageRect.top) * sy) - pad);
+    const ew = Math.min(canvas.width - ex, Math.round(spanRect.width * sx) + pad * 2);
+    const eh = Math.min(canvas.height - ey, Math.round(spanRect.height * sy) + pad * 2);
+    if (ew < 4 || eh < 4) return fallback;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return fallback;
+    const img = ctx.getImageData(ex, ey, ew, eh).data;
+    const at = (px: number, py: number) => (py * ew + px) * 4;
+
+    // Background: median of perimeter pixels.
+    const perim: number[] = [];
+    const stepX = Math.max(1, Math.floor(ew / 48));
+    const stepY = Math.max(1, Math.floor(eh / 24));
+    for (let px = 0; px < ew; px += stepX) perim.push(at(px, 0), at(px, eh - 1));
+    for (let py = 0; py < eh; py += stepY) perim.push(at(0, py), at(ew - 1, py));
+    const median = (vals: number[]) => {
+      const s = [...vals].sort((a, b) => a - b);
+      return s[s.length >> 1];
+    };
+    const bg = [0, 1, 2].map((c) => median(perim.map((i) => img[i + c])));
+
+    // Text: average of inner pixels far from the background color.
+    let tr = 0, tg = 0, tb = 0, tn = 0;
+    for (let py = pad; py < eh - pad; py += 2) {
+      for (let px = pad; px < ew - pad; px += 2) {
+        const i = at(px, py);
+        const dist =
+          Math.abs(img[i] - bg[0]) +
+          Math.abs(img[i + 1] - bg[1]) +
+          Math.abs(img[i + 2] - bg[2]);
+        if (dist > 140) {
+          tr += img[i];
+          tg += img[i + 1];
+          tb += img[i + 2];
+          tn++;
+        }
+      }
+    }
+    const hex = (r: number, g: number, b: number) =>
+      "#" +
+      [r, g, b]
+        .map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0"))
+        .join("");
+    const bgLum = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) / 255;
+    return {
+      bg: hex(bg[0], bg[1], bg[2]),
+      text: tn > 8 ? hex(tr / tn, tg / tn, tb / tn) : bgLum > 0.5 ? "#111111" : "#f5f5f5",
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 /** CSS font properties for displaying a text annotation on screen. */
 function textAnnCss(ann: TextAnnotation): React.CSSProperties {
   const fallback =
@@ -676,6 +746,9 @@ function PageView({
     const y = (sr.top - pr.top) / scale;
     const wPts = sr.width / scale;
     const hPts = sr.height / scale;
+    // Match the patch to the page background and the retyped text to the
+    // original ink color (handles light text on dark backgrounds).
+    const colors = sampleTextRunColors(canvasRef.current, pr, sr);
     const computed = getComputedStyle(span);
     const fontPx = parseFloat(computed.fontSize);
     const fontSize = Math.max(
@@ -753,6 +826,7 @@ function PageView({
       y: y - 1.5,
       w: wPts + 3,
       h: hPts + 3,
+      color: colors.bg,
       groupId,
       locked: true,
     };
@@ -762,11 +836,11 @@ function PageView({
       groupId,
       x,
       y: y - 1,
-      w: Math.max(wPts + 60, 120),
-      h: Math.max(hPts * 1.35, fontSize * 1.6),
+      w: Math.max(wPts + 12, 60),
+      h: Math.max(hPts * 1.1, fontSize * 1.3),
       text: span.textContent,
       fontSize,
-      color: "#111111",
+      color: colors.text,
       fontFamily,
       bold,
       italic,
@@ -1669,7 +1743,12 @@ function AnnotationItem({
       );
       break;
     case "whiteout":
-      body = <div className="h-full w-full bg-white" />;
+      body = (
+        <div
+          className="h-full w-full"
+          style={{ background: ann.color ?? "#ffffff" }}
+        />
+      );
       break;
     case "rect":
       body = (

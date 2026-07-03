@@ -54,6 +54,8 @@ export interface HighlightAnnotation extends BaseAnnotation {
 
 export interface WhiteoutAnnotation extends BaseAnnotation {
   kind: "whiteout";
+  /** Patch color — defaults to white; edit-text samples the page background. */
+  color?: string;
 }
 
 export interface ShapeAnnotation extends BaseAnnotation {

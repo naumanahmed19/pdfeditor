@@ -556,12 +556,13 @@ async function drawAnnotation(
       break;
     }
     case "whiteout": {
+      const c = hexToRgb01(ann.color ?? "#ffffff");
       page.drawRectangle({
         x: r.x,
         y: r.y,
         width: r.w,
         height: r.h,
-        color: rgb(1, 1, 1),
+        color: rgb(c.r, c.g, c.b),
       });
       break;
     }
