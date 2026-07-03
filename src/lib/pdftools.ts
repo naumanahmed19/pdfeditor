@@ -1,11 +1,15 @@
 import {
   PDFCheckBox,
+  PDFDict,
   PDFDocument,
   PDFDropdown,
+  PDFName,
   PDFOptionList,
   PDFRadioGroup,
+  PDFString,
   PDFTextField,
   StandardFonts,
+  TextAlignment,
   degrees,
   rgb,
   type PDFFont,
@@ -505,28 +509,113 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
 
   const radioGroups = new Map<string, ReturnType<typeof form.createRadioGroup>>();
   const radioCounts = new Map<string, number>();
-  const border = { borderColor: rgb(0.62, 0.68, 0.78), borderWidth: 1 };
+
+  // Per-field widget appearance (border/background), applied via addToPage.
+  const appearanceOf = (ann: FormFieldAnnotation) => {
+    const bc = hexToRgb01(ann.borderColor ?? "#9ca8c8");
+    const bw = ann.borderWidth ?? 1;
+    const opts: {
+      borderColor: ReturnType<typeof rgb>;
+      borderWidth: number;
+      backgroundColor?: ReturnType<typeof rgb>;
+    } = {
+      borderColor: rgb(bc.r, bc.g, bc.b),
+      borderWidth: bw,
+    };
+    if (ann.backgroundColor) {
+      const b = hexToRgb01(ann.backgroundColor);
+      opts.backgroundColor = rgb(b.r, b.g, b.b);
+    }
+    return opts;
+  };
+
+  const BORDER_STYLE_CHAR: Record<string, string> = {
+    solid: "S",
+    dashed: "D",
+    beveled: "B",
+    inset: "I",
+    underline: "U",
+  };
+
+  // Low-level widget tweaks pdf-lib's addToPage doesn't cover: border style
+  // (/BS), tooltip (/TU). Applied to every widget of the field.
+  const styleWidgets = (field: { acroField: any }, ann: FormFieldAnnotation) => {
+    const widgets = field.acroField.getWidgets?.() ?? [];
+    for (const w of widgets) {
+      const dict = w.dict as PDFDict;
+      if (ann.borderStyle) {
+        const bs = doc.context.obj({
+          Type: "Border",
+          W: ann.borderWidth ?? 1,
+          S: PDFName.of(BORDER_STYLE_CHAR[ann.borderStyle] ?? "S"),
+        }) as PDFDict;
+        if (ann.borderStyle === "dashed") {
+          bs.set(PDFName.of("D"), doc.context.obj([3, 2]));
+        }
+        dict.set(PDFName.of("BS"), bs);
+      }
+    }
+    if (ann.tooltip) {
+      field.acroField.dict.set(PDFName.of("TU"), PDFString.of(ann.tooltip));
+    }
+  };
 
   for (const { ann, r, pageIndex } of placed) {
     const page = doc.getPage(pageIndex);
     const rect = { x: r.x, y: r.y, width: r.w, height: r.h };
+    const appearance = appearanceOf(ann);
     try {
       switch (ann.fieldType) {
         case "text": {
           const f = form.createTextField(uniqueName(ann.fieldName));
-          if (ann.h >= 45) f.enableMultiline();
-          f.addToPage(page, { ...rect, ...border });
+          if (ann.multiline ?? ann.h >= 45) f.enableMultiline();
+          if (ann.required) f.enableRequired();
+          if (ann.readOnly) f.enableReadOnly();
+          if (ann.maxLength && ann.maxLength > 0) f.setMaxLength(ann.maxLength);
+          if (ann.align) {
+            f.setAlignment(
+              ann.align === "center"
+                ? TextAlignment.Center
+                : ann.align === "right"
+                  ? TextAlignment.Right
+                  : TextAlignment.Left,
+            );
+          }
+          if (ann.defaultValue) f.setText(ann.defaultValue);
+          f.addToPage(page, rect);
+          if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
+          // Border/background go through the widget MK; addToPage set defaults,
+          // so re-apply our colors explicitly then the style.
+          applyWidgetAppearance(doc, f, appearance);
+          styleWidgets(f, ann);
           break;
         }
         case "checkbox": {
           const f = form.createCheckBox(uniqueName(ann.fieldName));
-          f.addToPage(page, { ...rect, ...border });
+          if (ann.readOnly) f.enableReadOnly();
+          if (ann.required) f.enableRequired();
+          f.addToPage(page, rect);
+          applyWidgetAppearance(doc, f, appearance);
+          styleWidgets(f, ann);
+          if (ann.defaultValue === "true" || ann.defaultValue === "on") f.check();
           break;
         }
         case "dropdown": {
           const f = form.createDropdown(uniqueName(ann.fieldName));
           f.setOptions((ann.options ?? []).map((o) => o.trim()).filter(Boolean));
-          f.addToPage(page, { ...rect, ...border });
+          if (ann.readOnly) f.enableReadOnly();
+          if (ann.required) f.enableRequired();
+          if (ann.defaultValue) {
+            try {
+              f.select(ann.defaultValue);
+            } catch {
+              /* value not an option */
+            }
+          }
+          f.addToPage(page, rect);
+          if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
+          applyWidgetAppearance(doc, f, appearance);
+          styleWidgets(f, ann);
           break;
         }
         case "radio": {
@@ -538,17 +627,39 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           }
           const n = (radioCounts.get(ann.fieldName) ?? 0) + 1;
           radioCounts.set(ann.fieldName, n);
-          group.addOptionToPage(
-            ann.optionValue?.trim() || `option${n}`,
-            page,
-            { ...rect, ...border },
-          );
+          group.addOptionToPage(ann.optionValue?.trim() || `option${n}`, page, rect);
+          applyWidgetAppearance(doc, group, appearance);
+          styleWidgets(group, ann);
           break;
         }
       }
     } catch {
       /* invalid field spec — skip */
     }
+  }
+}
+
+/** Re-apply border/background color to every widget of a field via its MK dict. */
+function applyWidgetAppearance(
+  doc: PDFDocument,
+  field: { acroField: any },
+  appearance: {
+    borderColor: ReturnType<typeof rgb>;
+    borderWidth: number;
+    backgroundColor?: ReturnType<typeof rgb>;
+  },
+) {
+  const widgets = field.acroField.getWidgets?.() ?? [];
+  for (const w of widgets) {
+    const dict = w.dict as PDFDict;
+    let mk = dict.lookupMaybe(PDFName.of("MK"), PDFDict);
+    if (!mk) {
+      mk = doc.context.obj({}) as PDFDict;
+      dict.set(PDFName.of("MK"), mk);
+    }
+    const { borderColor: bc, backgroundColor: bg } = appearance;
+    mk.set(PDFName.of("BC"), doc.context.obj([bc.red, bc.green, bc.blue]));
+    if (bg) mk.set(PDFName.of("BG"), doc.context.obj([bg.red, bg.green, bg.blue]));
   }
 }
 

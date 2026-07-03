@@ -81,6 +81,15 @@ export interface ImageAnnotation extends BaseAnnotation {
 }
 
 /** A form field to be CREATED in the PDF when saving (form designer). */
+export type FieldBorderStyle =
+  | "solid"
+  | "dashed"
+  | "beveled"
+  | "inset"
+  | "underline";
+
+export type FieldAlign = "left" | "center" | "right";
+
 export interface FormFieldAnnotation extends BaseAnnotation {
   kind: "formfield";
   fieldType: "text" | "checkbox" | "dropdown" | "radio";
@@ -89,6 +98,24 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   options?: string[];
   /** Radio widget export value; widgets sharing a fieldName form one group. */
   optionValue?: string;
+
+  // --- Form-builder properties ---
+  /** Hover tooltip (/TU). */
+  tooltip?: string;
+  /** Prefilled value (text) or checked state (checkbox). */
+  defaultValue?: string;
+  required?: boolean;
+  readOnly?: boolean;
+  /** Text font size in pt; 0 or undefined = auto-size. */
+  fontSize?: number;
+  align?: FieldAlign;
+  multiline?: boolean;
+  maxLength?: number;
+  /** Widget appearance. */
+  borderColor?: string;
+  backgroundColor?: string;
+  borderWidth?: number;
+  borderStyle?: FieldBorderStyle;
 }
 
 /** A pending edit to an EXISTING AcroForm field (move/rename/delete). */
