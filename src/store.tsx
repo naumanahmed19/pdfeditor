@@ -30,6 +30,7 @@ import type {
   ObjectStyle as PdfiumObjectStyle,
   PageObject,
   TextObject,
+  TextStyle as PdfiumTextStyle,
 } from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
@@ -164,6 +165,11 @@ interface AppStore {
     pageIndex: number,
     objectIndex: number,
     newText: string,
+  ) => Promise<void>;
+  applyTextStyle: (
+    pageIndex: number,
+    objectIndex: number,
+    style: PdfiumTextStyle,
   ) => Promise<void>;
 
   /** Object editing via PDFium: move/resize/delete existing text & images. */
@@ -1123,6 +1129,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitInPlace],
   );
 
+  /** In-place text edit that also changes ink color and/or size. */
+  const applyTextStyle = useCallback(
+    async (pageIndex: number, objectIndex: number, style: PdfiumTextStyle) => {
+      const { styleTextObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => styleTextObject(b, pageIndex, objectIndex, style));
+    },
+    [commitInPlace],
+  );
+
   /** Move/resize an existing object (text or image) via an affine transform. */
   const applyObjectTransform = useCallback(
     async (pageIndex: number, objectIndex: number, m: PdfiumMatrix) => {
@@ -1420,6 +1435,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     bakeToBytes,
     getPageTextObjects,
     applyTextEdit,
+    applyTextStyle,
     getPageObjects,
     applyObjectTransform,
     removeObjectAt,
@@ -1517,6 +1533,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSelected,
         getPageTextObjects,
         applyTextEdit,
+        applyTextStyle,
         getPageObjects,
         applyObjectTransform,
         removeObjectAt,

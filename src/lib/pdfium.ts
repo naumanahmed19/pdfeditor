@@ -541,6 +541,47 @@ export interface ObjectStyle {
   strokeWidth?: number;
 }
 
+/** Combined in-place text edit: change the string, ink color and/or size. */
+export interface TextStyle {
+  text?: string;
+  /** New ink (fill) color, RGBA 0–255. */
+  fill?: [number, number, number, number];
+  /** Multiply the current font size by this factor (via a scale transform). */
+  fontScale?: number;
+}
+
+export async function styleTextObject(
+  bytes: Uint8Array,
+  pageIndex: number,
+  objectIndex: number,
+  style: TextStyle,
+): Promise<Uint8Array> {
+  return editPage(bytes, pageIndex, (mod, page) => {
+    const rt = rtx(mod);
+    const obj = mod.FPDFPage_GetObject(page, objectIndex);
+    if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+      throw new Error(`PDFium: object ${objectIndex} is not a text object`);
+    }
+    if (style.text != null) {
+      const p = allocUtf16(mod, style.text);
+      const ok = mod.FPDFText_SetText(obj, p);
+      rt.wasmExports.free(p);
+      if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
+    }
+    if (style.fill) mod.FPDFPageObj_SetFillColor(obj, ...style.fill);
+    if (style.fontScale && style.fontScale !== 1) {
+      // Scale about the run's bottom-left so its position/baseline stays put.
+      const f4 = rt.wasmExports.malloc(16);
+      mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12);
+      const ax = rt.getValue(f4, "float");
+      const ay = rt.getValue(f4 + 4, "float");
+      rt.wasmExports.free(f4);
+      const s = style.fontScale;
+      mod.FPDFPageObj_Transform(obj, s, 0, 0, s, ax * (1 - s), ay * (1 - s));
+    }
+  });
+}
+
 /** Set the fill/stroke color (RGBA 0–255) and/or stroke width of a page object. */
 export async function setObjectStyle(
   bytes: Uint8Array,

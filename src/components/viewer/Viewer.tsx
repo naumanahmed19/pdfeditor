@@ -719,6 +719,8 @@ function PageView({
       hit.top,
     ]);
     const [r, g, b] = hit.color;
+    const hex =
+      "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
     setInlineEdit({
       objectIndex: hit.index,
       original: hit.text,
@@ -728,19 +730,39 @@ function PageView({
       height: Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale),
       fontPx: hit.fontSize * scale,
       color: `rgb(${r}, ${g}, ${b})`,
+      colorHex: hex,
+      fontSize: hit.fontSize,
     });
   };
 
-  const commitInlineEdit = async (text: string) => {
+  const commitInlineEdit = async (
+    text: string,
+    colorHex: string,
+    fontSize: number,
+  ) => {
     const edit = inlineEdit;
     if (!edit) return;
-    if (text === edit.original || !text.trim()) {
+    const textChanged = text !== edit.original && text.trim().length > 0;
+    const colorChanged = colorHex.toLowerCase() !== edit.colorHex.toLowerCase();
+    const sizeChanged = fontSize > 0 && fontSize !== Math.round(edit.fontSize);
+    if (!textChanged && !colorChanged && !sizeChanged) {
       setInlineEdit(null);
       return;
     }
     setSavingEdit(true);
     try {
-      await app.applyTextEdit(pageIndex, edit.objectIndex, text);
+      await app.applyTextStyle(pageIndex, edit.objectIndex, {
+        text: textChanged ? text : undefined,
+        fill: colorChanged
+          ? [
+              parseInt(colorHex.slice(1, 3), 16),
+              parseInt(colorHex.slice(3, 5), 16),
+              parseInt(colorHex.slice(5, 7), 16),
+              255,
+            ]
+          : undefined,
+        fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
+      });
     } catch {
       toast.error(
         "This text can't be edited in place — its font isn't fully embeddable. Use the Text tool to add a correction on top instead.",
@@ -813,7 +835,12 @@ interface InlineEdit {
   width: number;
   height: number;
   fontPx: number;
+  /** Original ink color as an rgb() string (for on-screen display). */
   color: string;
+  /** Original ink color as hex (for the color control). */
+  colorHex: string;
+  /** Original font size in PDF points. */
+  fontSize: number;
 }
 
 /**
@@ -829,16 +856,16 @@ function InlineTextEditor({
 }: {
   edit: InlineEdit;
   saving: boolean;
-  onCommit: (text: string) => void;
+  onCommit: (text: string, colorHex: string, fontSize: number) => void;
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [value, setValue] = useState(edit.original);
+  const [colorHex, setColorHex] = useState(edit.colorHex);
+  const [sizePt, setSizePt] = useState(Math.round(edit.fontSize));
   const done = useRef(false);
 
   useEffect(() => {
-    // Clear any text selection the opening click left behind, and focus without
-    // letting the browser scroll the container to the editor (the "jump").
     window.getSelection()?.removeAllRanges();
     const t = ref.current;
     if (t) {
@@ -851,47 +878,88 @@ function InlineTextEditor({
   const finish = () => {
     if (done.current) return;
     done.current = true;
-    onCommit(value);
+    onCommit(value, colorHex, sizePt);
   };
 
-  // Give the font room (glyph bbox can be shorter than the em) and keep the box
-  // centered on the original run so the editing text sits where the glyphs were.
-  const boxH = Math.max(edit.height, edit.fontPx * 1.25);
+  // Live-preview the size change on screen (px per point from the original).
+  const pxPerPt = edit.fontPx / (edit.fontSize || 1);
+  const fontPx = sizePt * pxPerPt;
+  const boxH = Math.max(edit.height, fontPx * 1.25);
   const top = edit.top + edit.height / 2 - boxH / 2;
 
+  const stepBtn =
+    "flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground";
+
   return (
-    <textarea
-      ref={ref}
-      value={value}
-      disabled={saving}
-      spellCheck={false}
-      onChange={(e) => setValue(e.target.value)}
+    <div
+      className="absolute z-30"
+      style={{ left: edit.left, top }}
       onPointerDown={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          finish();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          done.current = true;
-          onCancel();
-        }
+      // Commit when focus leaves the whole editor (bar or textarea).
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) finish();
       }}
-      onBlur={finish}
-      className="absolute z-30 resize-none overflow-hidden whitespace-pre rounded-[2px] bg-white shadow-sm outline outline-2 outline-primary"
-      style={{
-        left: edit.left,
-        top,
-        width: Math.max(edit.width + 24, 60),
-        height: boxH,
-        fontSize: edit.fontPx,
-        // Single-line runs vertically center via line-height = box height.
-        lineHeight: `${boxH}px`,
-        color: edit.color,
-        padding: "0 1px",
-        fontFamily: "Helvetica, Arial, sans-serif",
-      }}
-    />
+    >
+      {/* Options bar: text color + size stepper. */}
+      <div className="absolute bottom-full left-0 mb-1 flex items-center gap-1.5 whitespace-nowrap rounded-md border bg-background px-1.5 py-1 shadow-md">
+        <input
+          type="color"
+          value={colorHex}
+          disabled={saving}
+          onChange={(e) => setColorHex(e.target.value)}
+          title="Text color"
+          className="h-5 w-5 cursor-pointer rounded border border-input bg-background p-0.5"
+        />
+        <div className="mx-0.5 h-4 w-px bg-border" />
+        <button
+          type="button"
+          className={stepBtn}
+          title="Smaller"
+          disabled={saving}
+          onClick={() => setSizePt((s) => Math.max(4, s - 1))}
+        >
+          −
+        </button>
+        <span className="w-6 text-center text-[11px] tabular-nums">{sizePt}</span>
+        <button
+          type="button"
+          className={stepBtn}
+          title="Larger"
+          disabled={saving}
+          onClick={() => setSizePt((s) => Math.min(200, s + 1))}
+        >
+          +
+        </button>
+      </div>
+
+      <textarea
+        ref={ref}
+        value={value}
+        disabled={saving}
+        spellCheck={false}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            finish();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            done.current = true;
+            onCancel();
+          }
+        }}
+        className="block resize-none overflow-hidden whitespace-pre rounded-[2px] bg-white shadow-sm outline outline-2 outline-primary"
+        style={{
+          width: Math.max(edit.width + 24, 60),
+          height: boxH,
+          fontSize: fontPx,
+          lineHeight: `${boxH}px`,
+          color: colorHex,
+          padding: "0 1px",
+          fontFamily: "Helvetica, Arial, sans-serif",
+        }}
+      />
+    </div>
   );
 }
 
