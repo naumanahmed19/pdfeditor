@@ -505,11 +505,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSelected(null);
   }, [activeTabId, updateDoc]);
 
+  // Undo/redo restore both annotations and the base bytes/pdf from the aligned
+  // timeline. Swapping `pdf` re-renders pages in place — no docVersion bump, so
+  // there's no remount flash or scroll jump.
   const undo = useCallback(() => {
     if (!active) return;
     const target = Math.max(0, active.historyIndex - 1);
     const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
-    const pdfChanged = base.pdf !== active.pdf;
     updateDoc(active.id, {
       historyIndex: target,
       annotations: active.history[target] ?? {},
@@ -517,21 +519,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       pdf: base.pdf,
     });
     setSelected(null);
-    if (pdfChanged) setDocVersion((v) => v + 1);
   }, [active, updateDoc]);
 
   const redo = useCallback(() => {
     if (!active) return;
     const target = Math.min(active.history.length - 1, active.historyIndex + 1);
     const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
-    const pdfChanged = base.pdf !== active.pdf;
     updateDoc(active.id, {
       historyIndex: target,
       annotations: active.history[target] ?? {},
       bytes: base.bytes,
       pdf: base.pdf,
     });
-    if (pdfChanged) setDocVersion((v) => v + 1);
   }, [active, updateDoc]);
 
   const hasAnnotations = useMemo(
@@ -1066,10 +1065,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const nextPdf = await loadPdf(nextBytes);
       // Keep the current annotations; only the base bytes/pdf advance. The old
       // pdf proxy stays referenced by earlier history entries for undo.
+      // NB: we deliberately do NOT bump docVersion — that key remounts every
+      // page (blank flash + scroll jump). A text edit never changes the page
+      // count, so swapping the `pdf` prop re-renders the page in place.
       updateDoc(id, (d) =>
         pushHistory(d, d.annotations, { bytes: nextBytes, pdf: nextPdf }),
       );
-      setDocVersion((v) => v + 1);
       setSelected(null);
       void persistDoc({
         id,
@@ -1446,6 +1447,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           activeTabId,
           activePaneId,
           panes,
+          docVersion,
           bytesLen: active?.bytes.length ?? 0,
           historyIndex: active?.historyIndex ?? -1,
           historyLen: active?.history.length ?? 0,

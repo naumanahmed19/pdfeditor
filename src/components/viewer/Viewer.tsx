@@ -659,16 +659,25 @@ function PageView({
   const onTextLayerClick = async (e: React.MouseEvent) => {
     if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
     const pr = wrapRef.current.getBoundingClientRect();
-    const xPt = (e.clientX - pr.left) / scale;
-    const yPt = baseDims.height - (e.clientY - pr.top) / scale; // bottom-left origin
 
     let objs;
+    let viewport;
     try {
+      // pdf.js viewport maps PDFium's (unrotated) page space to the on-screen
+      // rendering — this is what keeps the editor aligned on rotated/cropped
+      // pages instead of guessing with a manual y-flip.
+      const page = await pdf.getPage(pageIndex + 1);
+      viewport = page.getViewport({ scale });
       objs = await app.getPageTextObjects(pageIndex);
     } catch {
       toast.error("Couldn't read this page's text for editing.");
       return;
     }
+    // Click point in PDF page coordinates (handles rotation + crop origin).
+    const [xPt, yPt] = viewport.convertToPdfPoint(
+      e.clientX - pr.left,
+      e.clientY - pr.top,
+    );
     // Smallest text run whose bounds contain the click point.
     const hit = objs
       .filter(
@@ -688,14 +697,21 @@ function PageView({
       toast.info("Click directly on a line of text to edit it.");
       return;
     }
+    // Map the run's PDF-space box to the exact on-screen rectangle.
+    const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle([
+      hit.left,
+      hit.bottom,
+      hit.right,
+      hit.top,
+    ]);
     const [r, g, b] = hit.color;
     setInlineEdit({
       objectIndex: hit.index,
       original: hit.text,
-      left: hit.left * scale,
-      top: (baseDims.height - hit.top) * scale,
-      width: Math.max((hit.right - hit.left) * scale, 24),
-      height: Math.max((hit.top - hit.bottom) * scale, hit.fontSize * scale),
+      left: Math.min(vx1, vx2),
+      top: Math.min(vy1, vy2),
+      width: Math.max(Math.abs(vx2 - vx1), 24),
+      height: Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale),
       fontPx: hit.fontSize * scale,
       color: `rgb(${r}, ${g}, ${b})`,
     });
@@ -810,6 +826,11 @@ function InlineTextEditor({
     onCommit(value);
   };
 
+  // Give the font room (glyph bbox can be shorter than the em) and keep the box
+  // centered on the original run so the editing text sits where the glyphs were.
+  const boxH = Math.max(edit.height, edit.fontPx * 1.25);
+  const top = edit.top + edit.height / 2 - boxH / 2;
+
   return (
     <textarea
       ref={ref}
@@ -829,15 +850,17 @@ function InlineTextEditor({
         }
       }}
       onBlur={finish}
-      className="absolute z-30 resize-none overflow-hidden whitespace-pre rounded-[2px] bg-white leading-none shadow-sm outline outline-2 outline-primary"
+      className="absolute z-30 resize-none overflow-hidden whitespace-pre rounded-[2px] bg-white shadow-sm outline outline-2 outline-primary"
       style={{
         left: edit.left,
-        top: edit.top,
-        width: Math.max(edit.width + 16, 60),
-        height: Math.max(edit.height + 6, edit.fontPx + 8),
+        top,
+        width: Math.max(edit.width + 24, 60),
+        height: boxH,
         fontSize: edit.fontPx,
+        // Single-line runs vertically center via line-height = box height.
+        lineHeight: `${boxH}px`,
         color: edit.color,
-        padding: "1px 3px",
+        padding: "0 1px",
         fontFamily: "Helvetica, Arial, sans-serif",
       }}
     />
