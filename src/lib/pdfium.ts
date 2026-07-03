@@ -150,6 +150,7 @@ function rtx(mod: WrappedPdfiumModule) {
     HEAPU8: Uint8Array;
     wasmExports: { malloc: (n: number) => number; free: (p: number) => void };
     setValue: (ptr: number, value: number, type: string) => void;
+    getValue: (ptr: number, type: string) => number;
     addFunction: (fn: (...a: number[]) => number, sig: string) => number;
     removeFunction: (ptr: number) => void;
   };
@@ -228,6 +229,181 @@ export async function redactRegions(
       }
     }
 
+    return saveAsCopy(mod, doc);
+  } finally {
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+}
+
+// --- In-place text editing (page objects) ---------------------------------
+
+const FPDF_PAGEOBJ_TEXT = 1;
+
+/** A text run on a page, as PDFium sees it (page space, origin bottom-left). */
+export interface TextObject {
+  /** Index into the page's object list — the handle for editing. */
+  index: number;
+  text: string;
+  left: number;
+  bottom: number;
+  right: number;
+  top: number;
+  fontSize: number;
+  /** Fill color 0–255. */
+  color: [number, number, number, number];
+  fontName: string;
+}
+
+/** Write a JS string as a NUL-terminated UTF-16LE buffer; caller frees it. */
+function allocUtf16(mod: WrappedPdfiumModule, str: string): number {
+  const rt = rtx(mod);
+  const ptr = rt.wasmExports.malloc((str.length + 1) * 2);
+  for (let i = 0; i < str.length; i++) {
+    rt.setValue(ptr + i * 2, str.charCodeAt(i), "i16");
+  }
+  rt.setValue(ptr + str.length * 2, 0, "i16");
+  return ptr;
+}
+
+/** Read a NUL-terminated UTF-16LE buffer of at most `byteLen` bytes. */
+function readUtf16(mod: WrappedPdfiumModule, ptr: number, byteLen: number): string {
+  const rt = rtx(mod);
+  let s = "";
+  for (let i = 0; i + 1 < byteLen; i += 2) {
+    const c = rt.HEAPU8[ptr + i] | (rt.HEAPU8[ptr + i + 1] << 8);
+    if (c === 0) break;
+    s += String.fromCharCode(c);
+  }
+  return s;
+}
+
+/**
+ * Enumerate the text runs on a page with their exact geometry, font size,
+ * fill color and font name — everything the editor needs to hit-test a click
+ * and match the replacement. Unlike pdf.js text items (display-oriented), these
+ * are the real content-stream objects that can be edited in place.
+ */
+export async function getTextObjects(
+  bytes: Uint8Array,
+  pageIndex: number,
+): Promise<TextObject[]> {
+  return withDoc(bytes, (mod, doc) => {
+    const rt = rtx(mod);
+    const page = mod.FPDF_LoadPage(doc, pageIndex);
+    const textPage = mod.FPDFText_LoadPage(page);
+    const out: TextObject[] = [];
+    // Scratch space reused across objects.
+    const f4 = rt.wasmExports.malloc(16); // 4 floats (bounds)
+    const c4 = rt.wasmExports.malloc(16); // 4 uints (color)
+    const fs = rt.wasmExports.malloc(4); // 1 float (font size)
+    try {
+      const count = mod.FPDFPage_CountObjects(page);
+      for (let i = 0; i < count; i++) {
+        const obj = mod.FPDFPage_GetObject(page, i);
+        if (mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) continue;
+
+        // Text: two-pass (query length, then read).
+        const need = mod.FPDFTextObj_GetText(obj, textPage, 0, 0);
+        let text = "";
+        if (need > 0) {
+          const buf = rt.wasmExports.malloc(need * 2);
+          mod.FPDFTextObj_GetText(obj, textPage, buf, need);
+          text = readUtf16(mod, buf, need * 2);
+          rt.wasmExports.free(buf);
+        }
+
+        mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12);
+        mod.FPDFPageObj_GetFillColor(obj, c4, c4 + 4, c4 + 8, c4 + 12);
+        mod.FPDFTextObj_GetFontSize(obj, fs);
+
+        let fontName = "";
+        const font = mod.FPDFTextObj_GetFont(obj);
+        if (font) {
+          const n = mod.FPDFFont_GetBaseFontName(font, 0, 0);
+          if (n > 0) {
+            const nb = rt.wasmExports.malloc(n);
+            mod.FPDFFont_GetBaseFontName(font, nb, n);
+            fontName = readUtf8(mod, nb, n);
+            rt.wasmExports.free(nb);
+          }
+        }
+
+        out.push({
+          index: i,
+          text,
+          left: rt.getValue(f4, "float"),
+          bottom: rt.getValue(f4 + 4, "float"),
+          right: rt.getValue(f4 + 8, "float"),
+          top: rt.getValue(f4 + 12, "float"),
+          color: [
+            rt.getValue(c4, "i32") & 0xff,
+            rt.getValue(c4 + 4, "i32") & 0xff,
+            rt.getValue(c4 + 8, "i32") & 0xff,
+            rt.getValue(c4 + 12, "i32") & 0xff,
+          ],
+          fontSize: rt.getValue(fs, "float"),
+          fontName,
+        });
+      }
+      return out;
+    } finally {
+      rt.wasmExports.free(f4);
+      rt.wasmExports.free(c4);
+      rt.wasmExports.free(fs);
+      mod.FPDFText_ClosePage(textPage);
+      mod.FPDF_ClosePage(page);
+    }
+  });
+}
+
+/** Read a NUL-terminated ASCII/UTF-8 buffer of at most `byteLen` bytes. */
+function readUtf8(mod: WrappedPdfiumModule, ptr: number, byteLen: number): string {
+  const rt = rtx(mod);
+  let end = ptr;
+  while (end < ptr + byteLen && rt.HEAPU8[end] !== 0) end++;
+  return new TextDecoder().decode(rt.HEAPU8.subarray(ptr, end));
+}
+
+/**
+ * TRUE in-place text edit: replace the string of the text object at
+ * `objectIndex` with `newText`, keeping its original font, size, color and
+ * position. The original text is genuinely replaced in the content stream — no
+ * whiteout patch, and nothing left behind to extract. Returns fresh PDF bytes.
+ *
+ * Caveat: subset-embedded fonts only carry the glyphs the document already
+ * used, so characters not present in the subset won't render — fine for
+ * correcting words with existing letters, not for arbitrary new text.
+ */
+export async function editTextObject(
+  bytes: Uint8Array,
+  pageIndex: number,
+  objectIndex: number,
+  newText: string,
+): Promise<Uint8Array> {
+  const mod = await getPdfium();
+  const rt = rtx(mod);
+  const filePtr = toHeap(mod, bytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, "");
+  if (!doc) {
+    rt.wasmExports.free(filePtr);
+    throw new Error(`PDFium: could not open document (err ${mod.FPDF_GetLastError()})`);
+  }
+  try {
+    const page = mod.FPDF_LoadPage(doc, pageIndex);
+    try {
+      const obj = mod.FPDFPage_GetObject(page, objectIndex);
+      if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        throw new Error(`PDFium: object ${objectIndex} is not a text object`);
+      }
+      const strPtr = allocUtf16(mod, newText);
+      const ok = mod.FPDFText_SetText(obj, strPtr);
+      rt.wasmExports.free(strPtr);
+      if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
+      mod.FPDFPage_GenerateContent(page);
+    } finally {
+      mod.FPDF_ClosePage(page);
+    }
     return saveAsCopy(mod, doc);
   } finally {
     mod.FPDF_CloseDocument(doc);

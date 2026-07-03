@@ -2,7 +2,13 @@
 // exercised via the dev console on the `pdfium-experiment` branch:
 //   const m = await import('/src/lib/pdfium_test.ts'); await m.testRedaction();
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { redactRegions, renderPage, renderPageToCanvas } from "./pdfium";
+import {
+  editTextObject,
+  getTextObjects,
+  redactRegions,
+  renderPage,
+  renderPageToCanvas,
+} from "./pdfium";
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
@@ -56,6 +62,51 @@ export async function testRedaction() {
     secretRemoved: !after.includes("SECRET"),
     publicKept: after.includes("PUBLIC"),
   };
+}
+
+/** Prove in-place text editing: the run's string changes, geometry preserved. */
+export async function testEdit() {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([300, 120]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("Hello World", { x: 20, y: 60, size: 24, font });
+  const bytes = await doc.save();
+
+  const objs = await getTextObjects(bytes, 0);
+  const target = objs.find((o) => o.text.includes("Hello"));
+  if (!target) return { error: "no text object found", objs };
+
+  const edited = await editTextObject(bytes, 0, target.index, "Howdy PDFium!");
+  const after = await extractText(edited);
+  const objsAfter = await getTextObjects(edited, 0);
+
+  return {
+    foundText: target.text,
+    bounds: [target.left, target.bottom, target.right, target.top].map((n) =>
+      Math.round(n),
+    ),
+    fontSize: target.fontSize,
+    fontName: target.fontName,
+    color: target.color,
+    afterExtract: after,
+    changed: after.includes("Howdy") && !after.includes("Hello"),
+    newBounds: objsAfter[0]
+      ? [objsAfter[0].left, objsAfter[0].bottom].map((n) => Math.round(n))
+      : null,
+  };
+}
+
+/** Edit then render, so we can screenshot the changed text in its place. */
+export async function showEdit() {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([300, 120]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("Hello World", { x: 20, y: 60, size: 24, font });
+  const bytes = await doc.save();
+  const objs = await getTextObjects(bytes, 0);
+  const t = objs.find((o) => o.text.includes("Hello"))!;
+  const edited = await editTextObject(bytes, 0, t.index, "Howdy PDFium!");
+  overlay(await renderPageToCanvas(edited, 0, 3));
 }
 
 function overlay(canvas: HTMLCanvasElement) {

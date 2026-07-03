@@ -16,8 +16,12 @@ validate two things pdf.js + pdf-lib can't do well in our stack:
   - `renderPage()` / `renderPageToCanvas()` — render a page to RGBA / a canvas.
   - `getPageCount()`.
   - `redactRegions(bytes, rects, { drawBlackBoxes })` — **true redaction**.
+  - `getTextObjects(bytes, pageIndex)` — enumerate real text runs (geometry,
+    font size, fill color, base font name).
+  - `editTextObject(bytes, pageIndex, objectIndex, newText)` — **true in-place
+    text edit** (see below).
 - [`src/lib/pdfium_test.ts`](src/lib/pdfium_test.ts) — console harness (not
-  shipped): `testRender`, `testRedaction`, `showRender`, `showRedaction`.
+  shipped): `testRender`, `testRedaction`, `testEdit`, and `show*` variants.
 
 Nothing is wired into the app UI yet — this branch only proves the engine.
 
@@ -28,6 +32,7 @@ Nothing is wired into the app UI yet — this branch only proves the engine.
 | Init + load  | ✅ loads, inits, opens a doc |
 | Rasterize    | ✅ crisp text/vectors; a 200×120 pt page at 3× (600×360) in ~40–70 ms |
 | **Redaction**| ✅ **destructive** — redacted text is gone from the saved bytes (pdf.js re-extract drops `SECRET-12345`, keeps `PUBLIC line`) and a black box is painted in place |
+| **Edit text**| ✅ **in-place** — `Hello World` → `Howdy PDFium!` keeping the exact font (Helvetica), size (24), color and position; the original string is gone from the stream, no whiteout patch |
 
 ## How redaction works (the non-obvious part)
 
@@ -47,6 +52,38 @@ FPDFPage_GenerateContent(page)
 
 Bytes are read back with `FPDF_SaveAsCopy` + an `FPDF_FILEWRITE` struct whose
 `WriteBlock` is a JS callback registered via `addFunction(fn, "iiii")`.
+
+## How PDFium improves "Edit existing text"
+
+Today's editor (`Viewer.tsx › onTextLayerClick`) can't truly edit page text, so
+it **fakes** it: cover the original line with a background-colored **whiteout**
+patch, then drop an editable text box on top with a *best-effort* font match.
+That has three inherent problems:
+
+1. The original text still exists in the file — searchable/extractable/recoverable.
+2. The whiteout is a solid color, so it's visible over gradients, images or
+   textured backgrounds.
+3. The font is only approximated (standard/bundled fallback); edited text can
+   look different from its neighbors, especially in the saved file.
+
+PDFium's page-object API fixes all three. `FPDFText_SetText` rewrites the string
+of the actual content-stream text object **in place**, keeping its own embedded
+font, size, color and matrix — so there's no patch, no font guessing, and the
+old text is genuinely replaced. Verified: `getTextObjects` reports the run's
+exact bounds/size/color/font name, and `editTextObject` swaps the text with the
+result rendering in the identical face and position.
+
+**Caveat — subset fonts:** a font embedded as a subset only carries the glyphs
+the document already used. Typing a character that isn't in the subset won't
+render. Great for correcting/replacing words with existing letters; for
+arbitrary new text you'd fall back to re-embedding a font (what we do today).
+
+**Integration work (follow-up PR):** the click currently resolves to a *pdf.js*
+text span; to edit via PDFium we need to map that hit to a PDFium **object
+index** — either hit-test the click point against `getTextObjects()` bounds, or
+match on text + position. Then: `editTextObject` on commit → swap the doc bytes
+→ re-render. Keep the whiteout+overlay path as the fallback when the edit needs
+glyphs outside the subset.
 
 ## Cost
 
