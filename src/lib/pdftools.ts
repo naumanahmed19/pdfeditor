@@ -25,7 +25,9 @@ import type {
   TextAnnotation,
 } from "../types";
 import type { OcrPage } from "./ocr";
+import type { RedactRect } from "./pdfium";
 import { hexToRgb01 } from "./utils";
+import { getRuns, resolveRun, type ResolvedStyle } from "./richtext";
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
   return PDFDocument.load(bytes, { ignoreEncryption: true });
@@ -233,6 +235,44 @@ function toPdfRect(
   }
 }
 
+/**
+ * Destructively redact every pending "redact" box in `annotations`: the text
+ * (and form content) under each box is removed from the page content stream via
+ * PDFium and a black box is painted in its place — it can't be copied, searched
+ * or recovered, unlike a whiteout cover. Returns the input unchanged when there
+ * are no redaction boxes. Box coordinates are mapped through `toPdfRect`, so
+ * rotated pages are handled identically to the rest of the baking pipeline.
+ */
+export async function applyRedactions(
+  bytes: Uint8Array,
+  annotations: AnnotationMap,
+): Promise<Uint8Array> {
+  // Collect boxes per page in PDFium page space (origin bottom-left).
+  const doc = await load(bytes);
+  const rects: RedactRect[] = [];
+  for (const [pageIndexStr, list] of Object.entries(annotations)) {
+    const pageIndex = Number(pageIndexStr);
+    if (pageIndex < 0 || pageIndex >= doc.getPageCount() || !list.length) continue;
+    const page = doc.getPage(pageIndex);
+    const { width: pw, height: ph } = page.getSize();
+    const rotation = page.getRotation().angle;
+    for (const ann of list) {
+      if (ann.kind !== "redact") continue;
+      const r = toPdfRect(ann, pw, ph, rotation);
+      rects.push({
+        pageIndex,
+        left: r.x,
+        bottom: r.y,
+        right: r.x + r.w,
+        top: r.y + r.h,
+      });
+    }
+  }
+  if (!rects.length) return bytes;
+  const { redactRegions } = await import("./pdfium");
+  return redactRegions(bytes, rects, { drawBlackBoxes: true });
+}
+
 const FONT_VARIANTS: Record<string, [StandardFonts, StandardFonts, StandardFonts, StandardFonts]> = {
   // [regular, bold, italic, boldItalic]
   helvetica: [
@@ -387,6 +427,10 @@ export async function bakeAnnotations(
   formValues?: Record<string, unknown>,
   fieldOps?: Record<string, ExistingFieldOp>,
 ): Promise<Uint8Array> {
+  // True redaction runs first (destructive, via PDFium) so that even if the
+  // user saves without hitting "Apply redactions", the covered content is still
+  // genuinely removed — never silently left behind under a cosmetic box.
+  bytes = await applyRedactions(bytes, annotations);
   const doc = await load(bytes);
   const fontCache = new Map<StandardFonts, PDFFont>();
   const embeddedCache = new Map<string, PDFFont>();
@@ -401,10 +445,14 @@ export async function bakeAnnotations(
     return f;
   };
 
-  const getTextFont = async (ann: TextAnnotation): Promise<PDFFont> => {
-    const urls = BUNDLED_FONT_URLS[ann.fontFamily ?? ""];
+  const getStyledFont = async (
+    family: TextAnnotation["fontFamily"],
+    bold: boolean,
+    italic: boolean,
+  ): Promise<PDFFont> => {
+    const urls = BUNDLED_FONT_URLS[family ?? ""];
     if (urls) {
-      const url = urls[(ann.bold ? 1 : 0) + (ann.italic ? 2 : 0)];
+      const url = urls[(bold ? 1 : 0) + (italic ? 2 : 0)];
       const cached = embeddedCache.get(url);
       if (cached) return cached;
       try {
@@ -422,8 +470,13 @@ export async function bakeAnnotations(
         /* fall back to the closest standard font */
       }
     }
-    return getFont(fontVariantFor(ann));
+    const fam = family ?? "helvetica";
+    const variants =
+      FONT_VARIANTS[fam] ?? FONT_VARIANTS[STANDARD_FALLBACK[fam] ?? "helvetica"];
+    return getFont(variants[(bold ? 1 : 0) + (italic ? 2 : 0)]);
   };
+  const getTextFont = (ann: TextAnnotation): Promise<PDFFont> =>
+    getStyledFont(ann.fontFamily, !!ann.bold, !!ann.italic);
 
   const newFields: PlacedField[] = [];
 
@@ -445,11 +498,14 @@ export async function bakeAnnotations(
         if (ann.text.trim()) addNoteAnnotation(doc, pageIndex, ann, r);
         continue;
       }
-      const font =
-        ann.kind === "text"
-          ? await getTextFont(ann)
-          : await getFont(StandardFonts.Helvetica);
-      await drawAnnotation(doc, page, ann, r, font, rotation);
+      // Redaction is applied destructively above (PDFium), not drawn as an
+      // overlay — the black box is already baked into the page content.
+      if (ann.kind === "redact") continue;
+      if (ann.kind === "text") {
+        await drawRichText(page, ann, r, rotation, getStyledFont);
+        continue;
+      }
+      await drawAnnotation(doc, page, ann, r, await getFont(StandardFonts.Helvetica), rotation);
     }
   }
 
@@ -715,6 +771,178 @@ function applyWidgetAppearance(
     const { borderColor: bc, backgroundColor: bg } = appearance;
     mk.set(PDFName.of("BC"), doc.context.obj([bc.red, bc.green, bc.blue]));
     if (bg) mk.set(PDFName.of("BG"), doc.context.obj([bg.red, bg.green, bg.blue]));
+  }
+}
+
+/**
+ * Draw a text annotation as styled runs (mixed color/size/font per span),
+ * wrapping at the box width like the on-screen editor. `getStyledFont`
+ * resolves + caches a pdf-lib font per run style.
+ */
+async function drawRichText(
+  page: ReturnType<PDFDocument["getPage"]>,
+  ann: TextAnnotation,
+  r: { x: number; y: number; w: number; h: number },
+  rotation: number,
+  getStyledFont: (
+    family: TextAnnotation["fontFamily"],
+    bold: boolean,
+    italic: boolean,
+  ) => Promise<PDFFont>,
+) {
+  const runs = getRuns(ann);
+  const key = (s: ResolvedStyle) => `${s.fontFamily}|${s.bold}|${s.italic}`;
+  const fonts = new Map<string, PDFFont>();
+  for (const run of runs) {
+    const s = resolveRun(run, ann);
+    if (!fonts.has(key(s))) fonts.set(key(s), await getStyledFont(s.fontFamily, s.bold, s.italic));
+  }
+  const widthOf = (font: PDFFont, text: string, size: number) => {
+    try {
+      return font.widthOfTextAtSize(text, size);
+    } catch {
+      return font.widthOfTextAtSize(sanitizeWinAnsi(text), size);
+    }
+  };
+
+  interface Tok {
+    text: string;
+    nl: boolean;
+    space: boolean;
+    style: ResolvedStyle;
+    font: PDFFont;
+    width: number;
+  }
+  const toks: Tok[] = [];
+  for (const run of runs) {
+    const s = resolveRun(run, ann);
+    const font = fonts.get(key(s))!;
+    for (const piece of run.text.split(/(\n)/)) {
+      if (piece === "") continue;
+      if (piece === "\n") {
+        toks.push({ text: "", nl: true, space: false, style: s, font, width: 0 });
+        continue;
+      }
+      for (const w of piece.split(/(\s+)/)) {
+        if (!w) continue;
+        toks.push({
+          text: w,
+          nl: false,
+          space: /^\s+$/.test(w),
+          style: s,
+          font,
+          width: widthOf(font, w, s.fontSize),
+        });
+      }
+    }
+  }
+
+  const maxWidth = Math.max(20, r.w - 4);
+  const lines: Array<{ toks: Tok[]; maxSize: number; width: number }> = [];
+  let cur: Tok[] = [];
+  let curW = 0;
+  let curMax = 0;
+  const flush = () => {
+    // Trailing spaces don't count toward visible width (matters for center/right align).
+    let w = curW;
+    for (let i = cur.length - 1; i >= 0 && cur[i].space; i--) w -= cur[i].width;
+    lines.push({ toks: cur, maxSize: curMax || ann.fontSize, width: w });
+    cur = [];
+    curW = 0;
+    curMax = 0;
+  };
+  for (const t of toks) {
+    if (t.nl) {
+      flush();
+      continue;
+    }
+    if (curW > 0 && curW + t.width > maxWidth && !t.space) flush();
+    if (curW === 0 && t.space) continue; // no leading space on a wrapped line
+    cur.push(t);
+    curW += t.width;
+    curMax = Math.max(curMax, t.style.fontSize);
+  }
+  if (cur.length || lines.length === 0) flush();
+
+  const align = ann.align ?? "left";
+  let yTop = 0;
+  for (const line of lines) {
+    yTop += line.maxSize * 1.25;
+    const baseline = r.y + r.h - yTop + line.maxSize * 0.25;
+    const startX =
+      r.x +
+      2 +
+      (align === "center"
+        ? Math.max(0, (maxWidth - line.width) / 2)
+        : align === "right"
+          ? Math.max(0, maxWidth - line.width)
+          : 0);
+    let x = startX;
+    // Positions recorded alongside each token so underline/strike segments
+    // (drawn in a second pass, merging adjacent same-style tokens) know
+    // exactly where to start/end.
+    const positions: number[] = [];
+    for (const t of line.toks) {
+      positions.push(x);
+      const c = hexToRgb01(t.style.color);
+      const opts = {
+        x,
+        y: baseline,
+        size: t.style.fontSize,
+        font: t.font,
+        color: rgb(c.r, c.g, c.b),
+        rotate: degrees(rotation),
+      };
+      try {
+        page.drawText(t.text, opts);
+      } catch {
+        page.drawText(sanitizeWinAnsi(t.text), opts);
+      }
+      x += t.width;
+    }
+    positions.push(x); // sentinel end position for the last token
+
+    const drawSegments = (
+      pick: (s: ResolvedStyle) => boolean,
+      offsetFor: (fontSize: number) => number,
+    ) => {
+      let i = 0;
+      while (i < line.toks.length) {
+        const t = line.toks[i];
+        if (!pick(t.style)) {
+          i++;
+          continue;
+        }
+        let j = i;
+        while (
+          j + 1 < line.toks.length &&
+          pick(line.toks[j + 1].style) &&
+          line.toks[j + 1].style.color === t.style.color &&
+          line.toks[j + 1].style.fontSize === t.style.fontSize
+        ) {
+          j++;
+        }
+        const segStart = positions[i];
+        const segEnd = positions[j + 1];
+        const c = hexToRgb01(t.style.color);
+        const y = baseline + offsetFor(t.style.fontSize);
+        page.drawLine({
+          start: { x: segStart, y },
+          end: { x: segEnd, y },
+          thickness: Math.max(0.5, t.style.fontSize * 0.06),
+          color: rgb(c.r, c.g, c.b),
+        });
+        i = j + 1;
+      }
+    };
+    drawSegments(
+      (s) => s.underline,
+      (size) => -size * 0.08,
+    );
+    drawSegments(
+      (s) => s.strike,
+      (size) => size * 0.3,
+    );
   }
 }
 

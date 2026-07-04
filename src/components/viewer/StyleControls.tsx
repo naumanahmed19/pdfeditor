@@ -1,7 +1,16 @@
 // Shared annotation style controls — ONE implementation used by both the
 // editor toolbar (tool defaults / selected annotation) and the selection
 // popover, so the two always look and behave identically.
-import { Bold, Italic, Plus } from "lucide-react";
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Bold,
+  Italic,
+  Plus,
+  Strikethrough,
+  Underline,
+} from "lucide-react";
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Select } from "../ui/select";
@@ -30,9 +39,16 @@ export interface TextStyleValue {
   fontSize: number;
   bold: boolean;
   italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  /** Box-level paragraph alignment. */
+  align: "left" | "center" | "right";
 }
 
-/** Canonical text styling row: swatch · family · size · B · I. */
+const NEXT_ALIGN = { left: "center", center: "right", right: "left" } as const;
+const ALIGN_ICON = { left: AlignLeft, center: AlignCenter, right: AlignRight } as const;
+
+/** Canonical text styling row: swatch · family · size · B · I · U · S · align. */
 export function TextStyleControls({
   value,
   onPatch,
@@ -40,6 +56,7 @@ export function TextStyleControls({
   value: TextStyleValue;
   onPatch: (p: Partial<TextStyleValue>) => void;
 }) {
+  const AlignIcon = ALIGN_ICON[value.align];
   return (
     <>
       <ColorSwatch
@@ -90,6 +107,33 @@ export function TextStyleControls({
         onClick={() => onPatch({ italic: !value.italic })}
       >
         <Italic className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant={value.underline ? "subtle" : "ghost"}
+        size="icon"
+        className="h-7 w-7"
+        title="Underline"
+        onClick={() => onPatch({ underline: !value.underline })}
+      >
+        <Underline className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant={value.strike ? "subtle" : "ghost"}
+        size="icon"
+        className="h-7 w-7"
+        title="Strikethrough"
+        onClick={() => onPatch({ strike: !value.strike })}
+      >
+        <Strikethrough className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7"
+        title={`Align: ${value.align} — click to change`}
+        onClick={() => onPatch({ align: NEXT_ALIGN[value.align] })}
+      >
+        <AlignIcon className="h-3.5 w-3.5" />
       </Button>
     </>
   );

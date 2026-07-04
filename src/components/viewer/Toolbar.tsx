@@ -16,6 +16,7 @@ import {
   PenLine,
   Pencil,
   Redo2,
+  SquareSlash,
   Square,
   SquareCheck,
   TextCursorInput,
@@ -35,6 +36,7 @@ import {
   StrokeWidthSelect,
   TextStyleControls,
 } from "./StyleControls";
+import { activeTextEditor } from "../../lib/activeTextEditor";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
@@ -68,6 +70,11 @@ const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   { key: "ellipse", icon: Circle, label: "Ellipse" },
   { key: "line", icon: Minus, label: "Line" },
   { key: "whiteout", icon: Eraser, label: "Whiteout (cover content)" },
+  {
+    key: "redact",
+    icon: SquareSlash,
+    label: "Redact — permanently remove content (draw boxes, then Apply)",
+  },
 ];
 
 export function EditorToolbar() {
@@ -156,6 +163,9 @@ export function EditorToolbar() {
   const fontFamily = selectedText?.fontFamily ?? app.fontFamily;
   const isBold = selectedText ? !!selectedText.bold : app.fontBold;
   const isItalic = selectedText ? !!selectedText.italic : app.fontItalic;
+  const isUnderline = selectedText ? !!selectedText.underline : app.fontUnderline;
+  const isStrike = selectedText ? !!selectedText.strike : app.fontStrike;
+  const alignValue = selectedText?.align ?? app.textAlign;
 
   // Contextual style controls: font options only while working with text,
   // stroke width only for drawing tools.
@@ -172,7 +182,12 @@ export function EditorToolbar() {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
+    // data-ann-controls: pressing toolbar controls must not deselect the
+    // annotation or dismiss its popover (see AnnotationItem's onOpenChange).
+    <div
+      data-ann-controls
+      className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur"
+    >
       {/* tools */}
       <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
         <ToggleGroup
@@ -279,17 +294,38 @@ export function EditorToolbar() {
               fontSize: selectedText?.fontSize ?? app.fontSize,
               bold: isBold,
               italic: isItalic,
+              underline: isUnderline,
+              strike: isStrike,
+              align: alignValue,
             }}
             onPatch={(p) => {
+              // Tool defaults follow the last choice so new boxes match.
               if (p.color !== undefined) app.setToolColor(p.color);
               if (p.fontFamily !== undefined) app.setFontFamily(p.fontFamily);
               if (p.fontSize !== undefined) app.setFontSize(p.fontSize);
               if (p.bold !== undefined) app.setFontBold(p.bold);
               if (p.italic !== undefined) app.setFontItalic(p.italic);
-              // Clear the embedded display font so a chosen family shows.
+              if (p.underline !== undefined) app.setFontUnderline(p.underline);
+              if (p.strike !== undefined) app.setFontStrike(p.strike);
+              if (p.align !== undefined) app.setTextAlign(p.align);
+              // Alignment is a box property — always patch the annotation directly.
+              const { align, ...runPatch } = p;
+              if (align !== undefined) patchSelectedText({ align });
+              if (!Object.keys(runPatch).length) return;
+              // Editing a box → style its current selection; an empty box has
+              // nothing to style yet (returns false) → patch the box itself.
+              const editor = activeTextEditor.current;
+              if (
+                editor &&
+                selectedText &&
+                editor.annId === selectedText.id &&
+                editor.applyStyle(runPatch)
+              ) {
+                return;
+              }
               patchSelectedText({
-                ...p,
-                ...(p.fontFamily !== undefined ? { displayFontCss: undefined } : {}),
+                ...runPatch,
+                ...(runPatch.fontFamily !== undefined ? { displayFontCss: undefined } : {}),
               });
             }}
           />
@@ -423,6 +459,22 @@ export function EditorToolbar() {
       </Button>
 
       <div className="ml-auto flex items-center gap-1">
+        {app.tool === "redact" && app.redactCount === 0 && (
+          <span className="rounded-md bg-red-500/10 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400">
+            Draw boxes over content to remove
+          </span>
+        )}
+        {app.redactCount > 0 && (
+          <Button
+            size="sm"
+            className="h-7 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
+            onClick={app.applyRedactions}
+            title="Permanently remove the content under every redaction box"
+          >
+            <SquareSlash className="h-3.5 w-3.5" />
+            Apply {app.redactCount} redaction{app.redactCount === 1 ? "" : "s"}
+          </Button>
+        )}
         {app.pendingStamp && (
           <span className="rounded-md bg-blue-500/10 px-2 py-1 text-xs font-medium text-blue-600 dark:text-blue-400">
             Click on the page to place — Esc to cancel

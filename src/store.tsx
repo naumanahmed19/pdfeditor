@@ -191,6 +191,12 @@ interface AppStore {
     style: PdfiumObjectStyle,
   ) => Promise<void>;
 
+  /** Number of pending redaction boxes across the active document. */
+  redactCount: number;
+  /** Destructively apply every pending redaction box (via PDFium) and remove
+   *  the boxes. Irreversible content removal — confirms first. */
+  applyRedactions: () => Promise<void>;
+
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
   runOcrText: () => Promise<void>;
@@ -228,6 +234,12 @@ interface AppStore {
   setFontBold: (v: boolean) => void;
   fontItalic: boolean;
   setFontItalic: (v: boolean) => void;
+  fontUnderline: boolean;
+  setFontUnderline: (v: boolean) => void;
+  fontStrike: boolean;
+  setFontStrike: (v: boolean) => void;
+  textAlign: "left" | "center" | "right";
+  setTextAlign: (a: "left" | "center" | "right") => void;
 
   annotations: AnnotationMap;
   hasAnnotations: boolean;
@@ -426,6 +438,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [fontFamily, setFontFamily] = useState<FontFamilyKind>("helvetica");
   const [fontBold, setFontBold] = useState(false);
   const [fontItalic, setFontItalic] = useState(false);
+  const [fontUnderline, setFontUnderline] = useState(false);
+  const [fontStrike, setFontStrike] = useState(false);
+  const [textAlign, setTextAlign] = useState<"left" | "center" | "right">("left");
 
   const [selected, setSelected] = useState<{ page: number; id: string } | null>(null);
   const [selectedField, setSelectedField] = useState<Pick<
@@ -1155,6 +1170,65 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [active, updateDoc],
   );
 
+  const redactCount = active
+    ? Object.values(active.annotations)
+        .flat()
+        .filter((a) => a.kind === "redact").length
+    : 0;
+
+  /**
+   * Destructively apply every pending redaction box: PDFium strips the covered
+   * text/content from the page and paints a black box. Removes the boxes and
+   * swaps the base bytes onto the undo timeline (so it's still reversible via
+   * Ctrl+Z within the session, but the saved file no longer holds the content).
+   */
+  const applyRedactions = useCallback(async () => {
+    if (!active) return;
+    const id = active.id;
+    const boxes = Object.values(active.annotations)
+      .flat()
+      .filter((a) => a.kind === "redact");
+    if (!boxes.length) {
+      toast.info("Draw one or more redaction boxes first.");
+      return;
+    }
+    const ok = window.confirm(
+      `Permanently remove the content under ${boxes.length} redaction ${
+        boxes.length === 1 ? "box" : "boxes"
+      }? The text and images beneath will be deleted from the document — this can't be recovered from the saved file.`,
+    );
+    if (!ok) return;
+    try {
+      const { applyRedactions: apply } = await import("./lib/pdftools");
+      const nextBytes = await apply(active.bytes, active.annotations);
+      const nextPdf = await loadPdf(nextBytes);
+      // Drop the now-applied redaction boxes, keep every other annotation.
+      const nextAnns: AnnotationMap = {};
+      for (const [page, list] of Object.entries(active.annotations)) {
+        const kept = list.filter((a) => a.kind !== "redact");
+        if (kept.length) nextAnns[Number(page)] = kept;
+      }
+      updateDoc(id, (d) =>
+        pushHistory(d, nextAnns, { bytes: nextBytes, pdf: nextPdf }),
+      );
+      setSelected(null);
+      void persistDoc({
+        id,
+        name: active.name,
+        bytes: nextBytes,
+        lastOpened: Date.now(),
+        open: true,
+      });
+      toast.success(
+        `Redacted ${boxes.length} ${boxes.length === 1 ? "region" : "regions"}`,
+      );
+    } catch (err) {
+      toast.error(
+        `Redaction failed: ${err instanceof Error ? err.message : "unknown error"}`,
+      );
+    }
+  }, [active, updateDoc]);
+
   /**
    * True in-place text edit: rewrite the content-stream text object via PDFium,
    * keeping its font/size/color/position — no whiteout, no overlay copy, and
@@ -1511,6 +1585,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     applyObjectTransform,
     removeObjectAt,
     applyObjectStyle,
+    redactCount,
+    applyRedactions,
     downloadCurrent,
     printCurrent,
     ocrBusy,
@@ -1542,6 +1618,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFontBold,
     fontItalic,
     setFontItalic,
+    fontUnderline,
+    setFontUnderline,
+    fontStrike,
+    setFontStrike,
+    textAlign,
+    setTextAlign,
     annotations,
     hasAnnotations,
     addAnnotation,

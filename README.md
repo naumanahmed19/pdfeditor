@@ -57,6 +57,11 @@ edits away.
   edits with a live drag preview, on the same undo timeline.
 - **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
   **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
+- **Redact** (PDFium): draw black boxes over anything sensitive, then **Apply
+  redactions** to *destructively* strip the covered text from the content stream
+  — it's genuinely removed from the saved file, not just hidden, so it can't be
+  copied, searched or recovered. Redaction is also enforced on save, so an
+  un-applied box never leaks its content.
 - **Comments (sticky notes)** — drop a marker anywhere on a page and write a
   note in its popup; recolor or delete from the same popup. On save they become
   **real PDF popup annotations** (Acrobat, Chrome & co. show them as native
@@ -202,8 +207,8 @@ bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/targe
 - Structural operations (rotate/delete/reorder/watermark) bake any pending
   annotations into the document first, then apply.
 - **Whiteout hides, it doesn't redact** — the covered text still exists in the
-  saved PDF. Don't use it to remove confidential content (true redaction is on
-  the roadmap — see [TODO.md](TODO.md)).
+  saved PDF. To actually *remove* confidential content, use the **Redact tool**
+  instead (it strips the content, not just covers it).
 - The reference (non-focused) split pane is read-only and shows the saved
   document; edit by focusing that pane.
 - In-place text editing reuses a run's own embedded font. If that font is a
@@ -218,5 +223,5 @@ bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/targe
 - OCR fetches its language model once from a CDN (cached); the recognition
   itself runs locally, so your document is never uploaded.
 
-See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, true redaction,
-and comment round-trip import).
+See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, richer search
+options, and a two-page spread view).

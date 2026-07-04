@@ -9,6 +9,13 @@
       "autoPort": true
     },
     {
+      "name": "pickpdf-preview",
+      "runtimeExecutable": "bunx",
+      "runtimeArgs": ["vite", "--host", "127.0.0.1", "--port", "5188", "--strictPort"],
+      "port": 5188,
+      "autoPort": false
+    },
+    {
       "name": "inkden-landing",
       "runtimeExecutable": "bunx",
       "runtimeArgs": ["--bun", "serve", "landing"],
