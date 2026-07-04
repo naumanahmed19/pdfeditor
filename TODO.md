@@ -53,5 +53,16 @@ viewer framework — v2.14.x as of mid-2026, near-complete PDFium API surface
 - [x] True redaction (strip text from content stream, not whiteout) — shipped as
       the **Redact tool** (`redactRegions` via PDFium `EPDFText_RedactInQuads`)
 - [x] Sticky notes / comments with popups (Comment tool → `NoteAnnotation`)
+- [x] Lock to PickPDF — wrapper PDF with a notice page + the real document
+      embedded as an AES-256-GCM payload (PBKDF2 key), so browser viewers that
+      ignore permission flags can't read the content at all; PickPDF detects,
+      prompts and unwraps; saves re-wrap automatically
+- [x] Document security — proper two-password model (File → Protect document):
+      AES-256 open password, permission restrictions behind a separate owner
+      password (`EPDF_SetEncryption`), in-app enforcement (edit tools/print/copy
+      gated on restricted docs, unlock via `EPDF_UnlockOwnerPermissions`), and
+      Remove protection requires owner rights (`EPDF_RemoveEncryption`)
+- [ ] Certificate-based digital signatures (PKI) — drawn/typed signatures exist,
+      cryptographic signing does not
 - [ ] Search across text-run boundaries, case/whole-word options
 - [ ] Two-page spread view

@@ -556,6 +556,8 @@ export class PdfDoc {
     private mod: WrappedPdfiumModule,
     readonly handle: number,
     filePtr: number,
+    /** Password this document was opened with ("" for none). */
+    readonly password: string = "",
   ) {
     this.filePtr = filePtr;
     this.numPages = mod.FPDF_GetPageCount(handle);
@@ -582,7 +584,82 @@ export class PdfDoc {
       if (err === 4) throw new PasswordError();
       throw new Error(`PDFium: could not open document (err ${err})`);
     }
-    return new PdfDoc(mod, doc, filePtr);
+    return new PdfDoc(mod, doc, filePtr, password);
+  }
+
+  /** True when the document is encrypted (opened with or without a password). */
+  isEncrypted(): boolean {
+    try {
+      return !!this.mod.EPDF_IsEncrypted(this.handle);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The USER-password permission bits (PDF spec table 22), regardless of how
+   * the document was opened. 0xFFFFFFFF for unencrypted documents.
+   */
+  getUserPermissions(): number {
+    try {
+      return this.mod.FPDF_GetDocUserPermissions(this.handle) >>> 0;
+    } catch {
+      return 0xffffffff;
+    }
+  }
+
+  /**
+   * True when owner (full-access) rights are held — the document was opened
+   * with its owner password or later unlocked with it. Only meaningful for
+   * encrypted documents.
+   */
+  isOwnerUnlocked(): boolean {
+    try {
+      return !!this.mod.EPDF_IsOwnerUnlocked(this.handle);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Try to unlock full permissions with the owner password. */
+  unlockOwner(ownerPassword: string): boolean {
+    try {
+      return !!this.mod.EPDF_UnlockOwnerPermissions(this.handle, ownerPassword);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Read an embedded file (attachment) by name, or null when absent. */
+  getAttachment(name: string): Uint8Array | null {
+    const m = this.mod;
+    const r = rt(m);
+    const count = m.FPDFDoc_GetAttachmentCount(this.handle);
+    for (let i = 0; i < count; i++) {
+      const att = m.FPDFDoc_GetAttachment(this.handle, i);
+      if (!att) continue;
+      const attName = withUtf16Buffer(m, (p, cap) =>
+        m.FPDFAttachment_GetName(att, p, cap),
+      );
+      if (attName !== name) continue;
+      const lenPtr = r.wasmExports.malloc(4);
+      try {
+        // Two-pass: query size, then read.
+        if (!m.FPDFAttachment_GetFile(att, 0, 0, lenPtr)) return null;
+        const size = r.getValue(lenPtr, "i32");
+        if (size <= 0) return null;
+        const buf = r.wasmExports.malloc(size);
+        try {
+          if (!m.FPDFAttachment_GetFile(att, buf, size, lenPtr)) return null;
+          return r.HEAPU8.slice(buf, buf + size);
+        } finally {
+          r.wasmExports.free(buf);
+        }
+      } finally {
+        r.wasmExports.free(lenPtr);
+      }
+    }
+    return null;
   }
 
   /** Load (and cache) a page. 0-based, synchronous. */

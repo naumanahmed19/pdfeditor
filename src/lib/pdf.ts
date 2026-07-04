@@ -7,6 +7,21 @@ import type { OutlineNode, SearchMatch } from "../types";
 export type { PdfPage };
 export { PdfDoc };
 
+/** How password prompts are shown. The app injects its in-app modal (masked
+ *  input) via setPasswordPrompter; window.prompt is only the headless
+ *  fallback — it would display the password in plain text. */
+export type PasswordPrompter = (opts: {
+  message: string;
+  isRetry: boolean;
+}) => Promise<string | null>;
+
+let promptForPassword: PasswordPrompter = async ({ message }) =>
+  window.prompt(message);
+
+export function setPasswordPrompter(fn: PasswordPrompter): void {
+  promptForPassword = fn;
+}
+
 /** Load a document, prompting for a password when the file needs one. */
 export async function loadPdf(bytes: Uint8Array): Promise<PdfDoc> {
   let password = "";
@@ -15,11 +30,10 @@ export async function loadPdf(bytes: Uint8Array): Promise<PdfDoc> {
       return await PdfDoc.load(bytes, password);
     } catch (err) {
       if (err instanceof PasswordError) {
-        const label =
-          password || attempt > 0
-            ? "Wrong password. This PDF is password-protected — enter the password:"
-            : "This PDF is password-protected. Enter the password:";
-        const input = window.prompt(label);
+        const input = await promptForPassword({
+          message: "This PDF is password-protected. Enter its password to open it.",
+          isRetry: !!password || attempt > 0,
+        });
         if (input === null) throw new Error("Password required");
         password = input;
         continue;

@@ -1008,9 +1008,11 @@ async function drawAnnotation(
     }
     case "line": {
       const c = hexToRgb01(ann.color);
+      // PDF y is up: display top-left = (r.x, r.y + r.h). `down` means the
+      // line runs display top-left → bottom-right.
       page.drawLine({
-        start: { x: r.x, y: r.y + r.h },
-        end: { x: r.x + r.w, y: r.y },
+        start: { x: r.x, y: ann.down ? r.y + r.h : r.y },
+        end: { x: r.x + r.w, y: ann.down ? r.y : r.y + r.h },
         color: rgb(c.r, c.g, c.b),
         thickness: ann.strokeWidth,
       });

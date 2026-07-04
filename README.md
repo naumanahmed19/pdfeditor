@@ -62,6 +62,25 @@ edits away.
   — it's genuinely removed from the saved file, not just hidden, so it can't be
   copied, searched or recovered. Redaction is also enforced on save, so an
   un-applied box never leaks its content.
+- **Document security** (File → Protect document): real two-password
+  protection, AES-256 encrypted. Set an **open password** (nobody opens the
+  file without it), **restrict permissions** (printing, copying, editing, form
+  filling) behind a separate **permissions password**, or both — the dialog
+  enforces that the two differ, since identical passwords would void the
+  restrictions. PickPDF honors restrictions like every compliant viewer:
+  on a restricted document the edit tools, printing and text-copying are
+  disabled until unlocked with the permissions password, and **removing
+  protection requires owner rights** — it can't be stripped with just the open
+  password.
+- **Lock to PickPDF**: browser PDF viewers ignore permission flags — so for
+  content that must not be readable outside PickPDF, tick *Lock to PickPDF*.
+  The real document travels **AES-256-GCM encrypted inside a wrapper PDF**
+  whose only visible page is a professional notice ("This document is
+  protected — open it with PickPDF"). Chrome, Acrobat & co. show just the
+  notice; PickPDF detects the wrapper, asks for the password and opens the
+  real document. Saving keeps the lock. (The wrapper is its own protection, so
+  it isn't combined with per-viewer permission restrictions — those are for
+  ordinary encrypted PDFs.)
 - **Comments (sticky notes)** — drop a marker anywhere on a page and write a
   note in its popup; recolor or delete from the same popup. On save they become
   **real PDF popup annotations** (Acrobat, Chrome & co. show them as native
