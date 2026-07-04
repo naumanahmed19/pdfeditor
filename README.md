@@ -1,4 +1,4 @@
-# PDF Workbench
+# PickPDF
 
 A professional, local-first PDF **reader, editor, form designer and organizer**
 with a built-in **local-AI assistant** — runs in the browser and ships as a
@@ -38,9 +38,18 @@ Annotations are overlaid live and **baked into the PDF on save** (correct on
 rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 
 - **Add text** boxes that **auto-grow** to fit what you type (width then wrap).
-- **Edit existing text** in place: click a line and it's covered with a
-  page-color-matched patch and reopened as an editable box — with the original
-  **font family, size, bold/italic and ink color auto-detected** from the page.
+- **Edit existing text** truly in place (PDFium): click a line and edit it
+  inline — the original content-stream text object is **rewritten in its own
+  font, size, color and position**. No whiteout patch and no overlay copy; the
+  old text is genuinely replaced, so nothing is left behind to extract. If a
+  line uses a subset-embedded font that can't take new glyphs, it says so —
+  overlay a correction with the Text tool there instead.
+- **Move, resize, recolor & delete existing objects** (PDFium): with the
+  **Select** tool in edit mode, click any existing **text run, image or vector
+  shape** (rectangles, fills, lines) to select it — **drag to move**, drag a
+  corner to **resize** images/shapes, **recolor** its fill/stroke (or text ink)
+  from the color chip, or press **Delete** to remove it. Real content-stream
+  edits with a live drag preview, on the same undo timeline.
 - **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
   **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
 - **Signatures**: draw, type (script fonts), or upload an image — saved for
@@ -55,13 +64,19 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 ## Forms
 
 - **Fill** existing AcroForm fields — text, checkbox, radio, dropdown — with
-  values saved into the PDF.
+  values saved into the PDF. On save, field **appearance streams are regenerated
+  with PDFium** so entered values render correctly in every viewer (not just ones
+  that honor `/NeedAppearances`).
 - **Design** forms: a Field menu places **text fields, checkboxes, radio groups
   and dropdowns** as draggable placeholders; set name, options and radio values
   in the toolbar. On save they become real AcroForm fields (tall text fields
   become multiline).
 - **Edit existing fields**: move, resize, rename or delete a document's fields;
   changes are written back to the form on save.
+- **Templates** — **File → New from template** opens ready-made **fillable forms**
+  (invoice, job application, feedback survey, NDA with signature lines, weekly
+  timesheet) with real form fields, plus blank **document starters** (business
+  letter, meeting notes, résumé).
 
 ## Tools
 
@@ -101,7 +116,8 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 
 ## AI assistant
 
-A right-side, collapsible panel backed by a **local** model by default.
+A right-side, collapsible panel backed by a **local** model by default — with a
+zero-setup option that needs no server at all.
 
 - **Chat** about the open document (its text is extracted and sent as context).
 - **Quick actions**: summarize, key points, explain page.
@@ -110,8 +126,14 @@ A right-side, collapsible panel backed by a **local** model by default.
 - **Insert** any AI answer into the page as a text box.
 - Streaming responses, persisted chat history, connection status, and an
   in-panel **model switcher**.
-- **Providers**: **Ollama** (default, model `gemma3`), **LM Studio**, or any
-  OpenAI-compatible endpoint — configured under **Settings**.
+- **Providers**:
+  - **Built-in (Gemma 4, in-browser)** — the **default**; runs Google's
+    **Gemma 4 (E2B)** entirely in the browser via Transformers.js/WebGPU. No
+    Ollama, LM Studio, API key or setup — the model downloads once (~2 GB, then
+    cached) and works offline. Needs WebGPU (Chrome/Edge or the desktop app).
+  - **Ollama** (model `gemma3`), **LM Studio**, or any OpenAI-compatible
+    endpoint — for users who already run a local/remote model server.
+  - Switch and configure under **Settings**.
 
 ---
 
@@ -160,8 +182,10 @@ save-in-place work there too.
   the roadmap — see [TODO.md](TODO.md)).
 - The reference (non-focused) split pane is read-only and shows the saved
   document; edit by focusing that pane.
-- Editing text that uses a subset-embedded custom font falls back to the closest
-  bundled/standard font.
+- In-place text editing reuses a run's own embedded font. If that font is a
+  subset (only the glyphs the document already used), characters outside the
+  subset can't be typed — the editor says so; overlay a correction with the
+  Text tool instead.
 
 - OCR fetches its language model once from a CDN (cached); the recognition
   itself runs locally, so your document is never uploaded.

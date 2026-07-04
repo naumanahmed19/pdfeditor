@@ -25,6 +25,13 @@ import type {
 import { loadPdf, searchDocument, extractAllText } from "./lib/pdf";
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
+import type {
+  Matrix as PdfiumMatrix,
+  ObjectStyle as PdfiumObjectStyle,
+  PageObject,
+  TextObject,
+  TextStyle as PdfiumTextStyle,
+} from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
 import {
@@ -33,14 +40,22 @@ import {
   markDocClosed,
   persistDoc,
 } from "./lib/persist";
+import { applyAccent, type AccentId } from "./lib/accents";
 
-const SETTINGS_KEY = "pdf-workbench-settings";
-const SIGNATURES_KEY = "pdf-workbench-signatures";
-const THEME_KEY = "pdf-workbench-theme";
+const SETTINGS_KEY = "pickpdf-settings";
+const SIGNATURES_KEY = "pickpdf-signatures";
+const THEME_KEY = "pickpdf-theme";
+const ACCENT_KEY = "pickpdf-accent";
 
 export interface PendingStamp {
   dataUrl: string;
   aspect: number; // height / width
+}
+
+/** The document's base bytes + its parsed pdf.js proxy at a point in history. */
+interface BaseState {
+  bytes: Uint8Array;
+  pdf: PDFDocumentProxy;
 }
 
 interface OpenDoc {
@@ -50,6 +65,13 @@ interface OpenDoc {
   pdf: PDFDocumentProxy;
   annotations: AnnotationMap;
   history: AnnotationMap[];
+  /**
+   * Base bytes/pdf aligned index-for-index with `history`. Annotation-only
+   * steps reuse the same reference (no copy, no reload); a real in-place text
+   * edit pushes a new base. This unifies undo across overlay edits and true
+   * content-stream edits on one timeline.
+   */
+  bytesHistory: BaseState[];
   historyIndex: number;
   currentPage: number;
   /** AcroForm field values entered by the user, keyed by field name. */
@@ -74,6 +96,8 @@ export interface RecentFile {
 interface AppStore {
   theme: "light" | "dark";
   toggleTheme: () => void;
+  accent: AccentId;
+  setAccent: (a: AccentId) => void;
 
   screen: Screen;
   setScreen: (s: Screen) => void;
@@ -106,6 +130,7 @@ interface AppStore {
   } | null;
 
   docName: string | null;
+  renameDoc: (name: string) => void;
   docBytes: Uint8Array | null;
   pdf: PDFDocumentProxy | null;
   numPages: number;
@@ -139,6 +164,33 @@ interface AppStore {
   downloadCurrent: () => Promise<void>;
   printCurrent: () => Promise<void>;
 
+  /** In-place text editing via PDFium (replaces the whiteout+overlay hack). */
+  getPageTextObjects: (pageIndex: number) => Promise<TextObject[]>;
+  applyTextEdit: (
+    pageIndex: number,
+    objectIndex: number,
+    newText: string,
+  ) => Promise<void>;
+  applyTextStyle: (
+    pageIndex: number,
+    objectIndex: number,
+    style: PdfiumTextStyle,
+  ) => Promise<void>;
+
+  /** Object editing via PDFium: move/resize/delete existing text & images. */
+  getPageObjects: (pageIndex: number) => Promise<PageObject[]>;
+  applyObjectTransform: (
+    pageIndex: number,
+    objectIndex: number,
+    m: PdfiumMatrix,
+  ) => Promise<void>;
+  removeObjectAt: (pageIndex: number, objectIndex: number) => Promise<void>;
+  applyObjectStyle: (
+    pageIndex: number,
+    objectIndex: number,
+    style: PdfiumObjectStyle,
+  ) => Promise<void>;
+
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
   runOcrText: () => Promise<void>;
@@ -160,6 +212,9 @@ interface AppStore {
   setTool: (t: ToolKind) => void;
   toolColor: string;
   setToolColor: (c: string) => void;
+  /** Fill color for new rect/ellipse shapes; null = no fill. */
+  toolFill: string | null;
+  setToolFill: (c: string | null) => void;
   strokeWidth: number;
   setStrokeWidth: (w: number) => void;
   fontSize: number;
@@ -264,6 +319,47 @@ function docHasEdits(d: OpenDoc): boolean {
   );
 }
 
+const HISTORY_CAP = 60;
+
+/**
+ * Append a new undo step. Trims any redone tail, carries the current base
+ * (bytes/pdf) forward unless a new one is supplied (an in-place text edit),
+ * and keeps `history`/`bytesHistory` aligned. Returns the doc patch.
+ */
+function pushHistory(
+  d: OpenDoc,
+  nextAnnotations: AnnotationMap,
+  nextBase?: BaseState,
+): Partial<OpenDoc> {
+  const trimHist = d.history.slice(0, d.historyIndex + 1);
+  const trimBase = d.bytesHistory.slice(0, d.historyIndex + 1);
+  const base =
+    nextBase ??
+    trimBase[trimBase.length - 1] ?? { bytes: d.bytes, pdf: d.pdf };
+  const history = [...trimHist, nextAnnotations].slice(-HISTORY_CAP);
+  const bytesHistory = [...trimBase, base].slice(-HISTORY_CAP);
+  return {
+    annotations: nextAnnotations,
+    history,
+    bytesHistory,
+    historyIndex: history.length - 1,
+    bytes: base.bytes,
+    pdf: base.pdf,
+  };
+}
+
+/** Destroy every distinct pdf proxy a doc still references, except `keep`. */
+function destroyDocProxies(d: OpenDoc, keep?: PDFDocumentProxy) {
+  const seen = new Set<PDFDocumentProxy>();
+  const kill = (p?: PDFDocumentProxy) => {
+    if (!p || p === keep || seen.has(p)) return;
+    seen.add(p);
+    p.destroy().catch(() => {});
+  };
+  kill(d.pdf);
+  for (const b of d.bytesHistory) kill(b.pdf);
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem(THEME_KEY) as "light" | "dark") || "light",
@@ -272,6 +368,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  const [accent, setAccent] = useState<AccentId>(
+    () => (localStorage.getItem(ACCENT_KEY) as AccentId) || "neutral",
+  );
+  useEffect(() => {
+    applyAccent(accent, theme);
+    localStorage.setItem(ACCENT_KEY, accent);
+  }, [accent, theme]);
 
   const [screen, setScreen] = useState<Screen>("viewer");
   const [docs, setDocs] = useState<OpenDoc[]>([]);
@@ -302,6 +406,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [editMode, setEditModeState] = useState(false);
   const [tool, setTool] = useState<ToolKind>("select");
   const [toolColor, setToolColor] = useState("#e11d48");
+  // Fill color for new rect/ellipse shapes; null = no fill (outline only).
+  const [toolFill, setToolFill] = useState<string | null>(null);
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [fontSize, setFontSize] = useState(14);
   const [fontFamily, setFontFamily] = useState<FontFamilyKind>("helvetica");
@@ -327,7 +433,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [aiOpen, setAiOpen] = useState(
     () => typeof window === "undefined" || window.innerWidth >= 1024,
   );
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window !== "undefined" && window.innerWidth >= 1024,
+  );
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 1024);
@@ -367,15 +475,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pushAnnotations = useCallback(
     (next: AnnotationMap) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return {
-          annotations: next,
-          history: appended,
-          historyIndex: appended.length - 1,
-        };
-      });
+      updateDoc(activeTabId, (d) => pushHistory(d, next));
     },
     [activeTabId, updateDoc],
   );
@@ -385,15 +485,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addAnnotation = useCallback(
     (page: number, ann: Annotation) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const next = {
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
           ...d.annotations,
           [page]: [...(d.annotations[page] ?? []), ann],
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
-      });
+        }),
+      );
     },
     [activeTabId, updateDoc],
   );
@@ -401,15 +498,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addAnnotationsMany = useCallback(
     (page: number, anns: Annotation[]) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const next = {
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
           ...d.annotations,
           [page]: [...(d.annotations[page] ?? []), ...anns],
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
-      });
+        }),
+      );
     },
     [activeTabId, updateDoc],
   );
@@ -417,15 +511,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateAnnotation = useCallback(
     (page: number, ann: Annotation) => {
       if (!activeTabId) return;
-      updateDoc(activeTabId, (d) => {
-        const next = {
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
           ...d.annotations,
           [page]: (d.annotations[page] ?? []).map((a) => (a.id === ann.id ? ann : a)),
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
-      });
+        }),
+      );
     },
     [activeTabId, updateDoc],
   );
@@ -436,15 +527,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateDoc(activeTabId, (d) => {
         const list = d.annotations[page] ?? [];
         const target = list.find((a) => a.id === id);
-        const next = {
+        return pushHistory(d, {
           ...d.annotations,
           [page]: list.filter(
             (a) => a.id !== id && !(target?.groupId && a.groupId === target.groupId),
           ),
-        };
-        const trimmed = d.history.slice(0, d.historyIndex + 1);
-        const appended = [...trimmed, next].slice(-60);
-        return { annotations: next, history: appended, historyIndex: appended.length - 1 };
+        });
       });
       setSelected(null);
     },
@@ -453,26 +541,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const clearAnnotations = useCallback(() => {
     if (!activeTabId) return;
-    updateDoc(activeTabId, { annotations: {}, history: [{}], historyIndex: 0 });
+    updateDoc(activeTabId, (d) => ({
+      annotations: {},
+      history: [{}],
+      bytesHistory: [{ bytes: d.bytes, pdf: d.pdf }],
+      historyIndex: 0,
+      formValues: {},
+      fieldOps: {},
+    }));
     setSelected(null);
   }, [activeTabId, updateDoc]);
 
+  // Undo/redo restore both annotations and the base bytes/pdf from the aligned
+  // timeline. Swapping `pdf` re-renders pages in place — no docVersion bump, so
+  // there's no remount flash or scroll jump.
   const undo = useCallback(() => {
-    if (!activeTabId) return;
-    updateDoc(activeTabId, (d) => {
-      const next = Math.max(0, d.historyIndex - 1);
-      return { historyIndex: next, annotations: d.history[next] ?? {} };
+    if (!active) return;
+    const target = Math.max(0, active.historyIndex - 1);
+    const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
+    updateDoc(active.id, {
+      historyIndex: target,
+      annotations: active.history[target] ?? {},
+      bytes: base.bytes,
+      pdf: base.pdf,
     });
     setSelected(null);
-  }, [activeTabId, updateDoc]);
+  }, [active, updateDoc]);
 
   const redo = useCallback(() => {
-    if (!activeTabId) return;
-    updateDoc(activeTabId, (d) => {
-      const next = Math.min(d.history.length - 1, d.historyIndex + 1);
-      return { historyIndex: next, annotations: d.history[next] ?? {} };
+    if (!active) return;
+    const target = Math.min(active.history.length - 1, active.historyIndex + 1);
+    const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
+    updateDoc(active.id, {
+      historyIndex: target,
+      annotations: active.history[target] ?? {},
+      bytes: base.bytes,
+      pdf: base.pdf,
     });
-  }, [activeTabId, updateDoc]);
+  }, [active, updateDoc]);
 
   const hasAnnotations = useMemo(
     () => (active ? docHasEdits(active) : false),
@@ -488,6 +594,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSearchQuery("");
     setSearchMatches([]);
     setActiveMatch(0);
+    // A changed/opened document starts in read mode, not carrying over the
+    // previous doc's edit session. (Templates re-enable edit mode after opening.)
+    setEditModeState(false);
+    setTool("select");
   }, []);
 
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
@@ -524,6 +634,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           pdf: pdfDoc,
           annotations: {},
           history: [{}],
+          bytesHistory: [{ bytes, pdf: pdfDoc }],
           historyIndex: 0,
           currentPage: 0,
           formValues: {},
@@ -945,12 +1056,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         const nextBytes = await op(base);
         const nextPdf = await loadPdf(nextBytes);
-        active.pdf.destroy().catch(() => {});
+        destroyDocProxies(active, nextPdf);
         updateDoc(id, {
           bytes: nextBytes,
           pdf: nextPdf,
           annotations: {},
           history: [{}],
+          bytesHistory: [{ bytes: nextBytes, pdf: nextPdf }],
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
@@ -974,6 +1086,102 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [active, updateDoc],
   );
 
+  /** Read the editable text runs on a page (via PDFium), for hit-testing. */
+  const getPageTextObjects = useCallback(
+    async (pageIndex: number) => {
+      if (!active) return [];
+      const { getTextObjects } = await import("./lib/pdfium");
+      return getTextObjects(active.bytes, pageIndex);
+    },
+    [active],
+  );
+
+  /** Read the movable objects (text + images) on a page, for the object tool. */
+  const getPageObjects = useCallback(
+    async (pageIndex: number) => {
+      if (!active) return [];
+      const { getPageObjects: read } = await import("./lib/pdfium");
+      return read(active.bytes, pageIndex);
+    },
+    [active],
+  );
+
+  /**
+   * Commit an in-place PDFium byte edit: swap the base bytes/pdf onto the undo
+   * timeline while KEEPING the current annotations (they still bake on save).
+   * No docVersion bump — the page re-renders in place from the new `pdf` prop,
+   * so there's no remount flash or scroll jump.
+   */
+  const commitInPlace = useCallback(
+    async (make: (bytes: Uint8Array) => Promise<Uint8Array>) => {
+      if (!active) return;
+      const id = active.id;
+      const nextBytes = await make(active.bytes);
+      const nextPdf = await loadPdf(nextBytes);
+      updateDoc(id, (d) =>
+        pushHistory(d, d.annotations, { bytes: nextBytes, pdf: nextPdf }),
+      );
+      setSelected(null);
+      void persistDoc({
+        id,
+        name: active.name,
+        bytes: nextBytes,
+        lastOpened: Date.now(),
+        open: true,
+      });
+    },
+    [active, updateDoc],
+  );
+
+  /**
+   * True in-place text edit: rewrite the content-stream text object via PDFium,
+   * keeping its font/size/color/position — no whiteout, no overlay copy, and
+   * the original text is genuinely replaced.
+   */
+  const applyTextEdit = useCallback(
+    async (pageIndex: number, objectIndex: number, newText: string) => {
+      const { editTextObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => editTextObject(b, pageIndex, objectIndex, newText));
+    },
+    [commitInPlace],
+  );
+
+  /** In-place text edit that also changes ink color and/or size. */
+  const applyTextStyle = useCallback(
+    async (pageIndex: number, objectIndex: number, style: PdfiumTextStyle) => {
+      const { styleTextObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => styleTextObject(b, pageIndex, objectIndex, style));
+    },
+    [commitInPlace],
+  );
+
+  /** Move/resize an existing object (text or image) via an affine transform. */
+  const applyObjectTransform = useCallback(
+    async (pageIndex: number, objectIndex: number, m: PdfiumMatrix) => {
+      const { transformObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => transformObject(b, pageIndex, objectIndex, m));
+    },
+    [commitInPlace],
+  );
+
+  /** Delete an existing object (text, image or path) from the page. */
+  const removeObjectAt = useCallback(
+    async (pageIndex: number, objectIndex: number) => {
+      const { removeObject } = await import("./lib/pdfium");
+      await commitInPlace((b) => removeObject(b, pageIndex, objectIndex));
+    },
+    [commitInPlace],
+  );
+
+  /** Restyle an existing object's fill/stroke color and/or stroke width. */
+  const applyObjectStyle = useCallback(
+    async (pageIndex: number, objectIndex: number, style: PdfiumObjectStyle) => {
+      const { setObjectStyle } = await import("./lib/pdfium");
+      await commitInPlace((b) => setObjectStyle(b, pageIndex, objectIndex, style));
+    },
+    [commitInPlace],
+  );
+
   const downloadCurrent = useCallback(async () => {
     const bytes = await bakeToBytes();
     if (!bytes || !active) return;
@@ -987,6 +1195,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * download. Either way the in-app document commits to the baked bytes,
    * clearing the unsaved-edits state.
    */
+  const renameDoc = useCallback(
+    (name: string) => {
+      if (!active) return;
+      const clean = name.trim().replace(/\.pdf$/i, "").trim();
+      if (!clean || `${clean}.pdf` === active.name) return;
+      const next = `${clean}.pdf`;
+      updateDoc(active.id, { name: next });
+      void persistDoc({
+        id: active.id,
+        name: next,
+        bytes: active.bytes,
+        lastOpened: Date.now(),
+        open: true,
+      }).then(refreshRecent);
+    },
+    [active, updateDoc, refreshRecent],
+  );
+
   const saveCurrent = useCallback(async () => {
     if (!active) return;
     const handle = docHandles.current.get(active.id);
@@ -1009,12 +1235,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Commit in-app state to the saved bytes.
       if (docHasEdits(active)) {
         const nextPdf = await loadPdf(baked);
-        active.pdf.destroy().catch(() => {});
+        destroyDocProxies(active, nextPdf);
         updateDoc(active.id, {
           bytes: baked,
           pdf: nextPdf,
           annotations: {},
           history: [{}],
+          bytesHistory: [{ bytes: baked, pdf: nextPdf }],
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
@@ -1029,6 +1256,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lastOpened: Date.now(),
         open: true,
       });
+      // Saving ends the editing session — no separate "Done" needed.
+      setEditModeState(false);
     } catch (err) {
       toast.error(
         `Save failed: ${err instanceof Error ? err.message : "error"} — downloading a copy instead.`,
@@ -1070,12 +1299,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const next = await addOcrTextLayer(base, ocr);
       const nextPdf = await loadPdf(next);
-      active.pdf.destroy().catch(() => {});
+      destroyDocProxies(active, nextPdf);
       updateDoc(id, {
         bytes: next,
         pdf: nextPdf,
         annotations: {},
         history: [{}],
+        bytesHistory: [{ bytes: next, pdf: nextPdf }],
         historyIndex: 0,
         formValues: {},
         fieldOps: {},
@@ -1204,6 +1434,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value: AppStore = {
     theme,
     toggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+    accent,
+    setAccent,
     screen,
     setScreen,
     tabs,
@@ -1220,6 +1452,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     printDoc,
     docById,
     docName: active?.name ?? null,
+    renameDoc,
     docBytes: active?.bytes ?? null,
     pdf: active?.pdf ?? null,
     numPages: active?.pdf?.numPages ?? 0,
@@ -1240,6 +1473,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     openTreeFile,
     applyBytesOp,
     bakeToBytes,
+    getPageTextObjects,
+    applyTextEdit,
+    applyTextStyle,
+    getPageObjects,
+    applyObjectTransform,
+    removeObjectAt,
+    applyObjectStyle,
     downloadCurrent,
     printCurrent,
     ocrBusy,
@@ -1257,6 +1497,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTool,
     toolColor,
     setToolColor,
+    toolFill,
+    setToolFill,
     strokeWidth,
     setStrokeWidth,
     fontSize,
@@ -1310,7 +1552,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSignatureModalOpen,
   };
 
-  // Dev-only hook for driving the app from automated tests.
+  // Dev-only hook for driving the app from automated tests. Reassigned every
+  // render so the exposed closures always see current state (no stale `active`).
   useEffect(() => {
     if (import.meta.env.DEV) {
       (window as any).__pdfwb = {
@@ -1324,10 +1567,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
         exitSplit,
         setFolderRoot,
         runOcrText,
-        state: () => ({ activeTabId, activePaneId, panes }),
+        openBytes,
+        setFormValue,
+        addAnnotation,
+        setSelected,
+        getPageTextObjects,
+        applyTextEdit,
+        applyTextStyle,
+        getPageObjects,
+        applyObjectTransform,
+        removeObjectAt,
+        applyObjectStyle,
+        undo,
+        redo,
+        state: () => ({
+          activeTabId,
+          activePaneId,
+          panes,
+          docVersion,
+          bytesLen: active?.bytes.length ?? 0,
+          historyIndex: active?.historyIndex ?? -1,
+          historyLen: active?.history.length ?? 0,
+        }),
       };
     }
-  }, [switchTab, setEditMode]);
+  });
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

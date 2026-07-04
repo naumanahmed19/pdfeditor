@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "PDF Workbench",
+  "productName": "PickPDF",
   "version": "0.1.0",
-  "identifier": "com.naumanahmed.pdfworkbench",
+  "identifier": "com.xvelopers.pickpdf",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:5173",
@@ -12,17 +12,22 @@
   "app": {
     "windows": [
       {
-        "title": "PDF Workbench",
+        "title": "PickPDF",
         "width": 1440,
         "height": 900,
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
-        "center": true
+        "center": true,
+        "decorations": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "credentialless"
+      }
     }
   },
   "bundle": {

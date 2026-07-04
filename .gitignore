@@ -3,3 +3,6 @@ dist/
 *.local
 .DS_Store
 src-tauri/target/
+
+# Unrelated project files that live alongside this repo
+landing/

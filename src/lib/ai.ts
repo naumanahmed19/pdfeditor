@@ -5,7 +5,9 @@ export const LMSTUDIO_DEFAULT_URL = "http://localhost:1234";
 export const DEFAULT_MODEL = "gemma3";
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  provider: "ollama",
+  // Default to the zero-config in-browser model, so users without a local model
+  // server (Ollama / LM Studio) can use the assistant with no setup.
+  provider: "browser",
   model: DEFAULT_MODEL,
   ollamaBaseUrl: OLLAMA_DEFAULT_URL,
   lmStudioBaseUrl: LMSTUDIO_DEFAULT_URL,
@@ -55,6 +57,10 @@ async function fetchWithFallback(
 }
 
 export async function listModels(settings: AppSettings): Promise<string[]> {
+  if (settings.provider === "browser") {
+    const { BROWSER_MODEL_LABEL } = await import("./browserLlm");
+    return [BROWSER_MODEL_LABEL];
+  }
   const base = providerBaseUrl(settings);
   if (!base) return [];
   const headers: Record<string, string> = {};
@@ -93,6 +99,18 @@ export async function checkConnection(settings: AppSettings): Promise<{
   models: string[];
   error?: string;
 }> {
+  if (settings.provider === "browser") {
+    const { webgpuAvailable, BROWSER_MODEL_LABEL, browserModelReady } =
+      await import("./browserLlm");
+    const gpu = webgpuAvailable();
+    const label = browserModelReady()
+      ? BROWSER_MODEL_LABEL
+      : `${BROWSER_MODEL_LABEL} — downloads on first use`;
+    return {
+      ok: true,
+      models: [gpu ? label : `${label} (CPU mode — slower, no WebGPU)`],
+    };
+  }
   try {
     const models = await listModels(settings);
     return { ok: true, models };
@@ -120,7 +138,13 @@ export async function streamChat(
   messages: ChatMessage[],
   onToken: (text: string) => void,
   signal?: AbortSignal,
+  onStatus?: (status: string) => void,
 ): Promise<string> {
+  if (settings.provider === "browser") {
+    const { streamBrowserChat } = await import("./browserLlm");
+    return streamBrowserChat(messages, settings.temperature, onToken, signal, onStatus);
+  }
+
   const base = providerBaseUrl(settings);
   if (!base) throw new Error("No API base URL configured. Check Settings.");
 

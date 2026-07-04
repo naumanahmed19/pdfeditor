@@ -1,12 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Columns2,
-  Download,
   EllipsisVertical,
   FileText,
   Plus,
   Printer,
+  Save,
   SquarePen,
   X,
 } from "lucide-react";
@@ -37,9 +37,11 @@ import {
   SplitScreen,
   WatermarkScreen,
 } from "./components/tools/ToolsScreens";
+import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
+  templates: "New from template",
   organize: "Organize pages",
   merge: "Merge PDFs",
   split: "Split & extract",
@@ -78,6 +80,7 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
   const app = useApp();
   const doc = app.docById(pane.docId);
   const isFocused = pane.id === app.activePaneId;
+  const hasEdits = app.tabs.find((t) => t.id === pane.docId)?.hasEdits ?? false;
   if (!doc) return null;
 
   return (
@@ -102,6 +105,12 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
       >
         {doc.name}
       </span>
+      {hasEdits && (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+          title="Unsaved edits"
+        />
+      )}
       {isFocused && app.editMode && (
         <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 sm:inline dark:text-blue-400">
           editing
@@ -118,8 +127,8 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
             className="h-6 gap-1 px-2 text-[11px]"
             onClick={() => void app.saveCurrent()}
           >
-            <Download className="h-3 w-3" />
-            {app.activeHasHandle ? "Save" : "Save"}
+            <Save className="h-3 w-3" />
+            Save
           </Button>
         )}
         <Menu>
@@ -164,6 +173,50 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
   );
 }
 
+/** Document title — click to rename (Enter commits, Escape cancels). */
+function DocName() {
+  const app = useApp();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+
+  if (!app.docName) return null;
+
+  if (!editing) {
+    return (
+      <button
+        className="-mx-1 min-w-0 truncate rounded px-1 text-left text-sm font-medium transition-colors hover:bg-accent"
+        title="Rename document"
+        onClick={() => {
+          setValue(app.docName!.replace(/\.pdf$/i, ""));
+          setEditing(true);
+        }}
+      >
+        {app.docName}
+      </button>
+    );
+  }
+
+  const commit = () => {
+    setEditing(false);
+    app.renameDoc(value);
+  };
+  return (
+    <input
+      autoFocus
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onFocus={(e) => e.target.select()}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setEditing(false);
+      }}
+      aria-label="Document name"
+      className="h-6 w-56 max-w-[40vw] rounded-md border border-input bg-background px-1.5 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    />
+  );
+}
+
 function DocActions() {
   const app = useApp();
   if (!app.pdf) return null;
@@ -175,8 +228,8 @@ function DocActions() {
       className="h-7 gap-1.5"
       onClick={() => void app.saveCurrent()}
     >
-      <Download className="h-3.5 w-3.5" />
-      {app.activeHasHandle ? "Save" : "Save PDF"}
+      <Save className="h-3.5 w-3.5" />
+      Save
     </Button>
   );
 
@@ -193,6 +246,27 @@ function DocActions() {
       </Button>
       {app.editMode ? (
         <>
+          {app.hasAnnotations && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => {
+                toast("Discard all unsaved edits?", {
+                  action: {
+                    label: "Discard",
+                    onClick: () => {
+                      app.clearAnnotations();
+                      app.setEditMode(false);
+                      toast.success("Edits discarded");
+                    },
+                  },
+                });
+              }}
+            >
+              Discard
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -255,10 +329,10 @@ function ContentHeader() {
     return (
       <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-3 backdrop-blur">
         <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate text-sm font-medium">{app.docName}</span>
+        <DocName />
         {app.hasAnnotations && (
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
             title="Unsaved edits"
           />
         )}
@@ -323,14 +397,6 @@ function ContentHeader() {
         </>
       ) : (
         <span className="text-sm font-medium">{SCREEN_TITLES[app.screen]}</span>
-      )}
-      {app.screen !== "viewer" && app.docName && (
-        <>
-          <span className="text-muted-foreground">›</span>
-          <span className="truncate text-sm text-muted-foreground">
-            {app.docName}
-          </span>
-        </>
       )}
     </div>
   );
@@ -424,6 +490,7 @@ function Shell() {
               ) : (
                 <Viewer key={app.activeTabId ?? "empty"} />
               ))}
+            {app.screen === "templates" && <TemplatesScreen />}
             {app.screen === "organize" && <OrganizeScreen />}
             {app.screen === "merge" && <MergeScreen />}
             {app.screen === "split" && <SplitScreen />}

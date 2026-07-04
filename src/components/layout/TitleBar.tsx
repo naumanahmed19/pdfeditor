@@ -6,11 +6,13 @@ import {
   Combine,
   Download,
   Droplets,
+  FilePlus2,
   FileText,
   FolderOpen,
   LayoutGrid,
   PanelLeft,
   Printer,
+  Save,
   ScanText,
   Scissors,
   Search,
@@ -32,12 +34,16 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { cn } from "../../lib/utils";
+import { isTauri } from "../../lib/tauri";
+import { WindowControls } from "./WindowControls";
+import { AboutModal } from "./AboutModal";
 
 export function TitleBar() {
   const app = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [propsOpen, setPropsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
 
   const submitSearch = (e: React.FormEvent) => {
@@ -50,6 +56,10 @@ export function TitleBar() {
       <MenuItem onClick={() => void app.requestOpen()}>
         <FolderOpen className="h-4 w-4 text-muted-foreground" />
         Open PDF…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("templates")}>
+        <FilePlus2 className="h-4 w-4 text-muted-foreground" />
+        New from template…
       </MenuItem>
       {app.recentFiles.length > 0 && (
         <>
@@ -64,8 +74,8 @@ export function TitleBar() {
         </>
       )}
       <MenuItem disabled={!app.pdf} onClick={() => void app.saveCurrent()}>
-        <Download className="h-4 w-4 text-muted-foreground" />
-        {app.activeHasHandle ? "Save" : "Save PDF"}
+        <Save className="h-4 w-4 text-muted-foreground" />
+        Save
       </MenuItem>
       <MenuItem disabled={!app.pdf} onClick={() => void app.downloadCurrent()}>
         <Download className="h-4 w-4 text-muted-foreground" />
@@ -83,6 +93,11 @@ export function TitleBar() {
       <MenuItem disabled={!app.pdf} onClick={() => app.closeDocument()}>
         <X className="h-4 w-4 text-muted-foreground" />
         Close document
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onClick={() => setAboutOpen(true)}>
+        <Info className="h-4 w-4 text-muted-foreground" />
+        About PickPDF
       </MenuItem>
     </>
   );
@@ -120,28 +135,26 @@ export function TitleBar() {
     "inline-flex h-7 items-center justify-center rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground sm:px-2.5";
 
   return (
-    <header className="relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3">
+    <header
+      data-tauri-drag-region
+      className={cn(
+        "relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3",
+        isTauri && "pr-0 sm:pr-0",
+      )}
+    >
       <Button
         variant="ghost"
         size="icon"
-        className="h-7 w-7 lg:hidden"
-        title="Menu"
+        className="h-7 w-7"
+        title={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}
         onClick={() => {
           const next = !app.sidebarOpen;
           app.setSidebarOpen(next);
-          if (next) app.setAiOpen(false);
+          if (next && app.isMobile) app.setAiOpen(false);
         }}
       >
         <PanelLeft className="h-4 w-4" />
       </Button>
-
-      {/* Logo — desktop only */}
-      <div
-        className="hidden items-center gap-2 pl-1 pr-1 text-sm font-semibold lg:flex"
-        title="PDF Workbench"
-      >
-        <FileText className="h-4 w-4 shrink-0" />
-      </div>
 
       {/* File / Tools — icon-only on mobile, text on desktop */}
       <Menu>
@@ -235,7 +248,7 @@ export function TitleBar() {
         size="icon"
         className={cn(
           "h-7 w-7",
-          app.aiOpen && "bg-accent text-accent-foreground",
+          app.aiOpen && "bg-background text-foreground shadow-sm hover:bg-background",
         )}
         title={app.aiOpen ? "Hide AI assistant" : "Show AI assistant"}
         onClick={() => {
@@ -251,13 +264,17 @@ export function TitleBar() {
         size="icon"
         className={cn(
           "h-7 w-7",
-          app.screen === "settings" && "bg-accent text-accent-foreground",
+          app.screen === "settings" && "bg-background text-foreground shadow-sm hover:bg-background",
         )}
         title="Settings"
         onClick={() => app.setScreen("settings")}
       >
         <Settings className="h-4 w-4" />
       </Button>
+
+      {/* Frameless-window controls — desktop shell only */}
+      {isTauri && <WindowControls />}
+
       {/* Mobile full-width search overlay */}
       {mobileSearch && (
         <div className="absolute inset-0 z-50 flex items-center gap-2 bg-sidebar px-2 sm:hidden">
@@ -312,6 +329,7 @@ export function TitleBar() {
         </div>
       )}
       <PropertiesModal open={propsOpen} onClose={() => setPropsOpen(false)} />
+      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </header>
   );
 }

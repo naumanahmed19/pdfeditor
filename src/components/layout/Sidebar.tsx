@@ -33,7 +33,7 @@ export function Sidebar() {
         "fixed bottom-0 left-0 top-[42px] z-40 flex w-[280px] max-w-[85vw] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-transform duration-200 ease-out",
         // Desktop: static column.
         "lg:static lg:z-auto lg:w-[288px] lg:max-w-none lg:translate-x-0 lg:border-r-0 lg:shadow-none lg:transition-none",
-        app.sidebarOpen ? "translate-x-0" : "-translate-x-full",
+        app.sidebarOpen ? "translate-x-0" : "-translate-x-full lg:hidden",
       )}
     >
       <div className="flex min-h-0 flex-1 flex-col">
@@ -217,6 +217,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function RecentRow({ r }: { r: RecentFile }) {
   const app = useApp();
   const isActive = r.id === app.activeTabId;
+  const hasEdits = app.tabs.find((t) => t.id === r.id)?.hasEdits ?? false;
   const open = () => {
     void app.openRecent(r.id);
     if (app.isMobile) app.setSidebarOpen(false);
@@ -236,7 +237,7 @@ function RecentRow({ r }: { r: RecentFile }) {
       className={cn(
         "group flex cursor-pointer items-center gap-2 rounded-md border-l-2 px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         isActive
-          ? "border-primary bg-sidebar-accent font-medium text-foreground"
+          ? "border-primary bg-background font-medium text-foreground shadow-sm"
           : "border-transparent text-sidebar-foreground hover:bg-sidebar-accent",
       )}
     >
@@ -250,8 +251,11 @@ function RecentRow({ r }: { r: RecentFile }) {
       {r.open ? (
         <>
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500 group-hover:hidden"
-            title="Currently open"
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full group-hover:hidden",
+              hasEdits ? "bg-amber-500" : "bg-emerald-500",
+            )}
+            title={hasEdits ? "Unsaved edits" : "Currently open"}
           />
           <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
             <button

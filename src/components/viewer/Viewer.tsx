@@ -7,11 +7,14 @@ import {
   useState,
 } from "react";
 import {
+  Bold,
   ChevronLeft,
   ChevronRight,
   FileText,
+  Italic,
   Maximize,
   Minimize,
+  Trash2,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -19,8 +22,15 @@ import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { pdfjsLib } from "../../lib/pdf";
 import { toast } from "sonner";
 import { useApp } from "../../store";
-import type { Annotation, TextAnnotation, WhiteoutAnnotation } from "../../types";
+import type { Annotation, FormFieldAnnotation, TextAnnotation } from "../../types";
 import { cn, uid } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
+import { Input } from "../ui/input";
+import { Popover, PopoverContent } from "../ui/popover";
+import { Select } from "../ui/select";
+import { Textarea } from "../ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 
 const PAGE_GAP = 24;
 
@@ -37,88 +47,6 @@ function warnWhiteoutOnce() {
       "The covered text still exists inside the saved PDF and can be selected or extracted. Don't use whiteout to redact confidential information.",
     duration: 9000,
   });
-}
-
-const WELL_MATCHED_FONT =
-  /helvetica|arial|liberation\s?sans|times|liberation\s?serif|courier|liberation\s?mono|calibri|carlito|cambria|caladea/i;
-const warnedFonts = new Set<string>();
-
-const FAMILY_LABEL: Record<string, string> = {
-  helvetica: "Helvetica",
-  times: "Times",
-  courier: "Courier",
-  carlito: "Carlito (Calibri-compatible)",
-  caladea: "Caladea (Cambria-compatible)",
-};
-
-/**
- * Sample the rendered page around a text run: background color from the
- * rect's perimeter (median), text color from inner pixels that differ
- * strongly from the background (average). Falls back to white/dark.
- */
-function sampleTextRunColors(
-  canvas: HTMLCanvasElement | null,
-  pageRect: DOMRect,
-  spanRect: DOMRect,
-): { bg: string; text: string } {
-  const fallback = { bg: "#ffffff", text: "#111111" };
-  if (!canvas || !canvas.width) return fallback;
-  try {
-    const sx = canvas.width / pageRect.width;
-    const sy = canvas.height / pageRect.height;
-    const pad = Math.max(2, Math.round(4 * sx));
-    const ex = Math.max(0, Math.round((spanRect.left - pageRect.left) * sx) - pad);
-    const ey = Math.max(0, Math.round((spanRect.top - pageRect.top) * sy) - pad);
-    const ew = Math.min(canvas.width - ex, Math.round(spanRect.width * sx) + pad * 2);
-    const eh = Math.min(canvas.height - ey, Math.round(spanRect.height * sy) + pad * 2);
-    if (ew < 4 || eh < 4) return fallback;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return fallback;
-    const img = ctx.getImageData(ex, ey, ew, eh).data;
-    const at = (px: number, py: number) => (py * ew + px) * 4;
-
-    // Background: median of perimeter pixels.
-    const perim: number[] = [];
-    const stepX = Math.max(1, Math.floor(ew / 48));
-    const stepY = Math.max(1, Math.floor(eh / 24));
-    for (let px = 0; px < ew; px += stepX) perim.push(at(px, 0), at(px, eh - 1));
-    for (let py = 0; py < eh; py += stepY) perim.push(at(0, py), at(ew - 1, py));
-    const median = (vals: number[]) => {
-      const s = [...vals].sort((a, b) => a - b);
-      return s[s.length >> 1];
-    };
-    const bg = [0, 1, 2].map((c) => median(perim.map((i) => img[i + c])));
-
-    // Text: average of inner pixels far from the background color.
-    let tr = 0, tg = 0, tb = 0, tn = 0;
-    for (let py = pad; py < eh - pad; py += 2) {
-      for (let px = pad; px < ew - pad; px += 2) {
-        const i = at(px, py);
-        const dist =
-          Math.abs(img[i] - bg[0]) +
-          Math.abs(img[i + 1] - bg[1]) +
-          Math.abs(img[i + 2] - bg[2]);
-        if (dist > 140) {
-          tr += img[i];
-          tg += img[i + 1];
-          tb += img[i + 2];
-          tn++;
-        }
-      }
-    }
-    const hex = (r: number, g: number, b: number) =>
-      "#" +
-      [r, g, b]
-        .map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0"))
-        .join("");
-    const bgLum = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) / 255;
-    return {
-      bg: hex(bg[0], bg[1], bg[2]),
-      text: tn > 8 ? hex(tr / tn, tg / tn, tb / tn) : bgLum > 0.5 ? "#111111" : "#f5f5f5",
-    };
-  } catch {
-    return fallback;
-  }
 }
 
 /** CSS font properties for displaying a text annotation on screen. */
@@ -315,7 +243,7 @@ export function Viewer() {
           y: (r.top - pr.top) / effectiveScale,
           w: r.width / effectiveScale,
           h: r.height / effectiveScale,
-          color: "#facc15",
+          color: app.toolColor,
         });
         perPage.set(idx, list);
       }
@@ -604,6 +532,8 @@ function PageView({
   const [visible, setVisible] = useState(false);
   const renderTask = useRef<{ cancel: () => void } | null>(null);
   const [textLayerReady, setTextLayerReady] = useState(0);
+  const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const w = baseDims.width * scale;
   const h = baseDims.height * scale;
@@ -729,130 +659,137 @@ function PageView({
     textLayerReady,
   ]);
 
+  // Text is selectable for reading/copy (select tool outside edit mode) and for
+  // click-to-edit (edittext). In edit mode the Select tool grabs page OBJECTS
+  // instead (via ObjectLayer), so text stays non-selectable there.
   const textSelectable =
-    (app.tool === "select" || app.tool === "edittext") && !app.pendingStamp;
+    ((app.tool === "select" && !app.editMode) || app.tool === "edittext") &&
+    !app.pendingStamp;
 
-  // "Edit existing text": clicking a rendered text line covers it with a
-  // whiteout and opens an editable text box with the same content on top.
+  // "Edit existing text": clicking a text run maps the click to the real
+  // PDFium content-stream text object and opens an inline editor over it. On
+  // commit the object's string is rewritten in place (same font/size/color/
+  // position) — no whiteout patch, no overlay copy, original text truly gone.
   const onTextLayerClick = async (e: React.MouseEvent) => {
-    if (app.tool !== "edittext") return;
-    const span = (e.target as HTMLElement).closest(
-      ".textLayer span",
-    ) as HTMLElement | null;
-    if (!span || !span.textContent?.trim() || !wrapRef.current) return;
+    if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
     const pr = wrapRef.current.getBoundingClientRect();
-    const sr = span.getBoundingClientRect();
-    const x = (sr.left - pr.left) / scale;
-    const y = (sr.top - pr.top) / scale;
-    const wPts = sr.width / scale;
-    const hPts = sr.height / scale;
-    // Match the patch to the page background and the retyped text to the
-    // original ink color (handles light text on dark backgrounds).
-    const colors = sampleTextRunColors(canvasRef.current, pr, sr);
-    const computed = getComputedStyle(span);
-    const fontPx = parseFloat(computed.fontSize);
-    const fontSize = Math.max(
-      6,
-      Math.round((Number.isFinite(fontPx) ? fontPx : sr.height * 0.85) / scale),
-    );
 
-    // Detect the original font so the replacement matches: generic family
-    // from pdf.js text styles, weight/slant from the embedded font's name,
-    // and the exact loaded @font-face for pixel-true on-screen display.
-    let fontFamily: TextAnnotation["fontFamily"] = "helvetica";
-    let bold = false;
-    let italic = false;
-    let displayFontCss: string | undefined = computed.fontFamily || undefined;
+    let objs;
+    let viewport;
     try {
+      // pdf.js viewport maps PDFium's (unrotated) page space to the on-screen
+      // rendering — this is what keeps the editor aligned on rotated/cropped
+      // pages instead of guessing with a manual y-flip.
       const page = await pdf.getPage(pageIndex + 1);
-      const tc = await page.getTextContent();
-      const spans = Array.from(
-        textLayerRef.current?.querySelectorAll(":scope > span") ?? [],
-      );
-      const item = tc.items[spans.indexOf(span)] as any;
-      if (item?.fontName) {
-        const style = (tc as any).styles?.[item.fontName];
-        const generic = String(style?.fontFamily ?? "");
-        if (/monospace/i.test(generic)) fontFamily = "courier";
-        else if (/(^|[^-])serif/i.test(generic) && !/sans-serif/i.test(generic))
-          fontFamily = "times";
-        try {
-          const loaded = page.commonObjs.get(item.fontName) as { name?: string };
-          const name = loaded?.name ?? "";
-          bold = /bold|black|heavy|semi|demi/i.test(name);
-          italic = /italic|oblique/i.test(name);
-          if (/times|georgia|garamond|roman|book|serif/i.test(name) && !/sans/i.test(name))
-            fontFamily = "times";
-          if (/courier|mono/i.test(name)) fontFamily = "courier";
+      viewport = page.getViewport({ scale });
+      objs = await app.getPageTextObjects(pageIndex);
+    } catch {
+      toast.error("Couldn't read this page's text for editing.");
+      return;
+    }
+    // Click point in PDF page coordinates (handles rotation + crop origin).
+    const [xPt, yPt] = viewport.convertToPdfPoint(
+      e.clientX - pr.left,
+      e.clientY - pr.top,
+    );
+    // Smallest text run whose bounds contain the click point.
+    const hit = objs
+      .filter(
+        (o) =>
+          o.text.trim() &&
+          xPt >= o.left &&
+          xPt <= o.right &&
+          yPt >= o.bottom &&
+          yPt <= o.top,
+      )
+      .sort(
+        (a, b) =>
+          (a.right - a.left) * (a.top - a.bottom) -
+          (b.right - b.left) * (b.top - b.bottom),
+      )[0];
+    if (!hit) {
+      toast.info("Click directly on a line of text to edit it.");
+      return;
+    }
+    // Map the run's PDF-space box to the exact on-screen rectangle.
+    const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle([
+      hit.left,
+      hit.bottom,
+      hit.right,
+      hit.top,
+    ]);
+    const [r, g, b] = hit.color;
+    const hex =
+      "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+    const f = detectFontFromName(hit.fontName || "");
+    setInlineEdit({
+      objectIndex: hit.index,
+      original: hit.text,
+      left: Math.min(vx1, vx2),
+      top: Math.min(vy1, vy2),
+      width: Math.max(Math.abs(vx2 - vx1), 24),
+      height: Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale),
+      fontPx: hit.fontSize * scale,
+      color: `rgb(${r}, ${g}, ${b})`,
+      colorHex: hex,
+      fontSize: hit.fontSize,
+      fontFamily: f.family,
+      bold: f.bold,
+      italic: f.italic,
+    });
+  };
 
-          // Bundled metric-compatible replacements for the Office defaults.
-          // Use the full bundled font on screen too (instead of the embedded
-          // subset) so newly typed characters render in the same face.
-          if (/calibri|carlito/i.test(name)) {
-            fontFamily = "carlito";
-            displayFontCss = undefined;
-          } else if (/cambria|caladea/i.test(name)) {
-            fontFamily = "caladea";
-            displayFontCss = undefined;
-          }
-
-          // Warn (once per font) when the original font has no close
-          // substitute among the embeddable standard fonts.
-          const readable = name
-            .replace(/^[A-Z]{6}\+/, "") // subset prefix, e.g. "ABCDEF+"
-            .replace(/[-_]\d+$/, ""); // subset suffix, e.g. "-2000"
-          if (readable && !WELL_MATCHED_FONT.test(readable) && !warnedFonts.has(readable)) {
-            warnedFonts.add(readable);
-            toast.warning(`Font “${readable}” is not available`, {
-              description: `It's only partially embedded in this PDF, so edited text uses the closest match (${FAMILY_LABEL[fontFamily ?? "helvetica"]}) and may look slightly different — especially in the saved file.`,
-              duration: 8000,
-            });
-          }
-        } catch {
-          /* font object not resolved yet — keep generic detection */
-        }
+  const commitInlineEdit = async (
+    text: string,
+    colorHex: string,
+    fontSize: number,
+    fontFamily: string,
+    bold: boolean,
+    italic: boolean,
+  ) => {
+    const edit = inlineEdit;
+    if (!edit) return;
+    const textChanged = text !== edit.original && text.trim().length > 0;
+    const colorChanged = colorHex.toLowerCase() !== edit.colorHex.toLowerCase();
+    const sizeChanged = fontSize > 0 && fontSize !== Math.round(edit.fontSize);
+    const fontChanged =
+      fontFamily !== edit.fontFamily || bold !== edit.bold || italic !== edit.italic;
+    if (!textChanged && !colorChanged && !sizeChanged && !fontChanged) {
+      setInlineEdit(null);
+      return;
+    }
+    const fill: [number, number, number, number] = [
+      parseInt(colorHex.slice(1, 3), 16),
+      parseInt(colorHex.slice(3, 5), 16),
+      parseInt(colorHex.slice(5, 7), 16),
+      255,
+    ];
+    setSavingEdit(true);
+    try {
+      if (fontChanged) {
+        // Changing the font recreates the run — pass everything absolutely.
+        const font = await resolveTextFont(fontFamily, bold, italic);
+        await app.applyTextStyle(pageIndex, edit.objectIndex, {
+          text,
+          fill,
+          fontSize,
+          font,
+        });
+      } else {
+        await app.applyTextStyle(pageIndex, edit.objectIndex, {
+          text: textChanged ? text : undefined,
+          fill: colorChanged ? fill : undefined,
+          fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
+        });
       }
     } catch {
-      /* detection is best-effort */
+      toast.error(
+        "Couldn't edit this text in place — its font may not be embeddable. Use the Text tool to overlay a correction instead.",
+      );
+    } finally {
+      setSavingEdit(false);
+      setInlineEdit(null);
     }
-
-    // Pair the whiteout with the retyped text: the whiteout is locked in
-    // place (clicks pass through) and both are removed together.
-    const groupId = uid();
-    const whiteout: WhiteoutAnnotation = {
-      id: uid(),
-      kind: "whiteout",
-      x: x - 1.5,
-      y: y - 1.5,
-      w: wPts + 3,
-      h: hPts + 3,
-      color: colors.bg,
-      groupId,
-      locked: true,
-    };
-    const textAnn: TextAnnotation = {
-      id: uid(),
-      kind: "text",
-      groupId,
-      x,
-      y: y - 1,
-      w: Math.max(wPts + 12, 60),
-      h: Math.max(hPts * 1.1, fontSize * 1.3),
-      text: span.textContent,
-      fontSize,
-      color: colors.text,
-      fontFamily,
-      bold,
-      italic,
-      displayFontCss,
-    };
-    app.addAnnotations(pageIndex, [whiteout, textAnn]);
-    app.setSelected({ page: pageIndex, id: textAnn.id });
-    app.setEditRequestId(textAnn.id);
-    app.setTool("select");
-    toast.info(
-      "Original line covered — edit the text box, then drag to fine-tune. Undo with Ctrl+Z.",
-    );
   };
 
   return (
@@ -884,8 +821,891 @@ function PageView({
         onClick={onTextLayerClick}
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
+      {/* Object editing lives on the Select tool (in edit mode). Rendered
+          BELOW the form and annotation layers so form fields and your own
+          annotations keep priority — clicks that miss them fall through here. */}
+      {app.editMode && app.tool === "select" && visible && (
+        <ObjectLayer
+          pdf={pdf}
+          pageIndex={pageIndex}
+          scale={scale}
+          canvasRef={canvasRef}
+        />
+      )}
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
+      {inlineEdit && (
+        <InlineTextEditor
+          edit={inlineEdit}
+          saving={savingEdit}
+          onCommit={commitInlineEdit}
+          onCancel={() => setInlineEdit(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface InlineEdit {
+  objectIndex: number;
+  original: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  fontPx: number;
+  /** Original ink color as an rgb() string (for on-screen display). */
+  color: string;
+  /** Original ink color as hex (for the color control). */
+  colorHex: string;
+  /** Original font size in PDF points. */
+  fontSize: number;
+  /** Detected original font, so we only recreate the run when it changes. */
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
+}
+
+// Standard-14 font names by [regular, bold, italic, bold-italic].
+const STD_FONT_NAMES: Record<string, [string, string, string, string]> = {
+  helvetica: ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"],
+  times: ["Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"],
+  courier: ["Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"],
+};
+const BUNDLED_FONT_FILES: Record<string, [string, string, string, string]> = {
+  carlito: [
+    "/fonts/Carlito-Regular.ttf",
+    "/fonts/Carlito-Bold.ttf",
+    "/fonts/Carlito-Italic.ttf",
+    "/fonts/Carlito-BoldItalic.ttf",
+  ],
+  caladea: [
+    "/fonts/Caladea-Regular.ttf",
+    "/fonts/Caladea-Bold.ttf",
+    "/fonts/Caladea-Italic.ttf",
+    "/fonts/Caladea-BoldItalic.ttf",
+  ],
+};
+const FONT_CSS: Record<string, string> = {
+  helvetica: "Helvetica, Arial, sans-serif",
+  times: '"Times New Roman", Times, serif',
+  courier: '"Courier New", Courier, monospace',
+  carlito: "Carlito, Calibri, sans-serif",
+  caladea: "Caladea, Cambria, serif",
+};
+
+/** Best-effort family/weight/slant from a PDF base font name. */
+function detectFontFromName(name: string): { family: string; bold: boolean; italic: boolean } {
+  const n = name.replace(/^[A-Z]{6}\+/, "");
+  let family = "helvetica";
+  if (/calibri|carlito/i.test(n)) family = "carlito";
+  else if (/cambria|caladea/i.test(n)) family = "caladea";
+  else if (/courier|mono/i.test(n)) family = "courier";
+  else if (/times|georgia|garamond|roman|serif/i.test(n) && !/sans/i.test(n)) family = "times";
+  return {
+    family,
+    bold: /bold|black|heavy|semib|demib/i.test(n),
+    italic: /italic|oblique/i.test(n),
+  };
+}
+
+/** Resolve a family+weight+slant to a PDFium font (standard name or TTF bytes). */
+async function resolveTextFont(
+  family: string,
+  bold: boolean,
+  italic: boolean,
+): Promise<{ standardName?: string; bytes?: Uint8Array }> {
+  const idx = (bold ? 1 : 0) + (italic ? 2 : 0);
+  if (STD_FONT_NAMES[family]) return { standardName: STD_FONT_NAMES[family][idx] };
+  const files = BUNDLED_FONT_FILES[family];
+  if (files) {
+    try {
+      const bytes = new Uint8Array(await (await fetch(files[idx])).arrayBuffer());
+      return { bytes };
+    } catch {
+      /* fall back to the metric-compatible standard font */
+    }
+  }
+  const sub = family === "caladea" ? "times" : "helvetica";
+  return { standardName: STD_FONT_NAMES[sub][idx] };
+}
+
+/**
+ * Inline editor shown over a text run while editing it in place. It's a
+ * transient input (not a persisted annotation) — on commit the underlying
+ * PDFium text object is rewritten and the page re-renders from real bytes.
+ */
+function InlineTextEditor({
+  edit,
+  saving,
+  onCommit,
+  onCancel,
+}: {
+  edit: InlineEdit;
+  saving: boolean;
+  onCommit: (
+    text: string,
+    colorHex: string,
+    fontSize: number,
+    fontFamily: string,
+    bold: boolean,
+    italic: boolean,
+  ) => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [value, setValue] = useState(edit.original);
+  const [colorHex, setColorHex] = useState(edit.colorHex);
+  const [sizePt, setSizePt] = useState(Math.round(edit.fontSize));
+  const [family, setFamily] = useState(edit.fontFamily);
+  const [bold, setBold] = useState(edit.bold);
+  const [italic, setItalic] = useState(edit.italic);
+  const done = useRef(false);
+
+  useEffect(() => {
+    window.getSelection()?.removeAllRanges();
+    const t = ref.current;
+    if (t) {
+      t.focus({ preventScroll: true });
+      t.select();
+    }
+  }, []);
+
+  // Commit once — guard against Enter followed by the unmount blur firing twice.
+  const finish = () => {
+    if (done.current) return;
+    done.current = true;
+    onCommit(value, colorHex, sizePt, family, bold, italic);
+  };
+
+  // Live-preview the size change on screen (px per point from the original).
+  const pxPerPt = edit.fontPx / (edit.fontSize || 1);
+  const fontPx = sizePt * pxPerPt;
+  const boxH = Math.max(edit.height, fontPx * 1.25);
+  const top = edit.top + edit.height / 2 - boxH / 2;
+
+  const stepBtn =
+    "flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground";
+
+  return (
+    <div
+      className="absolute z-30"
+      style={{ left: edit.left, top }}
+      onPointerDown={(e) => e.stopPropagation()}
+      // Commit when focus leaves the whole editor (bar or textarea).
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) finish();
+      }}
+    >
+      {/* Options bar: font, color, size. Native <select> (not the base-ui one)
+          so the dropdown doesn't portal focus out and commit prematurely. */}
+      <div className="absolute bottom-full left-0 mb-1 flex items-center gap-1.5 whitespace-nowrap rounded-md border bg-background px-1.5 py-1 shadow-md">
+        <select
+          value={family}
+          disabled={saving}
+          onChange={(e) => setFamily(e.target.value)}
+          title="Font"
+          className="h-6 rounded border border-input bg-background px-1 text-xs text-foreground"
+        >
+          <option value="helvetica">Helvetica</option>
+          <option value="times">Times</option>
+          <option value="courier">Courier</option>
+          <option value="carlito">Carlito</option>
+          <option value="caladea">Caladea</option>
+        </select>
+        <button
+          type="button"
+          className={cn(stepBtn, bold && "bg-accent text-foreground")}
+          title="Bold"
+          disabled={saving}
+          onClick={() => setBold((v) => !v)}
+        >
+          <Bold className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          className={cn(stepBtn, italic && "bg-accent text-foreground")}
+          title="Italic"
+          disabled={saving}
+          onClick={() => setItalic((v) => !v)}
+        >
+          <Italic className="h-3 w-3" />
+        </button>
+        <div className="mx-0.5 h-4 w-px bg-border" />
+        <input
+          type="color"
+          value={colorHex}
+          disabled={saving}
+          onChange={(e) => setColorHex(e.target.value)}
+          title="Text color"
+          className="h-5 w-5 cursor-pointer rounded border border-input bg-background p-0.5"
+        />
+        <div className="mx-0.5 h-4 w-px bg-border" />
+        <button
+          type="button"
+          className={stepBtn}
+          title="Smaller"
+          disabled={saving}
+          onClick={() => setSizePt((s) => Math.max(4, s - 1))}
+        >
+          −
+        </button>
+        <span className="w-6 text-center text-[11px] tabular-nums">{sizePt}</span>
+        <button
+          type="button"
+          className={stepBtn}
+          title="Larger"
+          disabled={saving}
+          onClick={() => setSizePt((s) => Math.min(200, s + 1))}
+        >
+          +
+        </button>
+      </div>
+
+      <textarea
+        ref={ref}
+        value={value}
+        disabled={saving}
+        spellCheck={false}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            finish();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            done.current = true;
+            onCancel();
+          }
+        }}
+        className="block resize-none overflow-hidden whitespace-pre rounded-[2px] bg-white shadow-sm outline outline-2 outline-primary"
+        style={{
+          width: Math.max(edit.width + 24, 60),
+          height: boxH,
+          fontSize: fontPx,
+          lineHeight: `${boxH}px`,
+          color: colorHex,
+          padding: "0 1px",
+          fontFamily: FONT_CSS[family] ?? "Helvetica, Arial, sans-serif",
+          fontWeight: bold ? 700 : 400,
+          fontStyle: italic ? "italic" : "normal",
+        }}
+      />
+    </div>
+  );
+}
+
+interface ScreenObj {
+  index: number;
+  kind: "text" | "image" | "path";
+  pdf: { left: number; bottom: number; right: number; top: number };
+  rect: { left: number; top: number; width: number; height: number };
+  fill: [number, number, number, number] | null;
+  stroke: [number, number, number, number] | null;
+  strokeWidth: number;
+}
+
+/**
+ * A small color swatch that opens the native picker and commits the chosen
+ * color once — on the input's native `change` event (fired when the picker
+ * closes), not on blur or React's continuous onChange. The swatch previews the
+ * live value while the picker is open.
+ */
+function ColorChip({
+  label,
+  hex,
+  disabled,
+  onPreview,
+  onPick,
+}: {
+  label: string;
+  hex: string;
+  disabled: boolean;
+  onPreview: (hex: string) => void;
+  onPick: (hex: string) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState(hex);
+  useEffect(() => setPreview(hex), [hex]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const commit = () => onPick(el.value);
+    el.addEventListener("change", commit);
+    return () => el.removeEventListener("change", commit);
+  }, [onPick]);
+  return (
+    <div
+      className="z-10 flex w-max items-center gap-1.5 rounded-md border bg-background px-1.5 py-1 shadow-md"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="text-[10px] font-medium text-muted-foreground">{label}</span>
+      <label
+        className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded border border-border"
+        style={{ backgroundColor: preview }}
+        title="Change color"
+      >
+        <input
+          ref={ref}
+          type="color"
+          defaultValue={hex}
+          disabled={disabled}
+          className="absolute -inset-2 cursor-pointer opacity-0"
+          onInput={(e) => {
+            setPreview(e.currentTarget.value);
+            onPreview(e.currentTarget.value);
+          }}
+        />
+      </label>
+    </div>
+  );
+}
+
+const toHex = (c: [number, number, number, number]) =>
+  "#" + c.slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join("");
+const rgbaOf = (h: string): [number, number, number, number] => [
+  parseInt(h.slice(1, 3), 16),
+  parseInt(h.slice(3, 5), 16),
+  parseInt(h.slice(5, 7), 16),
+  255,
+];
+
+/**
+ * Contextual properties panel shown above a selected page object: the relevant
+ * fields for that object (fill/stroke color, stroke width), its size, and a
+ * delete action. Anchored to the selection like a shadcn popover.
+ */
+function ObjectProperties({
+  obj,
+  busy,
+  onFillPreview,
+  onStyle,
+  onDelete,
+}: {
+  obj: ScreenObj;
+  busy: boolean;
+  onFillPreview: (hex: string | null) => void;
+  onStyle: (patch: {
+    fill?: [number, number, number, number];
+    stroke?: [number, number, number, number];
+    strokeWidth?: number;
+  }) => void;
+  onDelete: () => void;
+}) {
+  const wPt = Math.round(obj.pdf.right - obj.pdf.left);
+  const hPt = Math.round(obj.pdf.top - obj.pdf.bottom);
+  const kindLabel = obj.kind === "text" ? "Text" : obj.kind === "image" ? "Image" : "Shape";
+  const hasStroke = obj.kind === "path" && !!obj.stroke && obj.strokeWidth > 0;
+  const widths = [...new Set([0.5, 1, 1.5, 2, 3, 4, 6, obj.strokeWidth].filter((w) => w > 0))].sort(
+    (a, b) => a - b,
+  );
+
+  return (
+    <>
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {kindLabel}
+      </span>
+      {obj.fill && (
+        <ColorChip
+          label={obj.kind === "text" ? "Text" : "Fill"}
+          hex={toHex(obj.fill)}
+          disabled={busy}
+          onPreview={(h) => {
+            if (obj.kind === "path") onFillPreview(h);
+          }}
+          onPick={(h) => {
+            onFillPreview(null);
+            onStyle({ fill: rgbaOf(h) });
+          }}
+        />
+      )}
+      {hasStroke && (
+        <ColorChip
+          label="Stroke"
+          hex={toHex(obj.stroke!)}
+          disabled={busy}
+          onPreview={() => {}}
+          onPick={(h) => onStyle({ stroke: rgbaOf(h) })}
+        />
+      )}
+      {hasStroke && (
+        <label className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+          Width
+          <Select
+            className="h-6 w-14 px-1.5 text-xs"
+            value={String(obj.strokeWidth || 1)}
+            disabled={busy}
+            onChange={(e) => onStyle({ strokeWidth: Number(e.target.value) })}
+          >
+            {widths.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </Select>
+        </label>
+      )}
+      <span className="whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">
+        {wPt}×{hPt} pt
+      </span>
+      <div className="h-4 w-px bg-border" />
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+        title="Delete object"
+        disabled={busy}
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </Button>
+    </>
+  );
+}
+
+type Corner = "nw" | "ne" | "sw" | "se";
+const HANDLE = 9; // px hit radius for resize handles
+
+/**
+ * Object editor (active on the Select tool in edit mode): click any existing
+ * text run, image or vector shape (rectangles, lines, fills) to select it, drag
+ * to move, drag a corner (images/shapes) to resize, recolor via the color chip,
+ * or press Delete to remove it. Everything commits through PDFium — true
+ * content-stream edits, unified undo.
+ */
+function ObjectLayer({
+  pdf,
+  pageIndex,
+  scale,
+  canvasRef,
+}: {
+  pdf: PDFDocumentProxy;
+  pageIndex: number;
+  scale: number;
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+}) {
+  const app = useApp();
+  const layerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<any>(null);
+  const [objects, setObjects] = useState<ScreenObj[]>([]);
+  const [sel, setSel] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Live color while the picker is open (overlay only — the real recolor is
+  // committed once on picker close to avoid a PDFium reload per input event).
+  const [previewHex, setPreviewHex] = useState<string | null>(null);
+  // Live drag state: the moving/resizing box + a ghost image of the content.
+  const [drag, setDrag] = useState<null | {
+    orig: ScreenObj["rect"];
+    box: ScreenObj["rect"];
+    ghost?: string;
+  }>(null);
+  const dragRef = useRef<null | {
+    mode: "move" | "resize";
+    corner?: Corner;
+    startX: number;
+    startY: number;
+    obj: ScreenObj;
+    box: ScreenObj["rect"];
+  }>(null);
+
+  // (Re)load object rects whenever the page bytes change (pdf proxy swaps).
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const page = await pdf.getPage(pageIndex + 1);
+        const viewport = page.getViewport({ scale });
+        viewportRef.current = viewport;
+        const objs = await app.getPageObjects(pageIndex);
+        const mapped: ScreenObj[] = objs.map((o) => {
+          const [x1, y1, x2, y2] = viewport.convertToViewportRectangle([
+            o.left,
+            o.bottom,
+            o.right,
+            o.top,
+          ]);
+          return {
+            index: o.index,
+            kind: o.kind,
+            pdf: { left: o.left, bottom: o.bottom, right: o.right, top: o.top },
+            rect: {
+              left: Math.min(x1, x2),
+              top: Math.min(y1, y2),
+              width: Math.abs(x2 - x1),
+              height: Math.abs(y2 - y1),
+            },
+            fill: o.fill,
+            stroke: o.stroke,
+            strokeWidth: o.strokeWidth,
+          };
+        });
+        if (alive) setObjects(mapped);
+      } catch {
+        if (alive) setObjects([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdf, pageIndex, scale]);
+
+  const selObj = objects.find((o) => o.index === sel) ?? null;
+
+  // Delete removes the selected object.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)
+        return;
+      if ((e.key === "Delete" || e.key === "Backspace") && sel != null && !busy) {
+        e.preventDefault();
+        setBusy(true);
+        const idx = sel;
+        setSel(null);
+        app
+          .removeObjectAt(pageIndex, idx)
+          .catch(() => toast.error("Couldn't delete that object."))
+          .finally(() => setBusy(false));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sel, busy, app, pageIndex]);
+
+  const cornerAt = (o: ScreenObj, px: number, py: number): Corner | null => {
+    const { left, top, width, height } = o.rect;
+    const pts: Record<Corner, [number, number]> = {
+      nw: [left, top],
+      ne: [left + width, top],
+      sw: [left, top + height],
+      se: [left + width, top + height],
+    };
+    for (const c of Object.keys(pts) as Corner[]) {
+      const [hx, hy] = pts[c];
+      if (Math.abs(px - hx) <= HANDLE && Math.abs(py - hy) <= HANDLE) return c;
+    }
+    return null;
+  };
+
+  // Grab a bitmap of the object's content from the rendered page canvas.
+  const cropGhost = (rect: ScreenObj["rect"]): string | undefined => {
+    const canvas = canvasRef.current;
+    if (!canvas || !canvas.width) return undefined;
+    const s = canvas.width / (layerRef.current?.clientWidth || canvas.width);
+    const sw = Math.max(1, Math.round(rect.width * s));
+    const sh = Math.max(1, Math.round(rect.height * s));
+    const tmp = document.createElement("canvas");
+    tmp.width = sw;
+    tmp.height = sh;
+    const ctx = tmp.getContext("2d");
+    if (!ctx) return undefined;
+    ctx.drawImage(
+      canvas,
+      Math.round(rect.left * s),
+      Math.round(rect.top * s),
+      sw,
+      sh,
+      0,
+      0,
+      sw,
+      sh,
+    );
+    return tmp.toDataURL();
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (busy) return;
+    const lr = layerRef.current!.getBoundingClientRect();
+    const px = e.clientX - lr.left;
+    const py = e.clientY - lr.top;
+
+    // Resize handle of the current selection (images and shapes)?
+    if (selObj && (selObj.kind === "image" || selObj.kind === "path")) {
+      const c = cornerAt(selObj, px, py);
+      if (c) {
+        e.preventDefault();
+        try {
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          /* pointer capture is best-effort */
+        }
+        dragRef.current = {
+          mode: "resize",
+          corner: c,
+          startX: e.clientX,
+          startY: e.clientY,
+          obj: selObj,
+          box: selObj.rect,
+        };
+        setDrag({ orig: selObj.rect, box: selObj.rect, ghost: cropGhost(selObj.rect) });
+        return;
+      }
+    }
+
+    // Otherwise pick the smallest object under the point → select + move.
+    const hit = objects
+      .filter(
+        (o) =>
+          px >= o.rect.left &&
+          px <= o.rect.left + o.rect.width &&
+          py >= o.rect.top &&
+          py <= o.rect.top + o.rect.height,
+      )
+      .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0];
+    if (!hit) {
+      setSel(null);
+      return;
+    }
+    e.preventDefault();
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* pointer capture is best-effort */
+    }
+    setSel(hit.index);
+    dragRef.current = {
+      mode: "move",
+      startX: e.clientX,
+      startY: e.clientY,
+      obj: hit,
+      box: hit.rect,
+    };
+    setDrag({ orig: hit.rect, box: hit.rect, ghost: cropGhost(hit.rect) });
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (d.mode === "move") {
+      const box = { ...d.obj.rect, left: d.obj.rect.left + dx, top: d.obj.rect.top + dy };
+      d.box = box;
+      setDrag((p) => (p ? { ...p, box } : p));
+    } else {
+      // Aspect-locked resize about the opposite corner.
+      const r = d.obj.rect;
+      const anchor = {
+        x: d.corner === "nw" || d.corner === "sw" ? r.left + r.width : r.left,
+        y: d.corner === "nw" || d.corner === "ne" ? r.top + r.height : r.top,
+      };
+      const ox = (d.corner === "ne" || d.corner === "se" ? r.left + r.width : r.left) - anchor.x;
+      const oy = (d.corner === "sw" || d.corner === "se" ? r.top + r.height : r.top) - anchor.y;
+      const nx = e.clientX - (layerRef.current!.getBoundingClientRect().left + anchor.x);
+      const ny = e.clientY - (layerRef.current!.getBoundingClientRect().top + anchor.y);
+      const denom = ox * ox + oy * oy;
+      let s = denom ? (nx * ox + ny * oy) / denom : 1;
+      s = Math.max(0.05, s);
+      const nw = r.width * s;
+      const nh = r.height * s;
+      const box = {
+        left: Math.min(anchor.x, anchor.x + Math.sign(ox || 1) * nw),
+        top: Math.min(anchor.y, anchor.y + Math.sign(oy || 1) * nh),
+        width: nw,
+        height: nh,
+      };
+      d.box = box;
+      setDrag((p) => (p ? { ...p, box } : p));
+    }
+  };
+
+  const onPointerUp = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) {
+      setDrag(null);
+      return;
+    }
+    const vp = viewportRef.current;
+    const box = d.box; // live box from the ref (not stale React state)
+    setDrag(null);
+    if (!vp || !box) return;
+    const moved =
+      Math.abs(box.left - d.obj.rect.left) > 1 ||
+      Math.abs(box.top - d.obj.rect.top) > 1 ||
+      Math.abs(box.width - d.obj.rect.width) > 1;
+    if (!moved) return;
+
+    setBusy(true);
+    (async () => {
+      try {
+        if (d.mode === "move") {
+          // Screen delta → page-space translation (rotation-correct).
+          const [ax, ay] = vp.convertToPdfPoint(0, 0);
+          const [bx, by] = vp.convertToPdfPoint(
+            box.left - d.obj.rect.left,
+            box.top - d.obj.rect.top,
+          );
+          await app.applyObjectTransform(pageIndex, d.obj.index, {
+            a: 1,
+            b: 0,
+            c: 0,
+            d: 1,
+            e: bx - ax,
+            f: by - ay,
+          });
+        } else {
+          const s = box.width / d.obj.rect.width;
+          // Anchor = the screen-opposite corner, in PDF page space. Corners are
+          // named in SCREEN space, so the Y axis is flipped: a screen-bottom
+          // (s*) handle drags the PDF bottom, anchoring the PDF top, etc.
+          const p = d.obj.pdf;
+          const ax = d.corner === "nw" || d.corner === "sw" ? p.right : p.left;
+          const ay = d.corner === "nw" || d.corner === "ne" ? p.bottom : p.top;
+          await app.applyObjectTransform(pageIndex, d.obj.index, {
+            a: s,
+            b: 0,
+            c: 0,
+            d: s,
+            e: ax * (1 - s),
+            f: ay * (1 - s),
+          });
+        }
+      } catch {
+        toast.error("Couldn't edit that object.");
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  return (
+    <div
+      ref={layerRef}
+      className="absolute inset-0"
+      style={{ cursor: busy ? "wait" : "default", touchAction: "none" }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
+      {/* Hover/selectable outlines for each object. */}
+      {objects.map((o) => (
+        <div
+          key={o.index}
+          className={cn(
+            "absolute rounded-[1px]",
+            o.index === sel
+              ? "outline outline-2 outline-primary"
+              : "hover:outline hover:outline-1 hover:outline-primary/50",
+          )}
+          style={{
+            left: o.rect.left,
+            top: o.rect.top,
+            width: o.rect.width,
+            height: o.rect.height,
+            cursor: "move",
+          }}
+        />
+      ))}
+
+      {/* Live color preview while the picker is open (shape fills only). */}
+      {previewHex && selObj && selObj.kind === "path" && (
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: selObj.rect.left,
+            top: selObj.rect.top,
+            width: selObj.rect.width,
+            height: selObj.rect.height,
+            backgroundColor: previewHex,
+          }}
+        />
+      )}
+
+      {/* Resize handles for a selected image or shape. */}
+      {selObj &&
+        (selObj.kind === "image" || selObj.kind === "path") &&
+        !drag &&
+        (["nw", "ne", "sw", "se"] as Corner[]).map((c) => {
+          const r = selObj.rect;
+          const x = c === "ne" || c === "se" ? r.left + r.width : r.left;
+          const y = c === "sw" || c === "se" ? r.top + r.height : r.top;
+          const cur = c === "nw" || c === "se" ? "nwse-resize" : "nesw-resize";
+          return (
+            <div
+              key={c}
+              className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border border-white bg-primary shadow"
+              style={{ left: x, top: y, cursor: cur }}
+            />
+          );
+        })}
+
+      {/* Contextual properties popover for the selected object. */}
+      {selObj && !drag && (
+        <Popover open onOpenChange={(o: boolean) => !o && setSel(null)}>
+          <PopoverContent
+            anchor={{
+              getBoundingClientRect: () => {
+                const lr = layerRef.current?.getBoundingClientRect();
+                const l = lr?.left ?? 0;
+                const t = lr?.top ?? 0;
+                return new DOMRect(
+                  l + selObj.rect.left,
+                  t + selObj.rect.top,
+                  selObj.rect.width,
+                  selObj.rect.height,
+                );
+              },
+            }}
+            side="top"
+            align="start"
+            sideOffset={8}
+            className="flex items-center gap-2 px-2 py-1.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <ObjectProperties
+              obj={selObj}
+              busy={busy}
+              onFillPreview={setPreviewHex}
+              onStyle={(patch) => {
+                setBusy(true);
+                app
+                  .applyObjectStyle(pageIndex, selObj.index, patch)
+                  .catch(() => toast.error("Couldn't restyle that object."))
+                  .finally(() => setBusy(false));
+              }}
+              onDelete={() => {
+                const idx = selObj.index;
+                setSel(null);
+                setBusy(true);
+                app
+                  .removeObjectAt(pageIndex, idx)
+                  .catch(() => toast.error("Couldn't delete that object."))
+                  .finally(() => setBusy(false));
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
+
+      {/* Drag preview: dim the original, float a ghost of the content. */}
+      {drag && (
+        <>
+          <div
+            className="absolute bg-white/60"
+            style={{
+              left: drag.orig.left,
+              top: drag.orig.top,
+              width: drag.orig.width,
+              height: drag.orig.height,
+            }}
+          />
+          {drag.ghost && (
+            <img
+              src={drag.ghost}
+              alt=""
+              className="absolute opacity-90 outline-dashed outline-1 outline-primary"
+              style={{
+                left: drag.box.left,
+                top: drag.box.top,
+                width: drag.box.width,
+                height: drag.box.height,
+              }}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1292,6 +2112,7 @@ function FieldDesigner({
         touchAction: app.tool === "select" ? "none" : "auto",
       }}
       className={cn(
+        "group",
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
         !isSelected && app.tool === "select" && "hover:ring-1 hover:ring-blue-400/60",
       )}
@@ -1303,7 +2124,14 @@ function FieldDesigner({
           field.kind === "radio" ? "rounded-full" : "rounded-[2px]",
         )}
       >
-        <span className="absolute -top-[15px] left-0 whitespace-nowrap text-[9px] font-medium leading-none text-sky-600">
+        {/* Field name — hidden by default so it doesn't overlap the form's own
+            labels; revealed on hover or when the field is selected. */}
+        <span
+          className={cn(
+            "pointer-events-none absolute -top-[15px] left-0 z-10 whitespace-nowrap rounded-sm bg-sky-600 px-1 text-[9px] font-medium leading-[1.4] text-white opacity-0 transition-opacity",
+            isSelected ? "opacity-100" : "group-hover:opacity-100",
+          )}
+        >
           {displayName}
           {op?.newName && op.newName !== field.name ? " (renamed)" : ""}
         </span>
@@ -1518,7 +2346,7 @@ function AnnotationLayer({
           app.addAnnotation(pageIndex, {
             ...base,
             kind: "highlight",
-            color: "#facc15",
+            color: app.toolColor,
           });
         } else if (app.tool === "whiteout") {
           app.addAnnotation(pageIndex, { ...base, kind: "whiteout" });
@@ -1533,6 +2361,8 @@ function AnnotationLayer({
             kind: app.tool,
             color: app.toolColor,
             strokeWidth: app.strokeWidth,
+            // Fill applies to rect/ellipse only (a line can't be filled).
+            ...(app.tool !== "line" && app.toolFill ? { fill: app.toolFill } : {}),
           });
         }
       }
@@ -1687,6 +2517,444 @@ function measureTextBox(
   return { w, h: lineCount * a.fontSize * 1.25 + pad * 0.6 };
 }
 
+const FIELD_TYPE_LABEL: Record<FormFieldAnnotation["fieldType"], string> = {
+  text: "Text",
+  checkbox: "Checkbox",
+  dropdown: "Dropdown",
+  radio: "Radio",
+};
+
+const BORDER_STYLES: Array<{ v: NonNullable<FormFieldAnnotation["borderStyle"]>; label: string }> = [
+  { v: "solid", label: "Solid" },
+  { v: "dashed", label: "Dashed" },
+  { v: "beveled", label: "Beveled" },
+  { v: "inset", label: "Inset" },
+  { v: "underline", label: "Underline" },
+];
+
+/**
+ * The form-builder properties panel — anchored beside a selected form field, it
+ * exposes every field property (name, behavior, text, border/background, style,
+ * options) and patches the annotation live. Baked into a real AcroForm field on
+ * save via createFormFields.
+ */
+function FieldProperties({
+  ann,
+  onPatch,
+}: {
+  ann: FormFieldAnnotation;
+  onPatch: (p: Partial<FormFieldAnnotation>) => void;
+}) {
+  const isText = ann.fieldType === "text";
+  const isChoice = ann.fieldType === "dropdown" || ann.fieldType === "radio";
+  const isCheck = ann.fieldType === "checkbox";
+  const sm = "h-7 text-xs px-2";
+  const lbl = "text-[10px] font-medium text-muted-foreground";
+
+  return (
+    <>
+      <div className="text-[11px] font-semibold">{FIELD_TYPE_LABEL[ann.fieldType]} field</div>
+
+      <div className="space-y-0.5">
+        <div className={lbl}>Name</div>
+        <Input
+          key={`name-${ann.id}`}
+          className={sm}
+          defaultValue={ann.fieldName}
+          onBlur={(e) => onPatch({ fieldName: e.target.value.trim() || ann.fieldName })}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        />
+      </div>
+
+      <div className="space-y-0.5">
+        <div className={lbl}>Tooltip</div>
+        <Input
+          key={`tip-${ann.id}`}
+          className={sm}
+          defaultValue={ann.tooltip ?? ""}
+          placeholder="shown on hover"
+          onBlur={(e) => onPatch({ tooltip: e.target.value || undefined })}
+        />
+      </div>
+
+      {!isCheck && (
+        <div className="space-y-0.5">
+          <div className={lbl}>{isChoice ? "Default value" : "Default text"}</div>
+          <Input
+            key={`def-${ann.id}`}
+            className={sm}
+            defaultValue={ann.defaultValue ?? ""}
+            onBlur={(e) => onPatch({ defaultValue: e.target.value || undefined })}
+          />
+        </div>
+      )}
+
+      <div className="flex gap-3">
+        <label className="flex items-center gap-1.5 text-[11px]">
+          <Checkbox
+            checked={!!ann.required}
+            onCheckedChange={(v: boolean) => onPatch({ required: v })}
+          />
+          Required
+        </label>
+        <label className="flex items-center gap-1.5 text-[11px]">
+          <Checkbox
+            checked={!!ann.readOnly}
+            onCheckedChange={(v: boolean) => onPatch({ readOnly: v })}
+          />
+          Read-only
+        </label>
+      </div>
+
+      {isCheck && (
+        <label className="flex items-center gap-1.5 text-[11px]">
+          <Checkbox
+            checked={ann.defaultValue === "true"}
+            onCheckedChange={(v: boolean) => onPatch({ defaultValue: v ? "true" : undefined })}
+          />
+          Checked by default
+        </label>
+      )}
+
+      {(isText || isChoice) && (
+        <div className="flex items-end gap-2">
+          <div className="flex-1 space-y-0.5">
+            <div className={lbl}>Font size</div>
+            <Select
+              className={sm}
+              value={String(ann.fontSize ?? 0)}
+              onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
+            >
+              <option value="0">Auto</option>
+              {[8, 9, 10, 11, 12, 14, 16, 18].map((s) => (
+                <option key={s} value={s}>
+                  {s}pt
+                </option>
+              ))}
+            </Select>
+          </div>
+          <ToggleGroup
+            value={[ann.align ?? "left"]}
+            onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}
+            aria-label="Text alignment"
+          >
+            {(["left", "center", "right"] as const).map((a) => (
+              <ToggleGroupItem key={a} value={a} title={a} className="text-[11px] capitalize">
+                {a[0].toUpperCase()}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
+      )}
+
+      {isText && (
+        <div className="flex items-end gap-2">
+          <label className="flex items-center gap-1.5 text-[11px]">
+            <Checkbox
+              checked={!!ann.multiline}
+              onCheckedChange={(v: boolean) => onPatch({ multiline: v })}
+            />
+            Multiline
+          </label>
+          <div className="flex-1 space-y-0.5">
+            <div className={lbl}>Max length</div>
+            <Input
+              key={`max-${ann.id}`}
+              type="number"
+              min={0}
+              className={sm}
+              defaultValue={ann.maxLength ?? ""}
+              placeholder="∞"
+              onBlur={(e) =>
+                onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
+              }
+            />
+          </div>
+        </div>
+      )}
+
+      {isChoice && (
+        <div className="space-y-0.5">
+          <div className={lbl}>
+            {ann.fieldType === "radio" ? "This option's value" : "Options (one per line)"}
+          </div>
+          {ann.fieldType === "dropdown" ? (
+            <Textarea
+              key={`opt-${ann.id}`}
+              className="min-h-16 px-2 py-1 text-xs"
+              defaultValue={(ann.options ?? []).join("\n")}
+              onBlur={(e) =>
+                onPatch({
+                  options: e.target.value.split("\n").map((o) => o.trim()).filter(Boolean),
+                })
+              }
+            />
+          ) : (
+            <Input
+              key={`rv-${ann.id}`}
+              className={sm}
+              defaultValue={ann.optionValue ?? ""}
+              onBlur={(e) => onPatch({ optionValue: e.target.value || undefined })}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Appearance */}
+      <div className="space-y-1.5 border-t pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className={lbl}>Border</span>
+          <div className="flex items-center gap-1">
+            <input
+              type="color"
+              value={ann.borderColor ?? "#9ca8c8"}
+              onChange={(e) => onPatch({ borderColor: e.target.value })}
+              className="h-6 w-6 rounded border border-input bg-background p-0.5"
+              title="Border color"
+            />
+            <Select
+              className="h-7 w-[4.5rem] px-2 text-xs"
+              value={String(ann.borderWidth ?? 1)}
+              onChange={(e) => onPatch({ borderWidth: Number(e.target.value) })}
+            >
+              {[0, 1, 2, 3].map((w) => (
+                <option key={w} value={w}>
+                  {w}px
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
+        <Select
+          className={sm}
+          value={ann.borderStyle ?? "solid"}
+          onChange={(e) =>
+            onPatch({ borderStyle: e.target.value as FormFieldAnnotation["borderStyle"] })
+          }
+        >
+          {BORDER_STYLES.map((s) => (
+            <option key={s.v} value={s.v}>
+              {s.label}
+            </option>
+          ))}
+        </Select>
+        <div className="flex items-center justify-between gap-2">
+          <span className={lbl}>Background</span>
+          {ann.backgroundColor ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="color"
+                value={ann.backgroundColor}
+                onChange={(e) => onPatch({ backgroundColor: e.target.value })}
+                className="h-6 w-6 rounded border border-input bg-background p-0.5"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => onPatch({ backgroundColor: undefined })}
+              >
+                None
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              onClick={() => onPatch({ backgroundColor: "#eef2fb" })}
+            >
+              Add fill
+            </Button>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+const ANN_KIND_LABEL: Record<string, string> = {
+  text: "Text",
+  highlight: "Highlight",
+  whiteout: "Whiteout",
+  rect: "Rectangle",
+  ellipse: "Ellipse",
+  line: "Line",
+  ink: "Drawing",
+  image: "Image",
+};
+
+const ANN_FONTS: Array<{ v: string; label: string }> = [
+  { v: "helvetica", label: "Helvetica" },
+  { v: "times", label: "Times" },
+  { v: "courier", label: "Courier" },
+  { v: "carlito", label: "Carlito" },
+  { v: "caladea", label: "Caladea" },
+];
+
+/**
+ * Contextual properties popover for a selected annotation (everything except
+ * form fields, which have their own richer panel). Shows the controls relevant
+ * to the kind — color, fill, stroke width, font — plus delete.
+ */
+function AnnotationProperties({
+  ann,
+  onPatch,
+  onDelete,
+}: {
+  ann: Annotation;
+  onPatch: (p: Partial<Annotation>) => void;
+  onDelete: () => void;
+}) {
+  const a = ann as any;
+  const k = ann.kind;
+  const isShape = k === "rect" || k === "ellipse" || k === "line";
+  const isFillable = k === "rect" || k === "ellipse";
+  const hasStroke = isShape || k === "ink";
+  const isText = k === "text";
+  const hasColor =
+    isText || isShape || k === "ink" || k === "highlight" || k === "whiteout";
+  const colorLabel = k === "highlight"
+    ? "Color"
+    : k === "whiteout"
+      ? "Patch"
+      : isShape || k === "ink"
+        ? "Stroke"
+        : "Color";
+  const lbl = "flex items-center gap-1 text-[10px] font-medium text-muted-foreground";
+  const swatch = "h-6 w-6 cursor-pointer rounded border border-input bg-background p-0.5";
+
+  return (
+    <>
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {ANN_KIND_LABEL[k] ?? k}
+      </span>
+
+      {hasColor && (
+        <label className={lbl}>
+          {colorLabel}
+          <input
+            type="color"
+            value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
+            onChange={(e) => onPatch({ color: e.target.value } as Partial<Annotation>)}
+            className={swatch}
+          />
+        </label>
+      )}
+
+      {isFillable && (
+        <label className={lbl}>
+          Fill
+          {a.fill ? (
+            <>
+              <input
+                type="color"
+                value={a.fill}
+                onChange={(e) => onPatch({ fill: e.target.value } as Partial<Annotation>)}
+                className={swatch}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-1.5 text-[10px]"
+                onClick={() => onPatch({ fill: undefined } as Partial<Annotation>)}
+              >
+                None
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-1.5 text-[10px]"
+              onClick={() => onPatch({ fill: "#3b82f6" } as Partial<Annotation>)}
+            >
+              Add
+            </Button>
+          )}
+        </label>
+      )}
+
+      {hasStroke && (
+        <label className={lbl}>
+          Width
+          <Select
+            className="h-6 w-14 px-1.5 text-xs"
+            value={String(a.strokeWidth ?? 2)}
+            onChange={(e) => onPatch({ strokeWidth: Number(e.target.value) } as Partial<Annotation>)}
+          >
+            {[0, 1, 2, 3, 4, 6, 8].map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </Select>
+        </label>
+      )}
+
+      {isText && (
+        <>
+          <Select
+            className="h-6 w-24 px-1.5 text-xs"
+            value={a.fontFamily ?? "helvetica"}
+            onChange={(e) =>
+              onPatch({ fontFamily: e.target.value, displayFontCss: undefined } as Partial<Annotation>)
+            }
+          >
+            {ANN_FONTS.map((f) => (
+              <option key={f.v} value={f.v}>
+                {f.label}
+              </option>
+            ))}
+          </Select>
+          <Select
+            className="h-6 w-16 px-1.5 text-xs"
+            value={String(a.fontSize)}
+            onChange={(e) => onPatch({ fontSize: Number(e.target.value) } as Partial<Annotation>)}
+          >
+            {[...new Set([10, 12, 14, 16, 18, 22, 28, 36, a.fontSize])]
+              .sort((x, y) => x - y)
+              .map((s) => (
+                <option key={s} value={s}>
+                  {s}pt
+                </option>
+              ))}
+          </Select>
+          <Button
+            variant={a.bold ? "subtle" : "ghost"}
+            size="icon"
+            className="h-6 w-6"
+            title="Bold"
+            onClick={() => onPatch({ bold: !a.bold } as Partial<Annotation>)}
+          >
+            <Bold className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant={a.italic ? "subtle" : "ghost"}
+            size="icon"
+            className="h-6 w-6"
+            title="Italic"
+            onClick={() => onPatch({ italic: !a.italic } as Partial<Annotation>)}
+          >
+            <Italic className="h-3.5 w-3.5" />
+          </Button>
+        </>
+      )}
+
+      <div className="h-4 w-px bg-border" />
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+        title="Delete"
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </Button>
+    </>
+  );
+}
+
 function AnnotationItem({
   ann,
   pageIndex,
@@ -1738,6 +3006,7 @@ function AnnotationItem({
     orig: { x: number; y: number; w: number; h: number };
   } | null>(null);
   const lastDownAt = useRef(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   const maxTextWidth = Math.max(40, baseDims.width - ann.x - 2);
 
@@ -1847,7 +3116,8 @@ function AnnotationItem({
         <div
           className="h-full w-full"
           style={{
-            border: `${ann.strokeWidth * scale}px solid ${ann.color}`,
+            border: ann.strokeWidth > 0 ? `${ann.strokeWidth * scale}px solid ${ann.color}` : undefined,
+            backgroundColor: ann.fill,
           }}
         />
       );
@@ -1857,7 +3127,8 @@ function AnnotationItem({
         <div
           className="h-full w-full rounded-[50%]"
           style={{
-            border: `${ann.strokeWidth * scale}px solid ${ann.color}`,
+            border: ann.strokeWidth > 0 ? `${ann.strokeWidth * scale}px solid ${ann.color}` : undefined,
+            backgroundColor: ann.fill,
           }}
         />
       );
@@ -2001,6 +3272,7 @@ function AnnotationItem({
 
   return (
     <div
+      ref={wrapRef}
       style={style}
       className={cn(
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
@@ -2024,6 +3296,55 @@ function AnnotationItem({
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
           onPointerDown={(e) => beginDrag(e, "resize")}
         />
+      )}
+      {ann.kind === "formfield" && (
+        <Popover
+          open={isSelected}
+          onOpenChange={(o: boolean) => {
+            if (!o) app.setSelected(null);
+          }}
+        >
+          <PopoverContent
+            anchor={wrapRef}
+            side="right"
+            align="start"
+            sideOffset={12}
+            className="scrollbar-soft max-h-[72vh] w-64 space-y-2 overflow-y-auto p-2.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <FieldProperties
+              ann={ann}
+              onPatch={(p) =>
+                app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+              }
+            />
+          </PopoverContent>
+        </Popover>
+      )}
+      {ann.kind !== "formfield" && !ann.locked && (
+        <Popover
+          open={isSelected && !editing}
+          onOpenChange={(o: boolean) => {
+            if (!o) app.setSelected(null);
+          }}
+        >
+          <PopoverContent
+            anchor={wrapRef}
+            side="top"
+            align="start"
+            sideOffset={10}
+            className="flex flex-wrap items-center gap-2 px-2 py-1.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <AnnotationProperties
+              ann={ann}
+              onPatch={(p) =>
+                app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+              }
+              onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
+            />
+          </PopoverContent>
+        </Popover>
       )}
     </div>
   );

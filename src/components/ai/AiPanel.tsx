@@ -3,7 +3,6 @@ import {
   Bot,
   CirclePlus,
   ListChecks,
-  Loader2,
   ScrollText,
   Send,
   Sparkles,
@@ -26,7 +25,7 @@ interface UiMessage {
   content: string;
 }
 
-const CHAT_KEY = "pdf-workbench-chat";
+const CHAT_KEY = "pickpdf-chat";
 
 function loadChat(): UiMessage[] {
   try {
@@ -35,6 +34,51 @@ function loadChat(): UiMessage[] {
     return [];
   }
 }
+
+/**
+ * Provider errors often arrive as raw (sometimes doubly-nested) JSON.
+ * Dig out the deepest human-readable `message` so the bubble shows a clean
+ * sentence instead of a wall of JSON.
+ */
+function cleanErrorMessage(raw: string): string {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end <= start) return raw.trim();
+
+  let deepest = "";
+  const dig = (val: unknown): void => {
+    if (typeof val === "string") {
+      const t = val.trim();
+      if (t.startsWith("{") && t.endsWith("}")) {
+        try {
+          dig(JSON.parse(t));
+          return;
+        } catch {
+          /* not nested json — treat as text */
+        }
+      }
+      deepest = t;
+    } else if (val && typeof val === "object") {
+      const o = val as Record<string, unknown>;
+      if (o.error !== undefined) dig(o.error);
+      else if (typeof o.message === "string") dig(o.message);
+    }
+  };
+
+  try {
+    dig(JSON.parse(raw.slice(start, end + 1)));
+  } catch {
+    return raw.trim();
+  }
+  return deepest || raw.trim();
+}
+
+const SELECTION_ACTIONS = [
+  ["Explain", "Explain this text simply"],
+  ["Rewrite", "Rewrite this text more clearly and professionally"],
+  ["Fix grammar", "Fix the grammar and spelling of this text; keep meaning identical"],
+  ["Translate to English", "Translate this text to English"],
+] as const;
 
 export function AiPanel() {
   const app = useApp();
@@ -54,21 +98,53 @@ export function AiPanel() {
   const [status, setStatus] = useState<"unknown" | "ok" | "error">("unknown");
   const [statusDetail, setStatusDetail] = useState("");
   const [selection, setSelection] = useState("");
+  const [selectionPage, setSelectionPage] = useState<number | null>(null);
+  const [selectionPos, setSelectionPos] = useState<{ x: number; y: number } | null>(null);
+  const [fabMenuOpen, setFabMenuOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Track text selection inside the PDF text layer.
+  // Track text selection inside the PDF text layer: text, page and on-screen
+  // position (for the floating assistant button).
   useEffect(() => {
     const onSel = () => {
       const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) return setSelection("");
+      if (!sel || sel.isCollapsed) {
+        setSelection("");
+        setSelectionPos(null);
+        setFabMenuOpen(false);
+        return;
+      }
       const anchor = sel.anchorNode?.parentElement;
       if (anchor?.closest(".textLayer")) {
         setSelection(sel.toString().trim().slice(0, 4000));
+        const pageEl = anchor.closest("[data-page-index]");
+        setSelectionPage(
+          pageEl ? Number(pageEl.getAttribute("data-page-index")) : null,
+        );
+        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        const visible =
+          (rect.width || rect.height) &&
+          rect.bottom >= 0 &&
+          rect.top <= window.innerHeight;
+        setSelectionPos(
+          visible
+            ? {
+                x: Math.min(rect.right + 6, window.innerWidth - 44),
+                y: Math.max(8, rect.top - 36),
+              }
+            : null,
+        );
       }
     };
     document.addEventListener("selectionchange", onSel);
-    return () => document.removeEventListener("selectionchange", onSel);
+    window.addEventListener("scroll", onSel, true);
+    window.addEventListener("resize", onSel);
+    return () => {
+      document.removeEventListener("selectionchange", onSel);
+      window.removeEventListener("scroll", onSel, true);
+      window.removeEventListener("resize", onSel);
+    };
   }, []);
 
   // Connection check when panel opens or settings change.
@@ -95,10 +171,53 @@ export function AiPanel() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
 
-  const buildContext = useCallback(async (): Promise<string> => {
-    if (!app.pdf) return "";
+  const buildContext = useCallback(async (
+    userText?: string,
+    sel?: { page: number | null; text: string },
+  ): Promise<{
+    text: string;
+    scopedPage: number | null;
+  }> => {
+    if (!app.pdf) return { text: "", scopedPage: null };
     const pages = await extractAllText(app.pdf);
     const limit = app.settings.contextChars;
+
+    const scopeTo = (idx: number) => {
+      const p = pages.find((x) => x.pageIndex === idx);
+      return p?.full.trim()
+        ? {
+            text: `\n--- Page ${idx + 1} ---\n${p.full}`.slice(0, limit),
+            scopedPage: idx + 1,
+          }
+        : null;
+    };
+
+    // Selection actions: context is the page the selection lives on. If we
+    // didn't record the page, find it by searching the extracted text.
+    if (sel) {
+      if (sel.page !== null) {
+        const s = scopeTo(sel.page);
+        if (s) return s;
+      }
+      const needle = sel.text.slice(0, 80).trim();
+      const hit = needle ? pages.find((p) => p.full.includes(needle)) : undefined;
+      if (hit) {
+        const s = scopeTo(hit.pageIndex);
+        if (s) return s;
+      }
+      // Snippet not found — send no context rather than the whole document.
+      return { text: "", scopedPage: null };
+    }
+
+    // "…page 3…" in the question → send only that page. Keeps requests small
+    // and inside tight model context windows.
+    const ref = userText?.match(/\bpage\s+(\d{1,4})\b/i);
+    if (ref) {
+      const idx = Number(ref[1]) - 1;
+      const s = scopeTo(idx);
+      if (s) return s;
+    }
+
     let ctx = "";
     // Current page first so it survives truncation.
     const ordered = [
@@ -113,11 +232,14 @@ export function AiPanel() {
       }
       ctx += chunk;
     }
-    return ctx;
+    return { text: ctx, scopedPage: null };
   }, [app.pdf, app.currentPage, app.settings.contextChars]);
 
   const send = useCallback(
-    async (userText: string) => {
+    async (
+      userText: string,
+      opts?: { selection?: { page: number | null; text: string } },
+    ) => {
       if (!userText.trim() || busy) return;
       setBusy(true);
       setInput("");
@@ -126,48 +248,109 @@ export function AiPanel() {
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
       try {
-        const context = await buildContext();
+        // If the question references a page, sanity-check it before calling
+        // the model — a local answer beats a confused LLM reply. (Skipped for
+        // selection actions, where "page N" may just occur in the quote.)
+        const pageRef = opts?.selection
+          ? null
+          : userText.match(/\bpage\s+(\d{1,4})\b/i);
+        const answerLocally = (content: string) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMsg.id ? { ...m, content } : m)),
+          );
+        };
+        if (pageRef && app.pdf) {
+          const n = Number(pageRef[1]);
+          if (n < 1 || n > app.numPages) {
+            answerLocally(
+              `This document has ${app.numPages} page${app.numPages === 1 ? "" : "s"} — there is no page ${n}.`,
+            );
+            return;
+          }
+        }
+
+        const { text: context, scopedPage } = await buildContext(
+          userText,
+          opts?.selection,
+        );
+        if (pageRef && app.pdf && !scopedPage) {
+          answerLocally(
+            `Page ${Number(pageRef[1])} has no selectable text — it's likely a scanned image. Run Tools → “Make searchable (OCR)” first, then ask again.`,
+          );
+          return;
+        }
+
         const system = [
-          "You are a helpful PDF assistant inside a PDF editor called PDF Workbench.",
+          "You are a helpful PDF assistant inside a PDF editor called PickPDF.",
           "Be concise and practical. Answer questions about the document, summarize, rewrite, translate or draft text when asked.",
           "When the user asks you to write or rewrite text that will be inserted into the PDF, output ONLY the text to insert, no preamble.",
           app.docName ? `The open document is "${app.docName}" (${app.numPages} pages). The user is viewing page ${app.currentPage + 1}.` : "No document is open.",
-          context ? `Document content (may be truncated):\n${context}` : "",
+          context
+            ? `${scopedPage ? `Content of page ${scopedPage}${opts?.selection ? " — the page containing the user's selected text" : ""} (only this page is included)` : "Document content (may be truncated)"}:\n${context}`
+            : "",
         ]
           .filter(Boolean)
           .join("\n\n");
 
         const history: ChatMessage[] = [
           { role: "system", content: system },
-          ...messages.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
+          // Recent turns only — long histories overflow small local models.
+          ...messages
+            .slice(-8)
+            .map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
           { role: "user", content: userText },
         ];
 
         abortRef.current = new AbortController();
+        let streaming = false;
         await streamChat(
           app.settings,
           history,
           (delta) => {
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantMsg.id ? { ...m, content: m.content + delta } : m,
+                m.id === assistantMsg.id
+                  ? { ...m, content: (streaming ? m.content : "") + delta }
+                  : m,
+              ),
+            );
+            streaming = true;
+          },
+          abortRef.current.signal,
+          // Download / load progress for the in-browser model (before tokens).
+          (status) => {
+            if (streaming) return;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsg.id ? { ...m, content: status } : m,
               ),
             );
           },
-          abortRef.current.signal,
         );
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
-          const msg = err instanceof Error ? err.message : "Request failed";
+          const raw = err instanceof Error ? err.message : "Request failed";
+          const clean = cleanErrorMessage(raw);
+          const providerName =
+            app.settings.provider === "ollama"
+              ? "Ollama"
+              : app.settings.provider === "lmstudio"
+                ? "LM Studio"
+                : "your API";
+          let hint = "";
+          if (/context (size|window|length)|exceed|too many tokens|n_ctx/i.test(raw)) {
+            hint =
+              "\n\nThe document is too large for this model's context window. Try asking about one page (e.g. “Summarize page 3”), reduce “Document context” in Settings, or switch to a model with a larger context.";
+          } else if (
+            app.settings.provider !== "browser" &&
+            /fetch|reach|refused|network|econn|load failed|connect/i.test(raw)
+          ) {
+            hint = `\n\nCheck that ${providerName} is running and the model “${app.settings.model}” is available (Settings).`;
+          }
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsg.id
-                ? {
-                    ...m,
-                    content:
-                      m.content ||
-                      `⚠️ ${msg}\n\nCheck that ${app.settings.provider === "ollama" ? "Ollama" : app.settings.provider === "lmstudio" ? "LM Studio" : "your API"} is running and the model "${app.settings.model}" is available (Settings).`,
-                  }
+                ? { ...m, content: m.content || `⚠️ ${clean}${hint}` }
                 : m,
             ),
           );
@@ -203,7 +386,65 @@ export function AiPanel() {
     toast.success(`Inserted on page ${app.currentPage + 1} — drag to position`);
   };
 
-  if (!app.aiOpen) return null;
+  const TypingDots = () => (
+    <span className="flex items-center gap-1 py-1.5" aria-label="Assistant is typing">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="typing-dot h-1.5 w-1.5 rounded-full bg-muted-foreground/70"
+          style={{ animationDelay: `${i * 0.18}s` }}
+        />
+      ))}
+    </span>
+  );
+
+  // Floating assistant button next to the current text selection. Click →
+  // quick-actions menu that fires immediately (opening the panel if needed).
+  const selectionFab = selectionPos && selection && (
+    <div
+      className="fixed z-50"
+      style={{ left: selectionPos.x, top: selectionPos.y }}
+      // preventDefault keeps the text selection alive through clicks.
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <button
+        onClick={() => setFabMenuOpen((o) => !o)}
+        className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-primary shadow-md transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        title="Ask AI about this selection"
+        aria-label="Ask AI about this selection"
+      >
+        <Bot className="h-4 w-4" />
+      </button>
+      {fabMenuOpen && (
+        <div
+          className={cn(
+            "absolute top-9 flex w-44 flex-col rounded-lg border bg-popover p-1 shadow-lg",
+            selectionPos.x > window.innerWidth - 200 ? "right-0" : "left-0",
+          )}
+        >
+          {SELECTION_ACTIONS.map(([label, instruction]) => (
+            <button
+              key={label}
+              disabled={busy}
+              className="rounded-md px-2 py-1.5 text-left text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+              onClick={() => {
+                setFabMenuOpen(false);
+                app.setAiOpen(true);
+                if (app.isMobile) app.setSidebarOpen(false);
+                void send(`${instruction}:\n\n"""${selection}"""`, {
+                  selection: { page: selectionPage, text: selection },
+                });
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  if (!app.aiOpen) return <>{selectionFab}</>;
 
   const quickActions = [
     {
@@ -227,6 +468,8 @@ export function AiPanel() {
   ];
 
   return (
+    <>
+    {selectionFab}
     <aside className="fixed inset-y-0 right-0 top-[42px] z-40 flex w-[360px] max-w-[88vw] shrink-0 flex-col border-l border-sidebar-border bg-sidebar shadow-xl lg:static lg:top-0 lg:z-auto lg:max-w-none lg:border-t lg:shadow-none">
       {/* header */}
       <div className="flex items-center gap-2 border-b border-sidebar-border px-4 py-2.5">
@@ -241,26 +484,6 @@ export function AiPanel() {
             status === "unknown" && "bg-amber-400",
           )}
         />
-        {models.length > 0 ? (
-          <Select
-            value={app.settings.model}
-            onChange={(e) =>
-              app.setSettings({ ...app.settings, model: e.target.value })
-            }
-            aria-label="Model"
-            className="h-6 w-28 border-0 bg-transparent px-1 text-[11px] text-muted-foreground shadow-none"
-          >
-            {[...new Set([...models, app.settings.model])].map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </Select>
-        ) : (
-          <span className="max-w-[120px] truncate text-[11px] text-muted-foreground">
-            {app.settings.model}
-          </span>
-        )}
         <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"
@@ -316,9 +539,7 @@ export function AiPanel() {
                     : "self-start border border-sidebar-border bg-background shadow-sm",
                 )}
               >
-                {m.content || (
-                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                )}
+                {m.content || <TypingDots />}
                 {m.role === "assistant" && m.content && !busy && (
                   <button
                     onClick={() => insertAsTextBox(m.content)}
@@ -341,16 +562,15 @@ export function AiPanel() {
             Selected: “{selection.slice(0, 60)}{selection.length > 60 ? "…" : ""}”
           </p>
           <div className="flex flex-wrap gap-1.5">
-            {[
-              ["Rewrite", "Rewrite this text more clearly and professionally"],
-              ["Fix grammar", "Fix the grammar and spelling of this text; keep meaning identical"],
-              ["Translate to English", "Translate this text to English"],
-              ["Explain", "Explain this text simply"],
-            ].map(([label, instruction]) => (
+            {SELECTION_ACTIONS.map(([label, instruction]) => (
               <button
                 key={label}
                 disabled={busy}
-                onClick={() => void send(`${instruction}:\n\n"""${selection}"""`)}
+                onClick={() =>
+                  void send(`${instruction}:\n\n"""${selection}"""`, {
+                    selection: { page: selectionPage, text: selection },
+                  })
+                }
                 className="rounded-md border border-sidebar-border bg-background px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
               >
                 {label}
@@ -377,13 +597,32 @@ export function AiPanel() {
             className="w-full resize-none border-0 bg-transparent px-4 py-3 text-sm outline-none placeholder:text-muted-foreground"
           />
           <div className="flex items-center justify-between gap-2 px-2 pb-2">
-            <span className="px-1.5 text-[11px] text-muted-foreground">
-              {app.settings.provider === "ollama"
-                ? "Ollama (local)"
-                : app.settings.provider === "lmstudio"
-                  ? "LM Studio (local)"
-                  : "Custom API"}
-            </span>
+            {models.length > 0 ? (
+              <Select
+                value={app.settings.model}
+                onChange={(e) =>
+                  app.setSettings({ ...app.settings, model: e.target.value })
+                }
+                aria-label="Model"
+                className="h-6 w-28 max-w-[55%] border-0 bg-transparent px-1 text-[10px] text-muted-foreground shadow-none"
+              >
+                {[...new Set([...models, app.settings.model])].map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <span className="px-1.5 text-[11px] text-muted-foreground">
+                {app.settings.provider === "browser"
+                  ? "Gemma (in-browser)"
+                  : app.settings.provider === "ollama"
+                    ? "Ollama (local)"
+                    : app.settings.provider === "lmstudio"
+                      ? "LM Studio (local)"
+                      : "Custom API"}
+              </span>
+            )}
             {busy ? (
               <Button variant="outline" size="icon" className="h-7 w-7" onClick={stop} title="Stop">
                 <Square className="h-3.5 w-3.5" />
@@ -403,5 +642,6 @@ export function AiPanel() {
         </div>
       </div>
     </aside>
+    </>
   );
 }
