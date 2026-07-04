@@ -275,6 +275,9 @@ interface AppStore {
 
   aiOpen: boolean;
   setAiOpen: (v: boolean) => void;
+  /** Queue a prompt for the AI panel (opens it); the panel sends it. */
+  aiAsk: { id: string; prompt: string } | null;
+  askAi: (prompt: string) => void;
 
   /** Mobile slide-over sidebar (thumbnails/outline/recent). */
   sidebarOpen: boolean;
@@ -435,6 +438,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window !== "undefined" && window.innerWidth >= 1024,
+  );
+
+  const [aiAsk, setAiAsk] = useState<{ id: string; prompt: string } | null>(null);
+  const askAi = useCallback(
+    (prompt: string) => {
+      setAiOpen(true);
+      if (isMobile) setSidebarOpen(false);
+      setAiAsk({ id: uid(), prompt });
+    },
+    [isMobile],
   );
 
   useEffect(() => {
@@ -1209,6 +1222,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lastOpened: Date.now(),
         open: true,
       }).then(refreshRecent);
+      // Browsers can't rename a file through its handle — be explicit about
+      // what the rename actually affects.
+      toast.success(
+        docHandles.current.get(active.id)
+          ? `Renamed to ${next} in PickPDF — the file on disk keeps its original name`
+          : `Renamed to ${next} — saved copies will use this name`,
+      );
     },
     [active, updateDoc, refreshRecent],
   );
@@ -1540,6 +1560,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     clearSearch,
     aiOpen,
     setAiOpen,
+    aiAsk,
+    askAi,
     sidebarOpen,
     setSidebarOpen,
     isMobile,

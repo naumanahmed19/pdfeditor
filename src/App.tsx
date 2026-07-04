@@ -185,8 +185,8 @@ function DocName() {
     return (
       <button
         className="-mx-1 min-w-0 truncate rounded px-1 text-left text-sm font-medium transition-colors hover:bg-accent"
-        title="Rename document"
-        onClick={() => {
+        title="Double-click to rename"
+        onDoubleClick={() => {
           setValue(app.docName!.replace(/\.pdf$/i, ""));
           setEditing(true);
         }}

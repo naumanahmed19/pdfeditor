@@ -1,8 +1,10 @@
 import {
+  PDFArray,
   PDFCheckBox,
   PDFDict,
   PDFDocument,
   PDFDropdown,
+  PDFHexString,
   PDFName,
   PDFOptionList,
   PDFRadioGroup,
@@ -19,6 +21,7 @@ import type {
   AnnotationMap,
   ExistingFieldOp,
   FormFieldAnnotation,
+  NoteAnnotation,
   TextAnnotation,
 } from "../types";
 import type { OcrPage } from "./ocr";
@@ -330,6 +333,53 @@ function fillFormValues(doc: PDFDocument, formValues: Record<string, unknown>) {
   }
 }
 
+/**
+ * Write a comment as a real PDF /Text (sticky note) annotation with an
+ * attached /Popup, so Acrobat, Chrome & co. show it as a native comment
+ * (clickable icon + popup text) instead of flattened pixels.
+ */
+function addNoteAnnotation(
+  doc: PDFDocument,
+  pageIndex: number,
+  ann: NoteAnnotation,
+  r: { x: number; y: number; w: number; h: number },
+) {
+  const page = doc.getPage(pageIndex);
+  const ctx = doc.context;
+  const c = hexToRgb01(ann.color);
+
+  const noteDict = ctx.obj({
+    Type: "Annot",
+    Subtype: "Text",
+    Rect: [r.x, r.y, r.x + r.w, r.y + r.h],
+    Contents: PDFHexString.fromText(ann.text),
+    Name: "Comment", // speech-bubble icon
+    C: [c.r, c.g, c.b],
+    T: PDFHexString.fromText("PickPDF"),
+    M: PDFString.fromDate(new Date()),
+    // Print | NoZoom | NoRotate — the standard sticky-note flags.
+    F: 4 + 8 + 16,
+    Open: false,
+  });
+  const noteRef = ctx.register(noteDict);
+
+  const popupDict = ctx.obj({
+    Type: "Annot",
+    Subtype: "Popup",
+    Rect: [r.x + r.w + 6, r.y - 80, r.x + r.w + 186, r.y + r.h + 20],
+    Parent: noteRef,
+    Open: false,
+  });
+  const popupRef = ctx.register(popupDict);
+  noteDict.set(PDFName.of("Popup"), popupRef);
+
+  const existing = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+  const annots = existing ?? ctx.obj([]);
+  if (!existing) page.node.set(PDFName.of("Annots"), annots);
+  annots.push(noteRef);
+  annots.push(popupRef);
+}
+
 /** Bake overlay annotations permanently into the PDF. */
 export async function bakeAnnotations(
   bytes: Uint8Array,
@@ -388,6 +438,11 @@ export async function bakeAnnotations(
       const r = toPdfRect(ann, pw, ph, rotation);
       if (ann.kind === "formfield") {
         newFields.push({ ann, r, pageIndex });
+        continue;
+      }
+      if (ann.kind === "note") {
+        // Skip empty notes; write real ones as native PDF comments.
+        if (ann.text.trim()) addNoteAnnotation(doc, pageIndex, ann, r);
         continue;
       }
       const font =

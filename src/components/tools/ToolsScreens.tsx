@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
+import { ColorSwatch } from "../ui/color-swatch";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Thumbnail } from "../layout/Sidebar";
@@ -543,12 +544,7 @@ export function WatermarkScreen() {
             </label>
             <label className="flex items-center gap-2">
               Color
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="h-6 w-8 cursor-pointer rounded border border-input"
-              />
+              <ColorSwatch value={color} onChange={setColor} title="Watermark color" />
             </label>
             <label className="flex items-center gap-2">
               <input

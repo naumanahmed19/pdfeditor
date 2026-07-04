@@ -9,6 +9,7 @@ import {
   Image as ImageIcon,
   Italic,
   List,
+  MessageSquare,
   Minus,
   MousePointer2,
   PenLine,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
+import { ColorSwatch } from "../ui/color-swatch";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
@@ -45,6 +47,7 @@ const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   { key: "text", icon: Type, label: "Add text" },
   { key: "edittext", icon: TextCursorInput, label: "Edit existing text (click a line)" },
   { key: "highlight", icon: Highlighter, label: "Highlight" },
+  { key: "note", icon: MessageSquare, label: "Comment (click the page to add a note)" },
   { key: "ink", icon: Pencil, label: "Draw freehand" },
   { key: "rect", icon: Square, label: "Rectangle" },
   { key: "ellipse", icon: Circle, label: "Ellipse" },
@@ -254,15 +257,13 @@ export function EditorToolbar() {
       {/* style controls — contextual */}
       <div className="ml-1 flex items-center gap-1.5">
         {showColor && (
-          <input
-            type="color"
+          <ColorSwatch
             value={selectedText?.color ?? app.toolColor}
-            onChange={(e) => {
-              app.setToolColor(e.target.value);
-              patchSelectedText({ color: e.target.value });
+            onChange={(v) => {
+              app.setToolColor(v);
+              patchSelectedText({ color: v });
             }}
             title="Color"
-            className="h-6 w-6 cursor-pointer rounded border border-input bg-background p-0.5"
           />
         )}
         {showFontControls && (
@@ -354,12 +355,11 @@ export function EditorToolbar() {
             <span className="text-[10px] font-medium text-muted-foreground">Fill</span>
             {fillValue ? (
               <>
-                <input
-                  type="color"
+                <ColorSwatch
                   value={fillValue}
-                  onChange={(e) => setFill(e.target.value)}
+                  onChange={setFill}
                   title="Fill color"
-                  className="h-5 w-5 cursor-pointer rounded border border-input bg-background p-0.5"
+                  className="h-5 w-5"
                 />
                 <button
                   title="Remove fill"

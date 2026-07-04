@@ -2,6 +2,7 @@ export type ToolKind =
   | "select"
   | "text"
   | "edittext"
+  | "note"
   | "highlight"
   | "ink"
   | "rect"
@@ -49,6 +50,14 @@ export interface TextAnnotation extends BaseAnnotation {
 
 export interface HighlightAnnotation extends BaseAnnotation {
   kind: "highlight";
+  color: string;
+}
+
+/** Sticky-note comment — a compact marker with popup text. Baked into the
+ *  saved PDF as a standard /Text popup annotation (Acrobat-compatible). */
+export interface NoteAnnotation extends BaseAnnotation {
+  kind: "note";
+  text: string;
   color: string;
 }
 
@@ -133,6 +142,7 @@ export interface ExistingFieldOp {
 export type Annotation =
   | TextAnnotation
   | HighlightAnnotation
+  | NoteAnnotation
   | WhiteoutAnnotation
   | ShapeAnnotation
   | InkAnnotation

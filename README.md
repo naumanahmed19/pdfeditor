@@ -2,11 +2,10 @@
 
 A professional, local-first PDF **reader, editor, form designer and organizer**
 with a built-in **local-AI assistant** — runs in the browser and ships as a
-Windows desktop app. Styled after the Outreach Workbench shell (same theme,
-layout and component patterns).
+Windows desktop app with a clean, shadcn-style UI.
 
 ![stack](https://img.shields.io/badge/stack-React%2018%20%2B%20Vite%20%2B%20Tailwind-blue)
-![engine](https://img.shields.io/badge/pdf-pdf.js%20%2B%20pdf--lib-orange)
+![engine](https://img.shields.io/badge/pdf-pdf.js%20%2B%20PDFium%20%2B%20pdf--lib-orange)
 ![desktop](https://img.shields.io/badge/desktop-Tauri%202-brightgreen)
 
 Everything runs client-side. Documents never leave your machine except as
@@ -18,8 +17,9 @@ context sent to the AI endpoint you configure (which can be fully local).
 
 - **Open** PDFs by drag & drop, file picker, folder browser, or a recent-files
   list — plus password-protected PDFs (prompts for the password).
-- **Continuous scrolling** viewer with lazy per-page rendering (pdf.js),
-  fit-width / fit-page / manual zoom, fullscreen, and a floating page/zoom pill.
+- **Continuous scrolling** viewer with lazy per-page rendering (pdf.js) and a
+  floating pill with page navigation, a **zoom menu** (fit width / fit page /
+  100% / fullscreen), and **AI quick actions for the current page**.
 - **Selectable text layer** and **full-document search** that highlights the
   matched word (not the whole line) with prev/next and a match counter.
 - **Clickable links** — external URLs open in a new tab; internal links jump to
@@ -27,7 +27,8 @@ context sent to the AI endpoint you configure (which can be fully local).
 - **Navigation**: page thumbnails, document outline/bookmarks, page jump.
 - **Document properties** dialog (file info, page size) with editable
   Title/Author metadata.
-- **Print** and **dark / light theme**.
+- **Print**, **dark / light theme**, and selectable **accent colors**
+  (shadcn-style presets that tint the whole app, Settings → Appearance).
 - **Keyboard shortcuts**: `Ctrl/⌘+O` open, `+F` search, `+S` save, `+P` print,
   `+`/`−` zoom, `PageUp`/`PageDown`, `Home`/`End`, arrow keys nudge a selected
   annotation, `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo.
@@ -36,6 +37,8 @@ context sent to the AI endpoint you configure (which can be fully local).
 
 Annotations are overlaid live and **baked into the PDF on save** (correct on
 rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
+**Save** commits and exits edit mode in one step; **Done** parks pending
+changes; **Discard** (with confirmation) throws them away.
 
 - **Add text** boxes that **auto-grow** to fit what you type (width then wrap).
 - **Edit existing text** truly in place (PDFium): click a line and edit it
@@ -52,6 +55,10 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
   edits with a live drag preview, on the same undo timeline.
 - **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
   **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
+- **Comments (sticky notes)** — drop a marker anywhere on a page and write a
+  note in its popup; recolor or delete from the same popup. On save they become
+  **real PDF popup annotations** (Acrobat, Chrome & co. show them as native
+  comments), and a sidebar **Comments** tab lists them all with click-to-jump.
 - **Signatures**: draw, type (script fonts), or upload an image — saved for
   reuse and placed anywhere.
 - **Fonts**: the 14 standard PDF fonts plus bundled metric-compatible
@@ -101,7 +108,8 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 - **Sidebar workspace** (left): an **Open** list of current documents (active one
   highlighted, close on hover, "open side-by-side" per document), a
   **folder browser** (see below), and **Recently closed** for quick reopening —
-  plus per-document **Pages** (thumbnails) and **Outline** tabs.
+  plus per-document **Pages** (thumbnails), **Outline** and **Comments** tabs.
+  The sidebar collapses on desktop too, for a distraction-free reading view.
 - **Folder browser** — open a whole folder and browse its PDFs as a collapsible
   tree, including **nested subfolders**; open files are highlighted in place.
   Uses the File System Access API (with save-in-place) where available, and falls
@@ -111,6 +119,9 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
 - **Save**: writes **in place** to the original file when opened via the picker
   or a folder handle (Chromium / desktop app); otherwise downloads an edited
   copy. "Download a copy" is always available.
+- **Rename** a document by double-clicking its title — updates the tab, recents
+  and download filenames (the file on disk keeps its name; browsers can't
+  rename through a file handle).
 - Responsive layout (sidebars become drawers on mobile) and an error-recovery
   screen.
 
@@ -120,17 +131,25 @@ A right-side, collapsible panel backed by a **local** model by default — with 
 zero-setup option that needs no server at all.
 
 - **Chat** about the open document (its text is extracted and sent as context).
-- **Quick actions**: summarize, key points, explain page.
-- **Selection actions**: select text in the PDF → rewrite / fix grammar /
-  translate / explain.
+- **Quick actions**: summarize, key points, explain page — also available from
+  the viewer's floating pill, scoped to the page you're reading.
+- **Selection actions**: select text in the PDF and a floating assistant button
+  appears → rewrite / fix grammar / translate / explain, with the **page the
+  selection came from** sent as context.
+- **Small-model friendly**: questions that mention a page ("summarize page 3")
+  send **only that page**, selection actions skip the full document, and chat
+  history is capped — so tight context windows (4k) work; overflow errors come
+  back as readable messages with concrete fixes, not raw JSON.
 - **Insert** any AI answer into the page as a text box.
-- Streaming responses, persisted chat history, connection status, and an
-  in-panel **model switcher**.
+- Streaming responses with a typing indicator, persisted chat history,
+  connection status, and a **model switcher in the composer**.
 - **Providers**:
   - **Built-in (Gemma 4, in-browser)** — the **default**; runs Google's
-    **Gemma 4 (E2B)** entirely in the browser via Transformers.js/WebGPU. No
-    Ollama, LM Studio, API key or setup — the model downloads once (~2 GB, then
-    cached) and works offline. Needs WebGPU (Chrome/Edge or the desktop app).
+    **Gemma 4 (E2B)** entirely in the browser via Transformers.js/WebGPU (CPU
+    fallback). No Ollama, LM Studio, API key or setup — the model downloads
+    once (~2 GB, then cached, with live byte-level progress and stall
+    detection) and works offline. Needs WebGPU (Chrome/Edge or the desktop app)
+    for the fast path.
   - **Ollama** (model `gemma3`), **LM Studio**, or any OpenAI-compatible
     endpoint — for users who already run a local/remote model server.
   - Switch and configure under **Settings**.
@@ -152,24 +171,26 @@ For AI features, run a local model server:
   the dev server also proxies `/proxy/ollama` and `/proxy/lmstudio` as a CORS
   fallback.
 
-## Build the desktop app (Tauri)
+## Desktop app (Tauri)
 
-Produces a Windows installer (NSIS `.exe` + `.msi`) in
-`src-tauri/target/release/bundle/`. Requires the Rust toolchain and MSVC build
-tools.
+The desktop app is a **frameless window** with custom minimize/maximize/close
+controls in the app's own title bar. It runs on WebView2 (Chromium), so folder
+browsing, save-in-place and WebGPU work there too. Requires the Rust toolchain
+and MSVC build tools.
 
 ```bash
-bun run tauri build
+bun run tauri dev      # run in development (hot reload)
+bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/target/release/bundle/
 ```
-
-The desktop app runs on WebView2 (Chromium), so folder browsing and
-save-in-place work there too.
 
 ## Tech
 
 - **React 18 + Vite + TypeScript + Tailwind**, base-ui (shadcn-style) primitives.
-- **pdf.js** for rendering/text/search; **pdf-lib** (+ fontkit) for editing,
-  merging, splitting, forms and saving; **JSZip** for zip exports.
+- Three PDF engines, each doing what it's best at: **pdf.js** renders (canvas,
+  text layer, search, outline); **PDFium** (WASM, lazy-loaded) edits page
+  content in place (text rewrite, object move/resize/delete, form appearance
+  regeneration); **pdf-lib** (+ fontkit) assembles documents (merge, split,
+  forms, baking annotations on save). **JSZip** for zip exports.
 - State in a single React context store; persistence via IndexedDB and
   localStorage. No backend.
 
@@ -187,8 +208,12 @@ save-in-place work there too.
   subset can't be typed — the editor says so; overlay a correction with the
   Text tool instead.
 
+- **Comments are one-way for now**: saving writes them into the PDF as native
+  popup annotations (visible in Acrobat/Chrome), but PickPDF doesn't yet
+  re-import embedded comments when a file is opened — so they won't reappear in
+  PickPDF's own viewer after a save-and-reopen. Round-trip import is planned.
 - OCR fetches its language model once from a CDN (cached); the recognition
   itself runs locally, so your document is never uploaded.
 
 See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, true redaction,
-and a PDFium evaluation).
+and comment round-trip import).
