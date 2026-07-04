@@ -22,7 +22,12 @@ import type {
   SearchMatch,
   ToolKind,
 } from "./types";
-import { loadPdf, searchDocument, extractAllText } from "./lib/pdf";
+import {
+  loadPdf,
+  searchDocument,
+  extractAllText,
+  setPasswordPrompter,
+} from "./lib/pdf";
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
 import type {
@@ -50,6 +55,25 @@ const ACCENT_KEY = "pickpdf-accent";
 export interface PendingStamp {
   dataUrl: string;
   aspect: number; // height / width
+}
+
+/** How a document must be re-protected when its bytes are written to disk. */
+export type ProtectionRecipe =
+  | {
+      kind: "encrypt";
+      userPassword: string;
+      ownerPassword: string;
+      permissions: number;
+    }
+  /** PickPDF wrapper: plain inner document + AES-GCM payload behind `password`. */
+  | { kind: "wrapper"; password: string };
+
+/** A pending in-app password prompt (rendered by PasswordModal). */
+export interface PasswordRequest {
+  title: string;
+  message: string;
+  /** Shown in destructive style, e.g. "Wrong password — try again." */
+  error?: string;
 }
 
 /** The document's base bytes + its parsed pdf.js proxy at a point in history. */
@@ -197,6 +221,55 @@ interface AppStore {
    *  the boxes. Irreversible content removal — confirms first. */
   applyRedactions: () => Promise<void>;
 
+  /** True when the active document is encrypted (in-app copy needs a password). */
+  activeEncrypted: boolean;
+  /** True when the active document will be written protected on save — it's
+   *  encrypted, or was protected this session (in-app copy stays editable). */
+  activeProtected: boolean;
+  /** True when the active document is locked to PickPDF (wrapper + AES-GCM);
+   *  saving keeps the lock, other viewers see only a notice page. */
+  activeWrapped: boolean;
+  /** Bake edits, encrypt with AES-256 and save/download the protected file.
+   *  Real two-password model: `userPassword` gates opening (may be "" for a
+   *  restrictions-only file), `ownerPassword` gates full permissions, and
+   *  `permissions` is the OR'd PDF_PERMISSIONS bits granted to user-password
+   *  holders. The open copy stays unlocked for further editing. */
+  protectDocument: (opts: {
+    userPassword: string;
+    ownerPassword: string;
+    permissions: number;
+    /** Lock to PickPDF: other viewers show a notice page; the real document
+     *  travels inside as an AES-256-GCM payload. */
+    pickpdfOnly?: boolean;
+  }) => Promise<void>;
+  /** Decrypt the open document in place (undoable); save then writes the
+   *  unlocked file. Requires owner rights — prompts for the permissions
+   *  password when needed. */
+  removePassword: () => Promise<void>;
+  /** What the active document's permissions allow US to do. All-true unless
+   *  the doc is encrypted and owner rights aren't held (honored like every
+   *  compliant viewer: restrictions apply until unlocked). */
+  docPermissions: {
+    print: boolean;
+    copy: boolean;
+    modify: boolean;
+    annotate: boolean;
+    fillForms: boolean;
+    /** True when restrictions are currently in force (encrypted + owner locked). */
+    restricted: boolean;
+  };
+  /** Unlock full permissions with the owner password. Returns success. */
+  unlockPermissions: (ownerPassword: string) => boolean;
+  /** Document-security dialog visibility (openable from the menu, the toolbar
+   *  badge, or an on-open notification). */
+  securityModalOpen: boolean;
+  setSecurityModalOpen: (v: boolean) => void;
+
+  /** Pending password prompt rendered by PasswordModal (null = closed). */
+  passwordPrompt: PasswordRequest | null;
+  /** Settle the pending prompt: the entered password, or null = cancelled. */
+  answerPassword: (value: string | null) => void;
+
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
   runOcrText: () => Promise<void>;
@@ -337,6 +410,61 @@ function docHasEdits(d: OpenDoc): boolean {
   );
 }
 
+// PDF permission bits (spec table 22), named once so the decoder below is the
+// single place that maps bits → capabilities (no scattered magic numbers).
+const PERM_PRINT = 4;
+const PERM_MODIFY = 8;
+const PERM_COPY = 16;
+const PERM_ANNOTATE = 32;
+const PERM_FILL_FORMS = 256;
+const PERM_PRINT_HQ = 2048;
+
+/** What a document lets US do. `restricted` is true only when the doc is
+ *  encrypted and owner rights aren't held; otherwise everything is allowed. */
+export interface DocPermissions {
+  print: boolean;
+  copy: boolean;
+  modify: boolean;
+  annotate: boolean;
+  fillForms: boolean;
+  restricted: boolean;
+}
+
+const ALL_ALLOWED: DocPermissions = {
+  print: true,
+  copy: true,
+  modify: true,
+  annotate: true,
+  fillForms: true,
+  restricted: false,
+};
+
+/** Decode a document's effective permissions — the ONE decoder used by the
+ *  on-open notice, the toolbar/print/form gates and the security dialog. */
+function permissionsOf(pdf: PdfDoc): DocPermissions {
+  if (!pdf.isEncrypted() || pdf.isOwnerUnlocked()) return ALL_ALLOWED;
+  const p = pdf.getUserPermissions();
+  return {
+    print: (p & PERM_PRINT) !== 0 || (p & PERM_PRINT_HQ) !== 0,
+    copy: (p & PERM_COPY) !== 0,
+    modify: (p & PERM_MODIFY) !== 0,
+    annotate: (p & PERM_ANNOTATE) !== 0,
+    fillForms: (p & PERM_FILL_FORMS) !== 0,
+    restricted: true,
+  };
+}
+
+/** Human-readable list of what the document forbids (for the on-open notice). */
+function summarizeRestrictions(perms: DocPermissions): string[] {
+  const denied: string[] = [];
+  if (!perms.print) denied.push("printing");
+  if (!perms.copy) denied.push("copying text");
+  if (!perms.modify) denied.push("editing");
+  if (!perms.annotate) denied.push("annotating");
+  if (!perms.fillForms) denied.push("filling forms");
+  return denied;
+}
+
 const HISTORY_CAP = 60;
 
 /**
@@ -462,7 +590,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => typeof window === "undefined" || window.innerWidth >= 1024,
   );
   const [sidebarOpen, setSidebarOpen] = useState(
-    () => typeof window !== "undefined" && window.innerWidth >= 1024,
+    () => typeof window !== "undefined" && window.innerWidth > 1024,
   );
 
   const [aiAsk, setAiAsk] = useState<{ id: string; prompt: string } | null>(null);
@@ -476,11 +604,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 1024);
+    let prevWidth = window.innerWidth;
+    const onResize = () => {
+      const w = window.innerWidth;
+      setIsMobile(w < 1024);
+      // Shrinking to a small screen auto-closes the left sidebar so the page
+      // keeps its room; it can still be reopened manually at any size.
+      if (w <= 1024 && prevWidth > 1024) setSidebarOpen(false);
+      prevWidth = w;
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
+
+  // --- In-app password dialog (replaces window.prompt everywhere) ----------
+  // Promise-based: flows await requestPassword(); the PasswordModal renders
+  // from `passwordPrompt` and settles the promise via answerPassword().
+  const [passwordPrompt, setPasswordPrompt] = useState<PasswordRequest | null>(
+    null,
+  );
+  const passwordResolver = useRef<((v: string | null) => void) | null>(null);
+  const requestPassword = useCallback(
+    (req: PasswordRequest): Promise<string | null> =>
+      new Promise((resolve) => {
+        // A dangling earlier request (shouldn't happen) resolves as cancelled.
+        passwordResolver.current?.(null);
+        passwordResolver.current = resolve;
+        setPasswordPrompt(req);
+      }),
+    [],
+  );
+  const answerPassword = useCallback((value: string | null) => {
+    setPasswordPrompt(null);
+    const resolve = passwordResolver.current;
+    passwordResolver.current = null;
+    resolve?.(value);
+  }, []);
+  // Standard encrypted PDFs (lib/pdf.ts loadPdf) prompt through the same
+  // dialog instead of window.prompt (which would show the password in
+  // plain text).
+  useEffect(() => {
+    setPasswordPrompter(({ message, isRetry }) =>
+      requestPassword({
+        title: "Password required",
+        message,
+        error: isRetry ? "Wrong password — try again." : undefined,
+      }),
+    );
+  }, [requestPassword]);
 
   const [settings, setSettingsState] = useState<AppSettings>(() =>
     loadJson(SETTINGS_KEY, DEFAULT_SETTINGS),
@@ -642,6 +815,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [folderBusy, setFolderBusy] = useState(false);
   const docHandles = useRef(new Map<string, any>());
   const runOcrRef = useRef<(() => Promise<void>) | null>(null);
+  /** Docs opened from (or saved as) a PickPDF-locked wrapper: how to re-wrap
+   *  on save. `permissions`/`ownerPassword` re-apply inner restrictions. */
+  // How each open doc must be RE-PROTECTED whenever its bytes go to disk or
+  // IndexedDB. The single source of truth so save/download/persist never leak
+  // a decrypted copy or silently drop protection. Set only after a protect (or
+  // an unwrap) actually succeeds; cleared on remove-protection and close.
+  const protectionInfo = useRef(new Map<string, ProtectionRecipe>());
+  /** Reactive mirror of protectionInfo's keys (refs don't trigger renders). */
+  const [protectedIds, setProtectedIds] = useState<ReadonlySet<string>>(new Set());
+  const markProtected = useCallback((docId: string, on: boolean) => {
+    setProtectedIds((prev) => {
+      if (on === prev.has(docId)) return prev;
+      const next = new Set(prev);
+      if (on) next.add(docId);
+      else next.delete(docId);
+      return next;
+    });
+  }, []);
+  /**
+   * Persist working bytes for a doc — but never write a decrypted copy of a
+   * protected document to IndexedDB. Its restore record stays the protected
+   * form written at open/protect/save time, so a session restore re-prompts
+   * for the password instead of silently opening a decrypted copy.
+   */
+  const persistWorking = useCallback(
+    (id: string, name: string, bytes: Uint8Array) => {
+      if (protectionInfo.current.has(id)) return;
+      void persistDoc({ id, name, bytes, lastOpened: Date.now(), open: true });
+    },
+    [],
+  );
 
   const refreshRecent = useCallback(async () => {
     const stored = await listStoredDocs();
@@ -663,25 +867,94 @@ export function AppProvider({ children }: { children: ReactNode }) {
       persist = true,
     ): Promise<string | null> => {
       try {
-        const pdfDoc = await loadPdf(bytes);
+        let pdfDoc = await loadPdf(bytes);
+        let realBytes = bytes;
+        let wrapperPw: string | null = null;
+
+        // PickPDF-locked wrapper? The visible page is just a notice; the real
+        // document is an AES-256-GCM payload attached to it. Prompt and unwrap.
+        const payload = pdfDoc.getAttachment("pickpdf-protected.bin");
+        if (payload) {
+          const { decryptPayload, isProtectedPayload } = await import(
+            "./lib/protected"
+          );
+          if (isProtectedPayload(payload)) {
+            for (let attempt = 0; ; attempt++) {
+              const input = await requestPassword({
+                title: "Locked to PickPDF",
+                message: `“${name}” is locked to PickPDF. Enter its password to open it.`,
+                error: attempt > 0 ? "Wrong password — try again." : undefined,
+              });
+              if (input === null) {
+                await pdfDoc.destroy();
+                return null;
+              }
+              try {
+                realBytes = await decryptPayload(payload, input);
+                wrapperPw = input;
+                break;
+              } catch {
+                if (attempt >= 3) {
+                  await pdfDoc.destroy();
+                  toast.error("Too many wrong password attempts");
+                  return null;
+                }
+              }
+            }
+            await pdfDoc.destroy();
+            pdfDoc = await loadPdf(realBytes);
+          }
+        }
+
         const doc: OpenDoc = {
           id: id ?? uid(),
           name,
-          bytes,
+          bytes: realBytes,
           pdf: pdfDoc,
           annotations: {},
           history: [{}],
-          bytesHistory: [{ bytes, pdf: pdfDoc }],
+          bytesHistory: [{ bytes: realBytes, pdf: pdfDoc }],
           historyIndex: 0,
           currentPage: 0,
           formValues: {},
           fieldOps: {},
         };
+        if (wrapperPw) {
+          protectionInfo.current.set(doc.id, {
+            kind: "wrapper",
+            password: wrapperPw,
+          });
+          markProtected(doc.id, true);
+          toast.success("PickPDF-locked document opened", {
+            description: "Saving will keep it locked to PickPDF.",
+            duration: 6000,
+          });
+        }
         setDocs((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
         setActiveTabId(doc.id);
         setDocVersion((v) => v + 1);
         resetTransient();
         setScreen("viewer");
+        // Tell the user up front when a document is protected and what it
+        // restricts — otherwise the silently-disabled tools feel broken.
+        if (pdfDoc.isEncrypted()) {
+          const denied = summarizeRestrictions(permissionsOf(pdfDoc));
+          if (denied.length) {
+            toast.warning("Protected document — some actions are restricted", {
+              description: `Not allowed: ${denied.join(", ")}. Unlock with the permissions password via File → Document security.`,
+              action: {
+                label: "Unlock",
+                onClick: () => setSecurityModalOpen(true),
+              },
+              duration: 10000,
+            });
+          } else {
+            toast.info("This document is encrypted", {
+              description: "You hold full permissions on it.",
+              duration: 5000,
+            });
+          }
+        }
         if (persist) {
           void persistDoc({
             id: doc.id,
@@ -718,7 +991,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [resetTransient, refreshRecent],
+    [resetTransient, refreshRecent, markProtected, requestPassword],
   );
 
   const openBytes = useCallback(
@@ -915,9 +1188,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setDocVersion((v) => v + 1);
       resetTransient();
       docHandles.current.delete(id);
+      // Drop the cleartext protection secret + its reactive flag; don't leave a
+      // closed document's password resident for the rest of the session.
+      protectionInfo.current.delete(id);
+      markProtected(id, false);
       void markDocClosed(id).then(refreshRecent);
     },
-    [docs, activeTabId, resetTransient, refreshRecent],
+    [docs, activeTabId, resetTransient, refreshRecent, markProtected],
   );
 
   const closeDocument = useCallback(() => {
@@ -1004,6 +1281,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (docId: string) => {
       const d = docs.find((x) => x.id === docId);
       if (!d) return;
+      if (!permissionsOf(d.pdf).print) {
+        toast.error("This document's permissions don't allow printing.");
+        return;
+      }
       let bytes = d.bytes;
       if (docHasEdits(d)) {
         bytes = await bakeAnnotations(d.bytes, d.annotations, d.formValues, d.fieldOps);
@@ -1038,6 +1319,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setFormValue = useCallback(
     (name: string, value: unknown) => {
       if (!activeTabId) return;
+      // Honor the fill-forms permission — announced restrictions must actually
+      // bind, not just grey out the form-designer tools.
+      const perms = docPermissionsRef.current;
+      if (perms.restricted && !perms.fillForms) {
+        toast.error(
+          "This document's permissions don't allow filling form fields. Unlock with the permissions password (File → Document security).",
+        );
+        return;
+      }
       updateDoc(activeTabId, (d) => ({
         formValues: { ...d.formValues, [name]: value },
       }));
@@ -1080,6 +1370,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (op: (bytes: Uint8Array) => Promise<Uint8Array>, label: string) => {
       if (!active) return;
       const id = active.id;
+      // Structural ops (rotate/delete/reorder pages) mutate document content
+      // and — via pdf-lib's ignoreEncryption rewrite — would also decrypt a
+      // restricted document. Honor the modify permission like the edit tools.
+      if (docPermissionsRef.current.restricted && !docPermissionsRef.current.modify) {
+        toast.error(
+          "This document's permissions don't allow changing its pages. Unlock with the permissions password (File → Document security).",
+        );
+        return;
+      }
       try {
         let base = active.bytes;
         if (docHasEdits(active)) {
@@ -1106,13 +1405,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         setDocVersion((v) => v + 1);
         setSelected(null);
-        void persistDoc({
-          id,
-          name: active.name,
-          bytes: nextBytes,
-          lastOpened: Date.now(),
-          open: true,
-        });
+        persistWorking(id, active.name, nextBytes);
         toast.success(label);
       } catch (err) {
         toast.error(
@@ -1120,7 +1413,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
       }
     },
-    [active, updateDoc],
+    [active, updateDoc, persistWorking],
   );
 
   /** Read the editable text runs on a page (via PDFium), for hit-testing. */
@@ -1159,15 +1452,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         pushHistory(d, d.annotations, { bytes: nextBytes, pdf: nextPdf }),
       );
       setSelected(null);
-      void persistDoc({
-        id,
-        name: active.name,
-        bytes: nextBytes,
-        lastOpened: Date.now(),
-        open: true,
-      });
+      persistWorking(id, active.name, nextBytes);
     },
-    [active, updateDoc],
+    [active, updateDoc, persistWorking],
   );
 
   const redactCount = active
@@ -1212,13 +1499,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         pushHistory(d, nextAnns, { bytes: nextBytes, pdf: nextPdf }),
       );
       setSelected(null);
-      void persistDoc({
-        id,
-        name: active.name,
-        bytes: nextBytes,
-        lastOpened: Date.now(),
-        open: true,
-      });
+      persistWorking(id, active.name, nextBytes);
       toast.success(
         `Redacted ${boxes.length} ${boxes.length === 1 ? "region" : "regions"}`,
       );
@@ -1227,7 +1508,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         `Redaction failed: ${err instanceof Error ? err.message : "unknown error"}`,
       );
     }
-  }, [active, updateDoc]);
+  }, [active, updateDoc, persistWorking]);
 
   /**
    * True in-place text edit: rewrite the content-stream text object via PDFium,
@@ -1278,13 +1559,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitInPlace],
   );
 
+  /**
+   * Apply a document's protection recipe to `bytes` before they touch disk or
+   * IndexedDB. Standard-encrypt re-applies AES-256; PickPDF-lock re-wraps.
+   * Returns the input unchanged when the doc has no recipe. This is the single
+   * choke point that keeps every write/persist path from leaking a decrypted
+   * copy of a protected document.
+   */
+  const protectForDisk = useCallback(
+    async (docId: string, bytes: Uint8Array, name: string): Promise<Uint8Array> => {
+      const recipe = protectionInfo.current.get(docId);
+      if (!recipe) return bytes;
+      if (recipe.kind === "encrypt") {
+        const { encryptPdf } = await import("./lib/pdfium");
+        return encryptPdf(bytes, {
+          userPassword: recipe.userPassword,
+          ownerPassword: recipe.ownerPassword,
+          permissions: recipe.permissions,
+        });
+      }
+      const { wrapProtected } = await import("./lib/protected");
+      return wrapProtected(bytes, recipe.password, name);
+    },
+    [],
+  );
+
   const downloadCurrent = useCallback(async () => {
     const bytes = await bakeToBytes();
     if (!bytes || !active) return;
     const base = active.name.replace(/\.pdf$/i, "");
-    downloadBytes(bytes, `${base}-edited.pdf`);
-    toast.success("PDF downloaded");
-  }, [bakeToBytes, active]);
+    const out = await protectForDisk(active.id, bytes, active.name);
+    downloadBytes(out, `${base}-edited.pdf`);
+    toast.success(out === bytes ? "PDF downloaded" : "Protected PDF downloaded");
+  }, [bakeToBytes, active, protectForDisk]);
 
   /**
    * Save: write in place via the file handle when available, otherwise
@@ -1298,13 +1605,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!clean || `${clean}.pdf` === active.name) return;
       const next = `${clean}.pdf`;
       updateDoc(active.id, { name: next });
-      void persistDoc({
-        id: active.id,
-        name: next,
-        bytes: active.bytes,
-        lastOpened: Date.now(),
-        open: true,
-      }).then(refreshRecent);
+      // For a protected doc, never rewrite its IndexedDB record with the plain
+      // in-app bytes — leave the persisted protected form (and its old name)
+      // until the next save re-writes it protected.
+      if (protectionInfo.current.has(active.id)) {
+        void refreshRecent();
+      } else {
+        void persistDoc({
+          id: active.id,
+          name: next,
+          bytes: active.bytes,
+          lastOpened: Date.now(),
+          open: true,
+        }).then(refreshRecent);
+      }
       // Browsers can't rename a file through its handle — be explicit about
       // what the rename actually affects.
       toast.success(
@@ -1322,18 +1636,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const baked = await bakeToBytes();
       if (!baked) return;
+      // Protected docs go to disk re-protected; the in-app copy commits to the
+      // plain baked bytes below (it stays editable, exactly like the protect
+      // flow). This is why saving never strips a document's protection.
+      const out = await protectForDisk(active.id, baked, active.name);
+      const locked = out !== baked ? " (protected)" : "";
       if (handle) {
         if (handle.requestPermission) {
           const perm = await handle.requestPermission({ mode: "readwrite" });
           if (perm !== "granted") throw new Error("write permission denied");
         }
         const writable = await handle.createWritable();
-        await writable.write(baked as unknown as BufferSource);
+        await writable.write(out as unknown as BufferSource);
         await writable.close();
-        toast.success(`Saved to ${active.name}`);
+        toast.success(`Saved to ${active.name}${locked}`);
       } else {
-        downloadBytes(baked, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
-        toast.success("PDF saved (downloaded)");
+        downloadBytes(out, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
+        toast.success(`PDF saved (downloaded)${locked}`);
       }
       // Commit in-app state to the saved bytes.
       if (docHasEdits(active)) {
@@ -1355,7 +1674,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void persistDoc({
         id: active.id,
         name: active.name,
-        bytes: baked,
+        // Persist what's on disk — wrapped for locked docs, so a session
+        // restore prompts for the password again instead of bypassing it.
+        bytes: out,
         lastOpened: Date.now(),
         open: true,
       });
@@ -1367,7 +1688,256 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       await downloadCurrent();
     }
-  }, [active, bakeToBytes, downloadCurrent, updateDoc]);
+  }, [active, bakeToBytes, downloadCurrent, updateDoc, protectForDisk]);
+
+  const activeEncrypted = useMemo(
+    () => !!active?.pdf.isEncrypted(),
+    [active?.pdf],
+  );
+  // A doc that will be (re-)protected on save: an already-encrypted doc, or one
+  // with a protection recipe (e.g. protected this session but still editable).
+  const activeProtected =
+    activeEncrypted || (!!active && protectedIds.has(active.id));
+  const activeWrapped =
+    !!active &&
+    protectedIds.has(active.id) &&
+    protectionInfo.current.get(active.id)?.kind === "wrapper";
+
+  /**
+   * Password-protect: bake pending edits, encrypt with AES-256 (PDFium) and
+   * write the protected file in place (or download it). The in-app copy
+   * commits to the UNENCRYPTED baked bytes so editing continues without
+   * password prompts; reopening the file from disk will ask for the password.
+   *
+   * Proper two-password model: for restrictions to actually bind in viewers,
+   * the owner password must DIFFER from the user password (the SecurityModal
+   * enforces this) — otherwise anyone who can open the file holds owner
+   * rights and every flag is moot.
+   */
+  const protectDocument = useCallback(
+    async (opts: {
+      userPassword: string;
+      ownerPassword: string;
+      permissions: number;
+      /** Lock to PickPDF: other viewers show a notice page; the real document
+       *  travels inside it as an AES-256-GCM payload. */
+      pickpdfOnly?: boolean;
+    }) => {
+      if (!active) return;
+      const id = active.id;
+      const handle = docHandles.current.get(id);
+      try {
+        const baked = await bakeToBytes();
+        if (!baked) return;
+        // Build the recipe + protected bytes. PickPDF-lock is its OWN
+        // protection: the wrapper already makes the content unreadable outside
+        // PickPDF, so we don't ALSO permission-encrypt the inner document —
+        // that combination round-trips lossily (we can't recover the inner
+        // owner password when the wrapper is reopened).
+        let recipe: ProtectionRecipe;
+        let protectedBytes: Uint8Array;
+        if (opts.pickpdfOnly) {
+          recipe = { kind: "wrapper", password: opts.userPassword };
+          const { wrapProtected } = await import("./lib/protected");
+          protectedBytes = await wrapProtected(baked, opts.userPassword, active.name);
+        } else {
+          recipe = {
+            kind: "encrypt",
+            userPassword: opts.userPassword,
+            ownerPassword: opts.ownerPassword,
+            permissions: opts.permissions,
+          };
+          const { encryptPdf } = await import("./lib/pdfium");
+          protectedBytes = await encryptPdf(baked, opts);
+        }
+
+        // Write to disk FIRST — only register the recipe once the write
+        // actually succeeds, so a denied/failed write never turns future
+        // ordinary saves into protected writes with a password the user
+        // believes was never applied.
+        if (handle) {
+          if (handle.requestPermission) {
+            const perm = await handle.requestPermission({ mode: "readwrite" });
+            if (perm !== "granted") throw new Error("write permission denied");
+          }
+          const writable = await handle.createWritable();
+          await writable.write(protectedBytes as unknown as BufferSource);
+          await writable.close();
+          toast.success(
+            `Protection added — ${active.name} on disk now requires the password. The open copy stays editable.`,
+          );
+        } else {
+          downloadBytes(
+            protectedBytes,
+            `${active.name.replace(/\.pdf$/i, "")}-protected.pdf`,
+          );
+          toast.success("Protected PDF downloaded");
+        }
+
+        protectionInfo.current.set(id, recipe);
+        markProtected(id, true);
+
+        // Commit the in-app document to the (unencrypted) baked bytes, exactly
+        // like a normal save — the protected file holds the same content.
+        if (docHasEdits(active)) {
+          const nextPdf = await loadPdf(baked);
+          destroyDocProxies(active, nextPdf);
+          updateDoc(id, {
+            bytes: baked,
+            pdf: nextPdf,
+            annotations: {},
+            history: [{}],
+            bytesHistory: [{ bytes: baked, pdf: nextPdf }],
+            historyIndex: 0,
+            formValues: {},
+            fieldOps: {},
+          });
+          setDocVersion((v) => v + 1);
+          setSelected(null);
+        }
+        // Persist the on-disk protected bytes so a session restore re-prompts.
+        void persistDoc({
+          id,
+          name: active.name,
+          bytes: protectedBytes,
+          lastOpened: Date.now(),
+          open: true,
+        });
+        setEditModeState(false);
+      } catch (err) {
+        toast.error(
+          `Protect failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        );
+      }
+    },
+    [active, bakeToBytes, updateDoc, setEditModeState, markProtected],
+  );
+
+  /**
+   * Remove protection: decrypt the base bytes in place (kept on the undo
+   * timeline, annotations preserved). Requires OWNER rights, like every
+   * compliant tool — opening rights alone don't let you strip restrictions;
+   * the user is prompted for the permissions password when needed. The file
+   * on disk stays encrypted until the user saves.
+   */
+  const removePassword = useCallback(async () => {
+    if (!active) return;
+    const id = active.id;
+    // Protected THIS session (recipe present) — the in-app bytes are already
+    // plain, so dropping the recipe is enough; the next save writes an
+    // ordinary PDF. Covers both standard-encrypt and PickPDF-lock recipes and
+    // opened PickPDF wrappers (which decrypt to plain on open).
+    if (protectionInfo.current.has(id) && !active.pdf.isEncrypted()) {
+      protectionInfo.current.delete(id);
+      markProtected(id, false);
+      toast.success("Protection removed — save to write the unlocked file");
+      return;
+    }
+    // Opened from disk still-encrypted: decrypt in place. Requires OWNER
+    // rights — opening rights alone don't let you strip restrictions; prompt
+    // for the permissions password when needed.
+    const { decryptPdf, OwnerPasswordError } = await import("./lib/pdfium");
+    let password = active.pdf.password;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await commitInPlace((b) => decryptPdf(b, password));
+          break;
+        } catch (err) {
+          const needsOwner = err instanceof OwnerPasswordError;
+          const wrongPw = err instanceof Error && err.message === "Wrong password";
+          if ((!needsOwner && !wrongPw) || attempt >= 3) throw err;
+          const input = await requestPassword({
+            title: "Remove protection",
+            message: needsOwner
+              ? "Enter the permissions (owner) password to remove this document's protection."
+              : "Enter the document's password.",
+            error: attempt > 0 || wrongPw ? "That password wasn't accepted — try again." : undefined,
+          });
+          if (input === null) return;
+          password = input;
+        }
+      }
+      protectionInfo.current.delete(id);
+      markProtected(id, false);
+      toast.success("Protection removed — save to write the unlocked file");
+    } catch (err) {
+      toast.error(
+        `Remove protection failed: ${err instanceof Error ? err.message : "unknown error"}`,
+      );
+    }
+  }, [active, commitInPlace, markProtected, requestPassword]);
+
+  // --- Permission enforcement (honored like every compliant viewer) --------
+
+  /** Bumped after an in-session owner unlock so permissions recompute. */
+  const [permTick, setPermTick] = useState(0);
+
+  const docPermissions = useMemo(() => {
+    void permTick; // recompute after unlockPermissions
+    return active ? permissionsOf(active.pdf) : ALL_ALLOWED;
+    // Only the pdf proxy (swapped on every content edit) and an owner unlock
+    // change permissions; scoping to active.pdf avoids recomputing on every
+    // annotation/currentPage/formValue change to the same document.
+  }, [active?.pdf, permTick]);
+
+  // Live mirror of docPermissions for callbacks defined before it (applyBytesOp,
+  // setFormValue) — refs sidestep the hook-ordering / stale-closure problem.
+  const docPermissionsRef = useRef(docPermissions);
+  docPermissionsRef.current = docPermissions;
+
+  const unlockPermissions = useCallback(
+    (ownerPassword: string): boolean => {
+      if (!active) return false;
+      const ok = active.pdf.unlockOwner(ownerPassword);
+      if (ok) {
+        setPermTick((t) => t + 1);
+        toast.success("Permissions unlocked — full access granted");
+      } else {
+        toast.error("Wrong permissions password");
+      }
+      return ok;
+    },
+    [active],
+  );
+
+  /** Whether the document's permissions allow arming a given tool. */
+  const toolAllowed = useCallback(
+    (t: ToolKind): boolean => {
+      const p = docPermissions;
+      if (!p.restricted || t === "read") return true;
+      // True content-stream edits need the modify permission…
+      if (t === "edittext" || t === "redact") return p.modify;
+      // …form tools need form-fill (or modify)…
+      if (t.startsWith("form")) return p.fillForms || p.modify;
+      // …Select and Eraser primarily manage the annotation layer (move/delete
+      // what the user is allowed to place), so annotate is enough; everything
+      // else is annotation too. This is why placing a note then auto-switching
+      // to Select doesn't get rejected on an annotate-only document.
+      return p.annotate || p.modify;
+    },
+    [docPermissions],
+  );
+
+  /** Permission-honoring setTool: the single gate for toolbar AND shortcuts. */
+  const guardedSetTool = useCallback(
+    (t: ToolKind) => {
+      if (!toolAllowed(t)) {
+        toast.error(
+          "This document's permissions don't allow that. Unlock with the permissions password (File → Document security).",
+        );
+        return;
+      }
+      setTool(t);
+    },
+    [toolAllowed],
+  );
+
+  // Snap back to Read when the active document forbids the armed tool
+  // (e.g. switching tabs to a restricted document with an edit tool armed).
+  useEffect(() => {
+    if (!toolAllowed(tool)) setTool("read");
+  }, [toolAllowed, tool]);
 
   const [ocrBusy, setOcrBusy] = useState(false);
   const runOcrText = useCallback(async () => {
@@ -1415,13 +1985,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       setDocVersion((v) => v + 1);
       setSelected(null);
-      void persistDoc({
-        id,
-        name: active.name,
-        bytes: next,
-        lastOpened: Date.now(),
-        open: true,
-      });
+      persistWorking(id, active.name, next);
       toast.success(
         `OCR complete — ${wordCount.toLocaleString()} words. Search, copy and AI now work on this document.`,
         { id: toastId },
@@ -1433,13 +1997,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       setOcrBusy(false);
     }
-  }, [active, ocrBusy, updateDoc]);
+  }, [active, ocrBusy, updateDoc, persistWorking]);
 
   useEffect(() => {
     runOcrRef.current = runOcrText;
   }, [runOcrText]);
 
   const printCurrent = useCallback(async () => {
+    if (active && !permissionsOf(active.pdf).print) {
+      toast.error("This document's permissions don't allow printing.");
+      return;
+    }
     const bytes = await bakeToBytes();
     if (!bytes) return;
     const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
@@ -1461,7 +2029,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }, 60_000);
     };
     document.body.appendChild(iframe);
-  }, [bakeToBytes]);
+  }, [bakeToBytes, active]);
 
   /* ---------------- navigation & search ---------------- */
 
@@ -1587,6 +2155,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     applyObjectStyle,
     redactCount,
     applyRedactions,
+    activeEncrypted,
+    activeProtected,
+    activeWrapped,
+    protectDocument,
+    removePassword,
+    docPermissions,
+    unlockPermissions,
+    securityModalOpen,
+    setSecurityModalOpen,
+    passwordPrompt,
+    answerPassword,
     downloadCurrent,
     printCurrent,
     ocrBusy,
@@ -1601,7 +2180,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     editMode,
     setEditMode,
     tool,
-    setTool,
+    setTool: guardedSetTool,
     toolColor,
     highlightColor,
     setHighlightColor,

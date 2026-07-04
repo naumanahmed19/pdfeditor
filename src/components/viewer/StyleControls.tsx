@@ -11,10 +11,12 @@ import {
   Strikethrough,
   Underline,
 } from "lucide-react";
-import { Button } from "../ui/button";
+import { ColorPopover } from "../ui/color-popover";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Select } from "../ui/select";
+import { Separator } from "../ui/separator";
 import { Tip } from "../ui/tooltip";
+import { ToggleGroupItem } from "../ui/toggle-group";
 import { hexToRgb01 } from "../../lib/utils";
 import type { FontFamilyKind } from "../../types";
 
@@ -46,10 +48,40 @@ export interface TextStyleValue {
   align: "left" | "center" | "right";
 }
 
-const NEXT_ALIGN = { left: "center", center: "right", right: "left" } as const;
-const ALIGN_ICON = { left: AlignLeft, center: AlignCenter, right: AlignRight } as const;
+/** shadcn-style toggle: 32px square, primary fill when pressed. */
+function StyleToggle({
+  label,
+  icon: Icon,
+  pressed,
+  onPressedChange,
+}: {
+  label: string;
+  icon: typeof Bold;
+  pressed: boolean;
+  onPressedChange: (pressed: boolean) => void;
+}) {
+  return (
+    <Tip label={label}>
+      <ToggleGroupItem
+        value={label}
+        aria-label={label}
+        pressed={pressed}
+        onPressedChange={onPressedChange}
+        className="h-8 w-8 rounded-md data-[pressed]:!bg-primary data-[pressed]:!text-primary-foreground"
+      >
+        <Icon className="h-4 w-4" />
+      </ToggleGroupItem>
+    </Tip>
+  );
+}
 
-/** Canonical text styling row: swatch · family · size · B · I · U · S · align. */
+const ALIGN_OPTIONS = [
+  { v: "left", label: "Align left", icon: AlignLeft },
+  { v: "center", label: "Align center", icon: AlignCenter },
+  { v: "right", label: "Align right", icon: AlignRight },
+] as const;
+
+/** Canonical text styling row: family · size | B I U S | align | color. */
 export function TextStyleControls({
   value,
   onPatch,
@@ -57,19 +89,13 @@ export function TextStyleControls({
   value: TextStyleValue;
   onPatch: (p: Partial<TextStyleValue>) => void;
 }) {
-  const AlignIcon = ALIGN_ICON[value.align];
   return (
     <>
-      <ColorSwatch
-        value={value.color}
-        onChange={(v) => onPatch({ color: v })}
-        title="Text color"
-      />
       <Select
         value={value.fontFamily}
         onChange={(e) => onPatch({ fontFamily: e.target.value as FontFamilyKind })}
         aria-label="Font family"
-        className="h-7 w-24 px-2 text-xs"
+        className="h-8 w-24 px-2 text-xs"
       >
         {FONT_OPTIONS.map((f) => (
           <option key={f.v} value={f.v}>
@@ -81,7 +107,7 @@ export function TextStyleControls({
         value={String(value.fontSize)}
         onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
         aria-label="Font size"
-        className="h-7 w-[4.75rem] px-2 text-xs"
+        className="h-8 w-[4.75rem] px-2 text-xs"
       >
         {[...new Set([...FONT_SIZES, value.fontSize])]
           .sort((a, b) => a - b)
@@ -91,56 +117,47 @@ export function TextStyleControls({
             </option>
           ))}
       </Select>
-      <Tip label="Bold">
-        <Button
-          variant={value.bold ? "subtle" : "ghost"}
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => onPatch({ bold: !value.bold })}
-        >
-          <Bold className="h-3.5 w-3.5" />
-        </Button>
-      </Tip>
-      <Tip label="Italic">
-        <Button
-          variant={value.italic ? "subtle" : "ghost"}
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => onPatch({ italic: !value.italic })}
-        >
-          <Italic className="h-3.5 w-3.5" />
-        </Button>
-      </Tip>
-      <Tip label="Underline">
-        <Button
-          variant={value.underline ? "subtle" : "ghost"}
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => onPatch({ underline: !value.underline })}
-        >
-          <Underline className="h-3.5 w-3.5" />
-        </Button>
-      </Tip>
-      <Tip label="Strikethrough">
-        <Button
-          variant={value.strike ? "subtle" : "ghost"}
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => onPatch({ strike: !value.strike })}
-        >
-          <Strikethrough className="h-3.5 w-3.5" />
-        </Button>
-      </Tip>
-      <Tip label={`Align: ${value.align}`} desc="Click to cycle left / center / right">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => onPatch({ align: NEXT_ALIGN[value.align] })}
-        >
-          <AlignIcon className="h-3.5 w-3.5" />
-        </Button>
-      </Tip>
+      <Separator orientation="vertical" className="mx-0.5 h-6" />
+      <StyleToggle
+        label="Bold"
+        icon={Bold}
+        pressed={value.bold}
+        onPressedChange={(p) => onPatch({ bold: p })}
+      />
+      <StyleToggle
+        label="Italic"
+        icon={Italic}
+        pressed={value.italic}
+        onPressedChange={(p) => onPatch({ italic: p })}
+      />
+      <StyleToggle
+        label="Underline"
+        icon={Underline}
+        pressed={value.underline}
+        onPressedChange={(p) => onPatch({ underline: p })}
+      />
+      <StyleToggle
+        label="Strikethrough"
+        icon={Strikethrough}
+        pressed={value.strike}
+        onPressedChange={(p) => onPatch({ strike: p })}
+      />
+      <Separator orientation="vertical" className="mx-0.5 h-6" />
+      {ALIGN_OPTIONS.map((a) => (
+        <StyleToggle
+          key={a.v}
+          label={a.label}
+          icon={a.icon}
+          pressed={value.align === a.v}
+          onPressedChange={() => onPatch({ align: a.v })}
+        />
+      ))}
+      <Separator orientation="vertical" className="mx-0.5 h-6" />
+      <ColorPopover
+        label="Text color"
+        value={value.color}
+        onChange={(c) => c && onPatch({ color: c })}
+      />
     </>
   );
 }
@@ -269,39 +286,18 @@ export function StrokeWidthSelect({
   );
 }
 
-/** Canonical fill control: labelled chip with swatch + remove, or Add. */
+/** Canonical fill control: label + swatch popover with a "none" cell. */
 export function FillControl({
   value,
   onChange,
-  defaultColor = "#3b82f6",
 }: {
   value: string | null;
   onChange: (color: string | null) => void;
-  defaultColor?: string;
 }) {
   return (
-    <div className="flex h-7 items-center gap-1 rounded-md border border-input px-1.5">
-      <span className="text-[10px] font-medium text-muted-foreground">Fill</span>
-      {value ? (
-        <>
-          <ColorSwatch value={value} onChange={onChange} title="Fill color" className="h-5 w-5" />
-          <button
-            title="Remove fill"
-            onClick={() => onChange(null)}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            ×
-          </button>
-        </>
-      ) : (
-        <button
-          title="Add a fill color"
-          onClick={() => onChange(defaultColor)}
-          className="rounded px-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          None
-        </button>
-      )}
+    <div className="flex items-center gap-1">
+      <span className="text-xs font-medium text-muted-foreground">Fill</span>
+      <ColorPopover label="Fill color" value={value} onChange={onChange} allowNone />
     </div>
   );
 }

@@ -10,6 +10,8 @@ import {
   FileText,
   FolderOpen,
   LayoutGrid,
+  Lock,
+  LockOpen,
   PanelLeft,
   Printer,
   Save,
@@ -26,6 +28,7 @@ import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { PropertiesModal } from "../viewer/PropertiesModal";
+import { SecurityModal } from "../viewer/SecurityModal";
 import {
   Menu,
   MenuContent,
@@ -37,6 +40,7 @@ import { cn } from "../../lib/utils";
 import { isTauri } from "../../lib/tauri";
 import { WindowControls } from "./WindowControls";
 import { AboutModal } from "./AboutModal";
+import { PasswordModal } from "./PasswordModal";
 
 export function TitleBar() {
   const app = useApp();
@@ -88,6 +92,14 @@ export function TitleBar() {
       <MenuItem disabled={!app.pdf} onClick={() => setPropsOpen(true)}>
         <Info className="h-4 w-4 text-muted-foreground" />
         Document properties…
+      </MenuItem>
+      <MenuItem disabled={!app.pdf} onClick={() => app.setSecurityModalOpen(true)}>
+        {app.activeProtected ? (
+          <LockOpen className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <Lock className="h-4 w-4 text-muted-foreground" />
+        )}
+        {app.activeProtected ? "Document security…" : "Protect document…"}
       </MenuItem>
       <MenuSeparator />
       <MenuItem disabled={!app.pdf} onClick={() => app.closeDocument()}>
@@ -329,6 +341,11 @@ export function TitleBar() {
         </div>
       )}
       <PropertiesModal open={propsOpen} onClose={() => setPropsOpen(false)} />
+      <SecurityModal
+        open={app.securityModalOpen}
+        onClose={() => app.setSecurityModalOpen(false)}
+      />
+      <PasswordModal />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </header>
   );

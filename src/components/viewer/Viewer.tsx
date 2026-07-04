@@ -7,13 +7,11 @@ import {
   useState,
 } from "react";
 import {
-  Bold,
   Bot,
   Check,
   ChevronLeft,
   ChevronRight,
   FileText,
-  Italic,
   Maximize,
   MessageSquare,
   Minimize,
@@ -25,7 +23,6 @@ import {
 } from "lucide-react";
 import type { PdfDoc, PdfPage } from "../../lib/pdf";
 import { renderTextLayer } from "../../lib/pdf";
-import { FillControl, StrokeWidthSelect, TextStyleControls } from "./StyleControls";
 import { RichTextEditor, type RichTextHandle } from "./RichTextEditor";
 import {
   getRuns,
@@ -36,6 +33,7 @@ import {
   runsToHtml,
 } from "../../lib/richtext";
 import { activeTextEditor } from "../../lib/activeTextEditor";
+import { activeInlineEdit } from "../../lib/activeInlineEdit";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import type { Annotation, FormFieldAnnotation, NoteAnnotation, TextAnnotation } from "../../types";
@@ -70,44 +68,12 @@ function warnWhiteoutOnce() {
 /** Single source of truth for text line spacing (editor, display, sizing). */
 const TEXT_LINE_HEIGHT = 1.25;
 
-/**
- * Style values to show in the controls. When a box is being edited with a
- * selection, reflect the selection's resolved style so the swatch/size match
- * what you'd change; otherwise the box-level style.
- */
-function textStyleValue(ann: TextAnnotation) {
-  const editor = activeTextEditor.current;
-  const sel = editor?.annId === ann.id ? editor.selection?.() : null;
-  if (sel) {
-    const runs = getRuns(ann);
-    const at = <
-      K extends "color" | "fontSize" | "fontFamily" | "bold" | "italic" | "underline" | "strike",
-    >(
-      k: K,
-      fb: NonNullable<ReturnType<typeof rangeStyleValue<K>>>,
-    ) => rangeStyleValue(runs, sel.start, sel.end, k, ann) ?? fb;
-    return {
-      color: at("color", ann.color),
-      fontFamily: at("fontFamily", ann.fontFamily ?? "helvetica"),
-      fontSize: at("fontSize", ann.fontSize),
-      bold: at("bold", !!ann.bold),
-      italic: at("italic", !!ann.italic),
-      underline: at("underline", !!ann.underline),
-      strike: at("strike", !!ann.strike),
-      align: ann.align ?? ("left" as const),
-    };
-  }
-  return {
-    color: ann.color ?? "#111111",
-    fontFamily: ann.fontFamily ?? "helvetica",
-    fontSize: ann.fontSize,
-    bold: !!ann.bold,
-    italic: !!ann.italic,
-    underline: !!ann.underline,
-    strike: !!ann.strike,
-    align: ann.align ?? ("left" as const),
-  };
-}
+/** Pencil cursor for the freehand tool (lucide pencil with a white halo so it
+ *  reads on any page color); hotspot at the pencil tip, crosshair fallback. */
+const PENCIL_PATH =
+  "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z";
+const PENCIL_CURSOR = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='${PENCIL_PATH}' stroke='white' stroke-width='4.5' stroke-linejoin='round'/><path d='${PENCIL_PATH}' fill='%23111827' stroke='%23111827' stroke-width='1' stroke-linejoin='round'/></svg>") 2 22, crosshair`;
+
 
 function textAnnCss(ann: TextAnnotation): React.CSSProperties {
   const fallback =
@@ -844,7 +810,11 @@ function PageView({
   // (edittext). The Select tool grabs page OBJECTS instead (via ObjectLayer),
   // so text stays non-selectable there.
   const textSelectable =
-    (app.tool === "read" || app.tool === "edittext") && !app.pendingStamp;
+    (app.tool === "read" || app.tool === "edittext") &&
+    !app.pendingStamp &&
+    // Honor the copy restriction of protected documents (read-tool selection
+    // exists to copy; edittext is already gated by the modify permission).
+    (app.tool === "edittext" || app.docPermissions.copy);
 
   // "Edit existing text": clicking a text run maps the click to the real
   // PDFium content-stream text object and opens an inline editor over it. On
@@ -1151,6 +1121,25 @@ function InlineTextEditor({
     }
   }, []);
 
+  // Surface the style controls in the top toolbar's contextual row while this
+  // inline edit is open (instead of a separate floating bar).
+  useEffect(() => {
+    activeInlineEdit.set({
+      colorHex,
+      sizePt,
+      family,
+      bold,
+      italic,
+      saving,
+      setColorHex,
+      setSizePt,
+      setFamily,
+      toggleBold: () => setBold((v) => !v),
+      toggleItalic: () => setItalic((v) => !v),
+    });
+  }, [colorHex, sizePt, family, bold, italic, saving]);
+  useEffect(() => () => activeInlineEdit.set(null), []);
+
   // Commit once — guard against Enter followed by the unmount blur firing twice.
   const finish = () => {
     if (done.current) return;
@@ -1164,83 +1153,23 @@ function InlineTextEditor({
   const boxH = Math.max(edit.height, fontPx * 1.25);
   const top = edit.top + edit.height / 2 - boxH / 2;
 
-  const stepBtn =
-    "flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground";
-
   return (
     <div
       className="absolute z-30"
       style={{ left: edit.left, top }}
       onPointerDown={(e) => e.stopPropagation()}
-      // Commit when focus leaves the whole editor (bar or textarea).
+      // Commit when focus leaves the editor — but NOT when it moves to the top
+      // toolbar's style controls (tagged data-ann-controls), so changing font /
+      // size / color there keeps the edit open. `document.activeElement` is a
+      // fallback for native controls whose blur reports no relatedTarget.
       onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) finish();
+        const to = e.relatedTarget as HTMLElement | null;
+        if (e.currentTarget.contains(to)) return;
+        if (to?.closest?.("[data-ann-controls]")) return;
+        if (document.activeElement?.closest?.("[data-ann-controls]")) return;
+        finish();
       }}
     >
-      {/* Options bar: font, color, size. Native <select> (not the base-ui one)
-          so the dropdown doesn't portal focus out and commit prematurely. */}
-      <div className="absolute bottom-full left-0 mb-1 flex items-center gap-1.5 whitespace-nowrap rounded-md border bg-background px-1.5 py-1 shadow-md">
-        <select
-          value={family}
-          disabled={saving}
-          onChange={(e) => setFamily(e.target.value)}
-          title="Font"
-          className="h-6 rounded border border-input bg-background px-1 text-xs text-foreground"
-        >
-          <option value="helvetica">Helvetica</option>
-          <option value="times">Times</option>
-          <option value="courier">Courier</option>
-          <option value="carlito">Carlito</option>
-          <option value="caladea">Caladea</option>
-        </select>
-        <button
-          type="button"
-          className={cn(stepBtn, bold && "bg-accent text-foreground")}
-          title="Bold"
-          disabled={saving}
-          onClick={() => setBold((v) => !v)}
-        >
-          <Bold className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          className={cn(stepBtn, italic && "bg-accent text-foreground")}
-          title="Italic"
-          disabled={saving}
-          onClick={() => setItalic((v) => !v)}
-        >
-          <Italic className="h-3 w-3" />
-        </button>
-        <div className="mx-0.5 h-4 w-px bg-border" />
-        <ColorSwatch
-          value={colorHex}
-          disabled={saving}
-          onChange={setColorHex}
-          title="Text color"
-          className="h-5 w-5"
-        />
-        <div className="mx-0.5 h-4 w-px bg-border" />
-        <button
-          type="button"
-          className={stepBtn}
-          title="Smaller"
-          disabled={saving}
-          onClick={() => setSizePt((s) => Math.max(4, s - 1))}
-        >
-          −
-        </button>
-        <span className="w-6 text-center text-[11px] tabular-nums">{sizePt}</span>
-        <button
-          type="button"
-          className={stepBtn}
-          title="Larger"
-          disabled={saving}
-          onClick={() => setSizePt((s) => Math.min(200, s + 1))}
-        >
-          +
-        </button>
-      </div>
-
       <textarea
         ref={ref}
         value={value}
@@ -2570,6 +2499,11 @@ function AnnotationLayer({
             strokeWidth: app.strokeWidth,
             // Fill applies to rect/ellipse only (a line can't be filled).
             ...(app.tool !== "line" && app.toolFill ? { fill: app.toolFill } : {}),
+            // Keep the drag's diagonal direction — the box alone can't tell
+            // "\" from "/" (both normalize to the same rect).
+            ...(app.tool === "line"
+              ? { down: (draft.x1 - draft.x0) * (draft.y1 - draft.y0) > 0 }
+              : {}),
           });
         }
       }
@@ -2599,9 +2533,11 @@ function AnnotationLayer({
             ? "text"
             : app.tool === "note"
               ? "copy"
-              : drawingTool
-                ? "crosshair"
-                : "default",
+              : app.tool === "ink"
+                ? PENCIL_CURSOR
+                : drawingTool
+                  ? "crosshair"
+                  : "default",
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -3005,83 +2941,6 @@ function NoteEditor({
   );
 }
 
-function AnnotationProperties({
-  ann,
-  onPatch,
-  onDelete,
-}: {
-  ann: Annotation;
-  onPatch: (p: Partial<Annotation>) => void;
-  onDelete: () => void;
-}) {
-  const a = ann as any;
-  const k = ann.kind;
-  const isShape = k === "rect" || k === "ellipse" || k === "line";
-  const isFillable = k === "rect" || k === "ellipse";
-  const hasStroke = isShape || k === "ink";
-  const isText = k === "text";
-  // Text gets its swatch from TextStyleControls.
-  const hasColor = isShape || k === "ink" || k === "highlight" || k === "whiteout";
-  const colorLabel = k === "whiteout" ? "Patch" : isShape || k === "ink" ? "Stroke" : "Color";
-
-  return (
-    <>
-      {isText && (
-        <TextStyleControls
-          value={textStyleValue(ann as TextAnnotation)}
-          onPatch={(p) => {
-            // Alignment is a box property — always patch the annotation.
-            const { align, ...runPatch } = p;
-            if (align !== undefined) onPatch({ align } as Partial<Annotation>);
-            if (!Object.keys(runPatch).length) return;
-            const editor = activeTextEditor.current;
-            // Editing → style the current selection; an empty box has nothing
-            // to style yet (applyStyle returns false) → patch the box itself.
-            if (editor && editor.annId === ann.id && editor.applyStyle(runPatch)) return;
-            onPatch({
-              ...runPatch,
-              ...(runPatch.fontFamily !== undefined ? { displayFontCss: undefined } : {}),
-            } as Partial<Annotation>);
-          }}
-        />
-      )}
-
-      {hasColor && (
-        <ColorSwatch
-          value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
-          onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
-          title={colorLabel}
-        />
-      )}
-
-      {hasStroke && (
-        <StrokeWidthSelect
-          value={a.strokeWidth ?? 2}
-          onChange={(w) => onPatch({ strokeWidth: w } as Partial<Annotation>)}
-        />
-      )}
-
-      {isFillable && (
-        <FillControl
-          value={a.fill ?? null}
-          onChange={(c) => onPatch({ fill: c ?? undefined } as Partial<Annotation>)}
-        />
-      )}
-
-      <div className="h-4 w-px bg-border" />
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-        title="Delete"
-        onClick={onDelete}
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </Button>
-    </>
-  );
-}
-
 function AnnotationItem({
   ann,
   pageIndex,
@@ -3184,6 +3043,13 @@ function AnnotationItem({
       app.removeAnnotation(pageIndex, ann.id);
       return;
     }
+    // Eraser removes whatever element is clicked, regardless of kind.
+    if (app.tool === "eraser") {
+      e.stopPropagation();
+      e.preventDefault();
+      app.removeAnnotation(pageIndex, ann.id);
+      return;
+    }
     if (app.tool !== "select") return;
     e.stopPropagation();
     e.preventDefault();
@@ -3240,20 +3106,26 @@ function AnnotationItem({
 
   // Comment markers stay clickable while reading (comments are for readers
   // too); with the highlighter armed, clicking an existing highlight removes
-  // it (browser-style un-highlight); everything else needs the Select tool.
+  // it (browser-style un-highlight); the eraser removes any element it
+  // touches; everything else needs the Select tool.
   const selectable = app.tool === "select" && !ann.locked;
   const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
   const unhighlight =
     ann.kind === "highlight" && app.tool === "highlight" && !ann.locked;
+  const erasable = app.tool === "eraser" && !ann.locked;
   const style: React.CSSProperties = {
     position: "absolute",
     left: box.x * scale,
     top: box.y * scale,
     width: box.w * scale,
     height: box.h * scale,
-    pointerEvents: selectable || noteInRead || unhighlight ? "auto" : "none",
-    cursor: selectable ? "move" : noteInRead || unhighlight ? "pointer" : "default",
-    touchAction: selectable ? "none" : "auto",
+    pointerEvents: selectable || noteInRead || unhighlight || erasable ? "auto" : "none",
+    cursor: selectable
+      ? "move"
+      : noteInRead || unhighlight || erasable
+        ? "pointer"
+        : "default",
+    touchAction: selectable || erasable ? "none" : "auto",
   };
 
   let body: React.ReactNode = null;
@@ -3327,9 +3199,9 @@ function AnnotationItem({
         <svg className="h-full w-full overflow-visible" preserveAspectRatio="none" viewBox={`0 0 ${Math.max(1, box.w)} ${Math.max(1, box.h)}`}>
           <line
             x1={0}
-            y1={box.h}
+            y1={ann.down ? 0 : box.h}
             x2={box.w}
-            y2={0}
+            y2={ann.down ? box.h : 0}
             stroke={ann.color}
             strokeWidth={ann.strokeWidth}
             strokeLinecap="round"
@@ -3471,12 +3343,19 @@ function AnnotationItem({
           ? "rounded-md border-2 border-dashed border-blue-400"
           : isSelected && "ring-2 ring-blue-500 ring-offset-1",
         isEmptyText && "bg-blue-50/40",
+        erasable && "hover:ring-2 hover:ring-red-400/80",
         !isSelected &&
+          !erasable &&
           (ann.kind === "text"
             ? selectable && "hover:rounded-md hover:border-2 hover:border-dashed hover:border-blue-400/60"
             : (selectable || noteInRead) && "hover:ring-1 hover:ring-blue-400/60"),
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
+      onPointerEnter={(e) => {
+        // Drag-erase: sweeping across elements with the button held removes
+        // each one entered (the pointerdown already removed the first).
+        if (erasable && e.buttons & 1) app.removeAnnotation(pageIndex, ann.id);
+      }}
       onDoubleClick={(e) => {
         if (ann.kind === "text") {
           e.stopPropagation();
@@ -3535,11 +3414,12 @@ function AnnotationItem({
           </PopoverContent>
         </Popover>
       )}
-      {ann.kind !== "formfield" && !ann.locked && (
+      {ann.kind === "note" && !ann.locked && (
         <Popover
-          // Text keeps its style controls visible WHILE editing so color /
-          // font can be changed mid-type; other kinds show them when selected.
-          open={isSelected && (ann.kind === "text" || !editing)}
+          // Comments keep their own popup (you type the note text in it). Every
+          // other annotation's style controls now live in the toolbar's second
+          // row, so no floating properties popover for them.
+          open={isSelected}
           onOpenChange={(o: boolean, details?: { reason?: string; event?: Event }) => {
             if (o) return;
             const age = performance.now() - selectedAt.current;
@@ -3562,9 +3442,6 @@ function AnnotationItem({
               ) {
                 return;
               }
-              // While a text box is being edited, the editor's blur/commit
-              // owns ending the session — never the popover's outside-press.
-              if (ann.kind === "text" && editing) return;
               // The trusted click that finishes placing/selecting lands
               // outside the freshly-mounted popup — ignore that tail.
               if (age < 500) return;
@@ -3580,29 +3457,15 @@ function AnnotationItem({
             sideOffset={10}
             className="flex flex-wrap items-center gap-2 px-2 py-1.5"
             onPointerDown={(e) => e.stopPropagation()}
-            // A text box being typed into must keep the caret focused — Base
-            // UI's popover normally grabs focus for accessibility, which was
-            // silently stealing it from the just-mounted RichTextEditor.
-            initialFocus={ann.kind === "text" && editing ? false : undefined}
           >
-            {ann.kind === "note" ? (
-              <NoteEditor
-                ann={ann}
-                draftRef={noteDraftRef}
-                onPatch={(p) =>
-                  app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
-                }
-                onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
-              />
-            ) : (
-              <AnnotationProperties
-                ann={ann}
-                onPatch={(p) =>
-                  app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
-                }
-                onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
-              />
-            )}
+            <NoteEditor
+              ann={ann}
+              draftRef={noteDraftRef}
+              onPatch={(p) =>
+                app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+              }
+              onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
+            />
           </PopoverContent>
         </Popover>
       )}

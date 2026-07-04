@@ -824,6 +824,109 @@ function saveAsCopy(mod: WrappedPdfiumModule, doc: number): Uint8Array {
   return out;
 }
 
+// --- Password protection (AES-256) -----------------------------------------
+
+/**
+ * PDF permission bits (spec table 22). What the USER password holder may do;
+ * the owner password always has full access. Never cryptographically enforced
+ * — compliant viewers honor them, but they are advisory.
+ */
+export const PDF_PERMISSIONS = {
+  print: 4,
+  modifyContents: 8,
+  copyContents: 16,
+  modifyAnnotations: 32,
+  fillForms: 256,
+  extractForAccessibility: 512,
+  assembleDocument: 1024,
+  printHighQuality: 2048,
+  allowAll: 3900,
+} as const;
+
+export interface EncryptOptions {
+  /** Password required to OPEN the document ("" = none; anyone can open). */
+  userPassword: string;
+  /** Password that unlocks full permissions. Required by PDFium. */
+  ownerPassword: string;
+  /** OR'd PDF_PERMISSIONS bits granted to the user-password holder. */
+  permissions: number;
+}
+
+/**
+ * Encrypt a document with AES-256 (PDF 2.0 security handler, revision 6).
+ * The input must not already be encrypted. Returns fresh encrypted bytes.
+ */
+export async function encryptPdf(
+  bytes: Uint8Array,
+  opts: EncryptOptions,
+): Promise<Uint8Array> {
+  return withDoc(bytes, (mod, doc) => {
+    const ok = mod.EPDF_SetEncryption(
+      doc,
+      opts.userPassword,
+      opts.ownerPassword,
+      opts.permissions,
+    );
+    if (!ok) {
+      throw new Error(
+        "PDFium: could not set encryption (is the document already encrypted?)",
+      );
+    }
+    return saveAsCopy(mod, doc);
+  });
+}
+
+/** Thrown when removing protection needs the owner (permissions) password. */
+export class OwnerPasswordError extends Error {
+  constructor() {
+    super("The permissions (owner) password is required");
+    this.name = "OwnerPasswordError";
+  }
+}
+
+/**
+ * Remove encryption: open with `password` and save a fully decrypted copy.
+ * Requires OWNER rights — opening with the user password alone (or no password
+ * on a restrictions-only file) throws OwnerPasswordError instead of silently
+ * stripping the document's restrictions. Returns fresh bytes that open
+ * everywhere without a password.
+ */
+export async function decryptPdf(
+  bytes: Uint8Array,
+  password: string,
+): Promise<Uint8Array> {
+  const mod = await getPdfium();
+  const rt = runtime(mod);
+  const filePtr = toHeap(mod, bytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, password);
+  if (!doc) {
+    const err = mod.FPDF_GetLastError();
+    rt.wasmExports.free(filePtr);
+    throw new Error(
+      err === 4
+        ? "Wrong password"
+        : `PDFium: could not open document (err ${err})`,
+    );
+  }
+  try {
+    // Opening with the owner password grants owner rights implicitly; a user
+    // password (or "" on a restrictions-only file) does not — try to elevate
+    // with the same string, then refuse rather than bypass the restrictions.
+    if (!mod.EPDF_IsOwnerUnlocked(doc)) {
+      if (!password || !mod.EPDF_UnlockOwnerPermissions(doc, password)) {
+        throw new OwnerPasswordError();
+      }
+    }
+    if (!mod.EPDF_RemoveEncryption(doc)) {
+      throw new Error("PDFium: could not remove encryption");
+    }
+    return saveAsCopy(mod, doc);
+  } finally {
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+}
+
 /** Render a page straight onto a canvas element (creates one if omitted). */
 export async function renderPageToCanvas(
   bytes: Uint8Array,

@@ -10,6 +10,7 @@ export type ToolKind =
   | "ellipse"
   | "line"
   | "whiteout"
+  | "eraser"
   | "redact"
   | "image"
   | "signature"
@@ -101,6 +102,9 @@ export interface ShapeAnnotation extends BaseAnnotation {
   strokeWidth: number;
   /** Fill color for rect/ellipse; omitted = no fill (outline only). */
   fill?: string;
+  /** Line direction within its box: true = top-left → bottom-right ("\"),
+   *  false/unset = bottom-left → top-right ("/"). Lines only. */
+  down?: boolean;
 }
 
 export interface InkAnnotation extends BaseAnnotation {
