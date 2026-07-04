@@ -15,6 +15,7 @@ import {
   FileText,
   Italic,
   Maximize,
+  MessageSquare,
   Minimize,
   MoveHorizontal,
   Scan,
@@ -26,10 +27,11 @@ import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { pdfjsLib } from "../../lib/pdf";
 import { toast } from "sonner";
 import { useApp } from "../../store";
-import type { Annotation, FormFieldAnnotation, TextAnnotation } from "../../types";
+import type { Annotation, FormFieldAnnotation, NoteAnnotation, TextAnnotation } from "../../types";
 import { cn, uid } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { ColorSwatch } from "../ui/color-swatch";
 import { Input } from "../ui/input";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Select } from "../ui/select";
@@ -1156,13 +1158,12 @@ function InlineTextEditor({
           <Italic className="h-3 w-3" />
         </button>
         <div className="mx-0.5 h-4 w-px bg-border" />
-        <input
-          type="color"
+        <ColorSwatch
           value={colorHex}
           disabled={saving}
-          onChange={(e) => setColorHex(e.target.value)}
+          onChange={setColorHex}
           title="Text color"
-          className="h-5 w-5 cursor-pointer rounded border border-input bg-background p-0.5"
+          className="h-5 w-5"
         />
         <div className="mx-0.5 h-4 w-px bg-border" />
         <button
@@ -1265,7 +1266,7 @@ function ColorChip({
     >
       <span className="text-[10px] font-medium text-muted-foreground">{label}</span>
       <label
-        className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded border border-border"
+        className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded-full border border-black/15 shadow-sm dark:border-white/20"
         style={{ backgroundColor: preview }}
         title="Change color"
       >
@@ -2291,6 +2292,7 @@ function AnnotationLayer({
   const [draft, setDraft] = useState<DraftShape | null>(null);
   const [inkPoints, setInkPoints] = useState<Array<{ x: number; y: number }>>([]);
   const drawing = useRef(false);
+  const notePending = useRef<{ x: number; y: number } | null>(null);
 
   const anns = app.annotations[pageIndex] ?? [];
   const drawingTool = [
@@ -2364,6 +2366,15 @@ function AnnotationLayer({
       return;
     }
 
+    if (app.tool === "note") {
+      // Only remember the spot — the note is created on pointerUP. Creating
+      // it here would mount the popover mid-gesture, and the finishing
+      // pointerup/click lands outside the popup and dismisses it instantly.
+      e.preventDefault();
+      notePending.current = toLocal(e);
+      return;
+    }
+
     if (!drawingTool) {
       app.setSelected(null);
       return;
@@ -2399,6 +2410,25 @@ function AnnotationLayer({
   };
 
   const onPointerUp = () => {
+    if (notePending.current && app.tool === "note") {
+      const p = notePending.current;
+      notePending.current = null;
+      const ann: NoteAnnotation = {
+        id: uid(),
+        kind: "note",
+        x: p.x,
+        y: p.y,
+        w: 22,
+        h: 22,
+        text: "",
+        color: "#facc15",
+      };
+      app.addAnnotation(pageIndex, ann);
+      app.setSelected({ page: pageIndex, id: ann.id });
+      app.setTool("select");
+      return;
+    }
+
     if (!drawing.current) return;
     drawing.current = false;
 
@@ -2496,23 +2526,29 @@ function AnnotationLayer({
   };
 
   const interactive =
-    drawingTool || app.tool === "text" || !!app.pendingStamp || app.tool === "select";
+    drawingTool ||
+    app.tool === "text" ||
+    app.tool === "note" ||
+    !!app.pendingStamp ||
+    app.tool === "select";
 
   return (
     <div
       ref={layerRef}
       className="absolute inset-0"
       style={{
-        pointerEvents: interactive && (drawingTool || app.tool === "text" || app.pendingStamp) ? "auto" : "none",
+        pointerEvents: interactive && (drawingTool || app.tool === "text" || app.tool === "note" || app.pendingStamp) ? "auto" : "none",
         // Prevent the page from scrolling under a drawing/placement gesture.
         touchAction: drawingTool || app.pendingStamp ? "none" : "auto",
         cursor: app.pendingStamp
           ? "copy"
           : app.tool === "text"
             ? "text"
-            : drawingTool
-              ? "crosshair"
-              : "default",
+            : app.tool === "note"
+              ? "copy"
+              : drawingTool
+                ? "crosshair"
+                : "default",
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -2829,11 +2865,9 @@ function FieldProperties({
         <div className="flex items-center justify-between gap-2">
           <span className={lbl}>Border</span>
           <div className="flex items-center gap-1">
-            <input
-              type="color"
+            <ColorSwatch
               value={ann.borderColor ?? "#9ca8c8"}
-              onChange={(e) => onPatch({ borderColor: e.target.value })}
-              className="h-6 w-6 rounded border border-input bg-background p-0.5"
+              onChange={(v) => onPatch({ borderColor: v })}
               title="Border color"
             />
             <Select
@@ -2866,11 +2900,10 @@ function FieldProperties({
           <span className={lbl}>Background</span>
           {ann.backgroundColor ? (
             <div className="flex items-center gap-1">
-              <input
-                type="color"
+              <ColorSwatch
                 value={ann.backgroundColor}
-                onChange={(e) => onPatch({ backgroundColor: e.target.value })}
-                className="h-6 w-6 rounded border border-input bg-background p-0.5"
+                onChange={(v) => onPatch({ backgroundColor: v })}
+                title="Background color"
               />
               <Button
                 variant="ghost"
@@ -2899,6 +2932,7 @@ function FieldProperties({
 
 const ANN_KIND_LABEL: Record<string, string> = {
   text: "Text",
+  note: "Comment",
   highlight: "Highlight",
   whiteout: "Whiteout",
   rect: "Rectangle",
@@ -2921,6 +2955,70 @@ const ANN_FONTS: Array<{ v: string; label: string }> = [
  * form fields, which have their own richer panel). Shows the controls relevant
  * to the kind — color, fill, stroke width, font — plus delete.
  */
+/** Comment editor shown in the note's popover. Commits on blur (clicking
+ *  outside moves focus out of the popup first); an empty comment is removed
+ *  by AnnotationItem when the note is deselected. NOTE: no unmount-commit —
+ *  StrictMode runs effect cleanups on mount and would delete fresh notes. */
+function NoteEditor({
+  ann,
+  draftRef,
+  onPatch,
+  onDelete,
+}: {
+  ann: NoteAnnotation;
+  /** Live draft, readable by AnnotationItem when the popover is dismissed
+   *  before blur can commit (outside-press closes on pointerdown). */
+  draftRef: React.MutableRefObject<string | null>;
+  onPatch: (p: Partial<Annotation>) => void;
+  onDelete: () => void;
+}) {
+  const [text, setText] = useState(ann.text);
+
+  return (
+    <div className="flex w-60 flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Comment
+        </span>
+        <div className="flex items-center gap-1">
+          <ColorSwatch
+            value={ann.color}
+            onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
+            title="Marker color"
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            title="Delete comment"
+            onClick={onDelete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+      <Textarea
+        autoFocus={!ann.text}
+        rows={3}
+        value={text}
+        placeholder="Write a comment…"
+        className="min-h-16 text-xs"
+        onChange={(e) => {
+          setText(e.target.value);
+          draftRef.current = e.target.value;
+        }}
+        onBlur={() => {
+          if (!text.trim()) {
+            if (ann.text) onDelete();
+          } else if (text !== ann.text) {
+            onPatch({ text } as Partial<Annotation>);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 function AnnotationProperties({
   ann,
   onPatch,
@@ -2946,7 +3044,6 @@ function AnnotationProperties({
         ? "Stroke"
         : "Color";
   const lbl = "flex items-center gap-1 text-[10px] font-medium text-muted-foreground";
-  const swatch = "h-6 w-6 cursor-pointer rounded border border-input bg-background p-0.5";
 
   return (
     <>
@@ -2957,11 +3054,10 @@ function AnnotationProperties({
       {hasColor && (
         <label className={lbl}>
           {colorLabel}
-          <input
-            type="color"
+          <ColorSwatch
             value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
-            onChange={(e) => onPatch({ color: e.target.value } as Partial<Annotation>)}
-            className={swatch}
+            onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
+            title={colorLabel}
           />
         </label>
       )}
@@ -2971,11 +3067,10 @@ function AnnotationProperties({
           Fill
           {a.fill ? (
             <>
-              <input
-                type="color"
+              <ColorSwatch
                 value={a.fill}
-                onChange={(e) => onPatch({ fill: e.target.value } as Partial<Annotation>)}
-                className={swatch}
+                onChange={(v) => onPatch({ fill: v } as Partial<Annotation>)}
+                title="Fill color"
               />
               <Button
                 variant="ghost"
@@ -3098,6 +3193,30 @@ function AnnotationItem({
   );
   const editRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Commit the comment draft when the note is deselected — the popover can
+  // be dismissed on pointerDOWN, before the textarea's blur ever fires, so
+  // blur alone loses text typed right before clicking away. An empty note
+  // is dropped instead. (Transition-based, not unmount-based: StrictMode
+  // remounts must not delete a note the user is about to type into.)
+  const wasSelected = useRef(isSelected);
+  const selectedAt = useRef(0);
+  const noteDraftRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (isSelected) selectedAt.current = performance.now();
+    if (wasSelected.current && !isSelected && ann.kind === "note") {
+      const draft = noteDraftRef.current;
+      noteDraftRef.current = null;
+      const finalText = draft ?? ann.text;
+      if (!finalText.trim()) {
+        app.removeAnnotation(pageIndex, ann.id);
+      } else if (finalText !== ann.text) {
+        app.updateAnnotation(pageIndex, { ...ann, text: finalText });
+      }
+    }
+    wasSelected.current = isSelected;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSelected]);
+
   // Open the editor when requested externally (e.g. "edit existing text").
   useEffect(() => {
     if (app.editRequestId === ann.id && ann.kind === "text") {
@@ -3219,6 +3338,21 @@ function AnnotationItem({
 
   let body: React.ReactNode = null;
   switch (ann.kind) {
+    case "note":
+      body = (
+        <div
+          className="flex h-full w-full items-center justify-center rounded-md shadow-sm ring-1 ring-black/15"
+          style={{ background: ann.color }}
+          title={ann.text || "Comment"}
+        >
+          <MessageSquare
+            className="h-[62%] w-[62%] text-black/55"
+            fill="currentColor"
+            strokeWidth={0}
+          />
+        </div>
+      );
+      break;
     case "highlight":
       body = (
         <div
@@ -3415,7 +3549,7 @@ function AnnotationItem({
       }}
     >
       {body}
-      {isSelected && (
+      {isSelected && ann.kind !== "note" && (
         <div
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
           onPointerDown={(e) => beginDrag(e, "resize")}
@@ -3448,8 +3582,26 @@ function AnnotationItem({
       {ann.kind !== "formfield" && !ann.locked && (
         <Popover
           open={isSelected && !editing}
-          onOpenChange={(o: boolean) => {
-            if (!o) app.setSelected(null);
+          onOpenChange={(o: boolean, details?: { reason?: string }) => {
+            if (o) return;
+            const age = performance.now() - selectedAt.current;
+            if (ann.kind === "note" && import.meta.env.DEV) {
+              // Debug trace for popover dismissal issues.
+              console.debug(
+                `[note] close requested — reason: ${details?.reason ?? "?"}, ${Math.round(age)}ms after open`,
+              );
+            }
+            // The trusted click/focus shift that finishes the placement
+            // gesture arrives right after the popover mounts and reads as an
+            // outside press — ignore dismissals in that window.
+            if (
+              ann.kind === "note" &&
+              age < 500 &&
+              (details?.reason === "outside-press" || details?.reason === "focus-out")
+            ) {
+              return;
+            }
+            app.setSelected(null);
           }}
         >
           <PopoverContent
@@ -3460,13 +3612,24 @@ function AnnotationItem({
             className="flex flex-wrap items-center gap-2 px-2 py-1.5"
             onPointerDown={(e) => e.stopPropagation()}
           >
-            <AnnotationProperties
-              ann={ann}
-              onPatch={(p) =>
-                app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
-              }
-              onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
-            />
+            {ann.kind === "note" ? (
+              <NoteEditor
+                ann={ann}
+                draftRef={noteDraftRef}
+                onPatch={(p) =>
+                  app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+                }
+                onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
+              />
+            ) : (
+              <AnnotationProperties
+                ann={ann}
+                onPatch={(p) =>
+                  app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+                }
+                onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
+              />
+            )}
           </PopoverContent>
         </Popover>
       )}

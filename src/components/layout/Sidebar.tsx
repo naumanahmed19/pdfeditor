@@ -10,6 +10,7 @@ import {
   FolderOpen,
   History,
   Loader2,
+  MessageSquare,
   Plus,
   X,
 } from "lucide-react";
@@ -17,11 +18,11 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useApp, type RecentFile } from "../../store";
 import { cn } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
-import type { FolderNode, OutlineNode } from "../../types";
+import type { FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 
 export function Sidebar() {
   const app = useApp();
-  const [tab, setTab] = useState<"pages" | "outline" | "recent">("recent");
+  const [tab, setTab] = useState<"pages" | "outline" | "comments" | "recent">("recent");
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
   const activeTab = app.pdf ? tab : "recent";
@@ -60,6 +61,13 @@ export function Sidebar() {
                 label="Outline"
                 iconOnly
               />
+              <TabButton
+                active={activeTab === "comments"}
+                onClick={() => setTab("comments")}
+                icon={<MessageSquare className="h-4 w-4" />}
+                label="Comments"
+                iconOnly
+              />
             </div>
           )}
         </div>
@@ -67,11 +75,66 @@ export function Sidebar() {
           <ThumbnailList />
         ) : app.pdf && activeTab === "outline" ? (
           <OutlinePanel pdf={app.pdf} />
+        ) : app.pdf && activeTab === "comments" ? (
+          <CommentsPanel />
         ) : (
           <RecentList />
         )}
       </div>
     </aside>
+  );
+}
+
+/** All note annotations across pages, with click-to-jump. */
+function CommentsPanel() {
+  const app = useApp();
+  const notes: Array<{ page: number; ann: NoteAnnotation }> = [];
+  for (const [p, list] of Object.entries(app.annotations)) {
+    for (const a of list) {
+      if (a.kind === "note") notes.push({ page: Number(p), ann: a });
+    }
+  }
+  notes.sort((a, b) => a.page - b.page || a.ann.y - b.ann.y);
+
+  if (!notes.length) {
+    return (
+      <p className="px-4 py-3 text-xs text-muted-foreground">
+        No comments yet. Use the comment tool{" "}
+        <MessageSquare className="inline h-3 w-3 align-[-2px]" /> in Edit mode
+        to add one.
+      </p>
+    );
+  }
+
+  return (
+    <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div className="flex flex-col gap-1.5">
+        {notes.map(({ page, ann }) => (
+          <button
+            key={ann.id}
+            onClick={() => {
+              app.scrollToPage(page);
+              app.setSelected({ page, id: ann.id });
+              if (app.isMobile) app.setSidebarOpen(false);
+            }}
+            className="rounded-md border border-sidebar-border bg-background px-2.5 py-2 text-left text-xs shadow-sm transition-colors hover:bg-accent"
+          >
+            <span className="flex items-center gap-1.5 pb-1">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                style={{ background: ann.color }}
+              />
+              <span className="text-[10px] font-medium text-muted-foreground">
+                Page {page + 1}
+              </span>
+            </span>
+            <span className="line-clamp-3 whitespace-pre-wrap">
+              {ann.text || "(empty comment)"}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
