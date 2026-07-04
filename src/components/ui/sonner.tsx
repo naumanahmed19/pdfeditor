@@ -18,6 +18,12 @@ export function Toaster(props: ToasterProps) {
             "group-[.toast]:rounded-md group-[.toast]:bg-primary group-[.toast]:px-2.5 group-[.toast]:text-primary-foreground",
           cancelButton:
             "group-[.toast]:rounded-md group-[.toast]:bg-muted group-[.toast]:px-2.5 group-[.toast]:text-muted-foreground",
+          // Neutral background (no richColors) — color lives only on the type
+          // icon. Sonner's icons use currentColor, so tint the icon wrapper.
+          success: "[&_[data-icon]]:!text-emerald-600 dark:[&_[data-icon]]:!text-emerald-400",
+          error: "[&_[data-icon]]:!text-red-600 dark:[&_[data-icon]]:!text-red-400",
+          warning: "[&_[data-icon]]:!text-amber-500 dark:[&_[data-icon]]:!text-amber-400",
+          info: "[&_[data-icon]]:!text-sky-600 dark:[&_[data-icon]]:!text-sky-400",
           // Move the close button from its floating top-left corner to inside
           // the toast, vertically centered on the right, as a plain icon.
           closeButton:
