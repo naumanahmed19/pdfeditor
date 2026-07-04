@@ -3341,14 +3341,15 @@ function AnnotationItem({
     case "note":
       body = (
         <div
-          className="flex h-full w-full items-center justify-center rounded-md shadow-sm ring-1 ring-black/15"
-          style={{ background: ann.color }}
+          className="flex h-full w-full items-center justify-center"
           title={ann.text || "Comment"}
         >
           <MessageSquare
-            className="h-[62%] w-[62%] text-black/55"
+            className="h-full w-full drop-shadow-sm"
+            style={{ color: ann.color }}
             fill="currentColor"
-            strokeWidth={0}
+            stroke="rgba(0,0,0,0.35)"
+            strokeWidth={1}
           />
         </div>
       );
