@@ -63,3 +63,56 @@ Replace it with a dedicated form-builder experience:
       cryptographic signing does not
 - [ ] Search across text-run boundaries, case/whole-word options
 - [ ] Two-page spread view
+
+## Feature gaps (not yet started)
+
+Absent capabilities users coming from Acrobat / PDF-XChange / Sejda expect,
+plus a few differentiators. Roughly ordered by effort-to-value within each group.
+
+### Annotation quick wins (cheap — the annotation pipeline already exists)
+
+- [ ] Underline / strikethrough / squiggly markup on EXISTING document text
+      (same select-then-mark path as highlight-from-selection)
+- [ ] Arrows and callouts (arrow = the line tool + a head)
+- [ ] Predefined stamps — APPROVED / DRAFT / CONFIDENTIAL / date stamps
+      (reuse the image-stamp mechanism from signatures)
+- [ ] Copy / paste / duplicate annotations (only pages can be duplicated today)
+
+### Document tools
+
+- [ ] Compress / optimize (image downsampling, reduce file size) — a staple
+      absent from the Tools screen
+- [ ] Crop pages / resize page boxes
+- [ ] Outline / bookmark EDITING (add / rename / remove entries; reading exists)
+- [ ] Custom headers / footers — text, date, page-range; more than the two
+      bottom page-number positions available now (Bates numbering fits here)
+- [ ] Attachments panel — view / add embedded files
+- [ ] Explicit Flatten command (baking happens implicitly on save today)
+
+### Export
+
+- [ ] Export to Word / plain text / HTML (only per-page PNG export exists,
+      despite text already being extracted for the AI assistant)
+
+### AI differentiators
+
+- [ ] AI form-fill — "fill this form from this document / text" (local AI +
+      the existing form filler make this a natural, differentiating combo)
+- [ ] Semantic search / RAG over the document (chat currently sends raw
+      extracted text; embeddings would handle long documents)
+- [ ] Document comparison / visual diff of two PDFs (PDFium rasterization
+      makes a pixel diff feasible)
+
+### Viewer / print
+
+- [ ] Hand / pan tool
+- [ ] Print options — page range, scale (currently just window.print via iframe)
+
+### Housekeeping
+
+- [ ] Internationalization (i18n) — English-only today
+- [ ] Autosave / backup / file versioning
+- [ ] Test infrastructure (no unit/integration tests exist)
+- [ ] PDF/A conversion or validation
+- [ ] Accessibility: tagged-PDF support, reading order
+- [ ] Rebrand the `landing/` page — it still says "Inkden"; the app is PickPDF

@@ -1158,15 +1158,17 @@ function InlineTextEditor({
       className="absolute z-30"
       style={{ left: edit.left, top }}
       onPointerDown={(e) => e.stopPropagation()}
-      // Commit when focus leaves the editor — but NOT when it moves to the top
-      // toolbar's style controls (tagged data-ann-controls), so changing font /
-      // size / color there keeps the edit open. `document.activeElement` is a
-      // fallback for native controls whose blur reports no relatedTarget.
+      // Commit when focus leaves the editor — but NOT when it moves to THIS
+      // edit's own style controls (tagged data-inline-edit-controls), so
+      // changing font / size / color there keeps the edit open. Focus landing
+      // anywhere else in the toolbar (Undo/Redo, a tool) still commits first,
+      // so those never act on a stale text-object index. `document.activeElement`
+      // is a fallback for native controls whose blur reports no relatedTarget.
       onBlur={(e) => {
         const to = e.relatedTarget as HTMLElement | null;
         if (e.currentTarget.contains(to)) return;
-        if (to?.closest?.("[data-ann-controls]")) return;
-        if (document.activeElement?.closest?.("[data-ann-controls]")) return;
+        if (to?.closest?.("[data-inline-edit-controls]")) return;
+        if (document.activeElement?.closest?.("[data-inline-edit-controls]")) return;
         finish();
       }}
     >
