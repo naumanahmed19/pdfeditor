@@ -1,4 +1,4 @@
-# PDF Workbench
+# PickPDF
 
 A professional, local-first PDF **reader, editor, form designer and organizer**
 with a built-in **local-AI assistant** — runs in the browser and ships as a

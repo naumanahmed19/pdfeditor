@@ -8,7 +8,7 @@ export interface StoredDoc {
   open: boolean;
 }
 
-const DB_NAME = "pdf-workbench";
+const DB_NAME = "pickpdf";
 const STORE = "docs";
 const MAX_STORED = 10;
 const MAX_BYTES = 80 * 1024 * 1024;

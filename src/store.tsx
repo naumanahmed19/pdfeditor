@@ -42,10 +42,10 @@ import {
 } from "./lib/persist";
 import { applyAccent, type AccentId } from "./lib/accents";
 
-const SETTINGS_KEY = "pdf-workbench-settings";
-const SIGNATURES_KEY = "pdf-workbench-signatures";
-const THEME_KEY = "pdf-workbench-theme";
-const ACCENT_KEY = "pdf-workbench-accent";
+const SETTINGS_KEY = "pickpdf-settings";
+const SIGNATURES_KEY = "pickpdf-signatures";
+const THEME_KEY = "pickpdf-theme";
+const ACCENT_KEY = "pickpdf-accent";
 
 export interface PendingStamp {
   dataUrl: string;
@@ -130,6 +130,7 @@ interface AppStore {
   } | null;
 
   docName: string | null;
+  renameDoc: (name: string) => void;
   docBytes: Uint8Array | null;
   pdf: PDFDocumentProxy | null;
   numPages: number;
@@ -432,7 +433,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [aiOpen, setAiOpen] = useState(
     () => typeof window === "undefined" || window.innerWidth >= 1024,
   );
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window !== "undefined" && window.innerWidth >= 1024,
+  );
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 1024);
@@ -543,6 +546,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       history: [{}],
       bytesHistory: [{ bytes: d.bytes, pdf: d.pdf }],
       historyIndex: 0,
+      formValues: {},
+      fieldOps: {},
     }));
     setSelected(null);
   }, [activeTabId, updateDoc]);
@@ -1190,6 +1195,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * download. Either way the in-app document commits to the baked bytes,
    * clearing the unsaved-edits state.
    */
+  const renameDoc = useCallback(
+    (name: string) => {
+      if (!active) return;
+      const clean = name.trim().replace(/\.pdf$/i, "").trim();
+      if (!clean || `${clean}.pdf` === active.name) return;
+      const next = `${clean}.pdf`;
+      updateDoc(active.id, { name: next });
+      void persistDoc({
+        id: active.id,
+        name: next,
+        bytes: active.bytes,
+        lastOpened: Date.now(),
+        open: true,
+      }).then(refreshRecent);
+    },
+    [active, updateDoc, refreshRecent],
+  );
+
   const saveCurrent = useCallback(async () => {
     if (!active) return;
     const handle = docHandles.current.get(active.id);
@@ -1233,6 +1256,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lastOpened: Date.now(),
         open: true,
       });
+      // Saving ends the editing session — no separate "Done" needed.
+      setEditModeState(false);
     } catch (err) {
       toast.error(
         `Save failed: ${err instanceof Error ? err.message : "error"} — downloading a copy instead.`,
@@ -1427,6 +1452,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     printDoc,
     docById,
     docName: active?.name ?? null,
+    renameDoc,
     docBytes: active?.bytes ?? null,
     pdf: active?.pdf ?? null,
     numPages: active?.pdf?.numPages ?? 0,

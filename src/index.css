@@ -93,6 +93,23 @@ body {
   scrollbar-width: thin;
 }
 
+/* Assistant "typing…" indicator dots */
+@keyframes typing-dot {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  35% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+.typing-dot {
+  animation: typing-dot 1.1s infinite ease-in-out;
+}
+
 /* pdf.js appends this canvas to <body> for text measurement; its own
    stylesheet (which we don't import) normally hides it. Keep it out of
    view without affecting canvas-space text measurement. */

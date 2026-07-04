@@ -33,7 +33,7 @@ export function Sidebar() {
         "fixed bottom-0 left-0 top-[42px] z-40 flex w-[280px] max-w-[85vw] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-transform duration-200 ease-out",
         // Desktop: static column.
         "lg:static lg:z-auto lg:w-[288px] lg:max-w-none lg:translate-x-0 lg:border-r-0 lg:shadow-none lg:transition-none",
-        app.sidebarOpen ? "translate-x-0" : "-translate-x-full",
+        app.sidebarOpen ? "translate-x-0" : "-translate-x-full lg:hidden",
       )}
     >
       <div className="flex min-h-0 flex-1 flex-col">
@@ -237,7 +237,7 @@ function RecentRow({ r }: { r: RecentFile }) {
       className={cn(
         "group flex cursor-pointer items-center gap-2 rounded-md border-l-2 px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         isActive
-          ? "border-primary bg-sidebar-accent font-medium text-foreground"
+          ? "border-primary bg-background font-medium text-foreground shadow-sm"
           : "border-transparent text-sidebar-foreground hover:bg-sidebar-accent",
       )}
     >
