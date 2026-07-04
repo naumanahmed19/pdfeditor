@@ -6,9 +6,9 @@ import {
   useRef,
   useState,
 } from "react";
-import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
+import type { PdfDoc, PdfPage } from "../../lib/pdf";
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
-import { pdfjsLib } from "../../lib/pdf";
+import { renderTextLayer } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 
@@ -160,7 +160,7 @@ function ReaderPage({
   baseDims,
   scale,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   baseDims: PageDims;
   scale: number;
@@ -191,7 +191,7 @@ function ReaderPage({
       const canvas = canvasRef.current;
       const textDiv = textLayerRef.current;
       if (!canvas || !textDiv) return;
-      let p: PDFPageProxy;
+      let p: PdfPage;
       try {
         p = await pdf.getPage(pageIndex + 1);
       } catch {
@@ -210,16 +210,8 @@ function ReaderPage({
         return;
       }
       if (cancelled) return;
-      textDiv.innerHTML = "";
-      const textVp = p.getViewport({ scale });
-      textDiv.style.setProperty("--scale-factor", String(scale));
       try {
-        const layer = new (pdfjsLib as any).TextLayer({
-          textContentSource: p.streamTextContent(),
-          container: textDiv,
-          viewport: textVp,
-        });
-        await layer.render();
+        renderTextLayer(p, textDiv, scale);
       } catch {
         /* text layer optional */
       }

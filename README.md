@@ -36,9 +36,11 @@ context sent to the AI endpoint you configure (which can be fully local).
 ## Editor
 
 Annotations are overlaid live and **baked into the PDF on save** (correct on
-rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
-**Save** commits and exits edit mode in one step; **Done** parks pending
-changes; **Discard** (with confirmation) throws them away.
+rotated pages). Editing is **modeless** — the toolbar is always there, like a
+browser: the default **Read** cursor selects text and follows links; arming
+any tool switches what a click does, and **Escape** returns to reading.
+**Save** commits (and disarms); **Discard** (with confirmation) throws pending
+edits away.
 
 - **Add text** boxes that **auto-grow** to fit what you type (width then wrap).
 - **Edit existing text** truly in place (PDFium): click a line and edit it
@@ -186,11 +188,12 @@ bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/targe
 ## Tech
 
 - **React 18 + Vite + TypeScript + Tailwind**, base-ui (shadcn-style) primitives.
-- Three PDF engines, each doing what it's best at: **pdf.js** renders (canvas,
-  text layer, search, outline); **PDFium** (WASM, lazy-loaded) edits page
-  content in place (text rewrite, object move/resize/delete, form appearance
-  regeneration); **pdf-lib** (+ fontkit) assembles documents (merge, split,
-  forms, baking annotations on save). **JSZip** for zip exports.
+- **PDFium (WASM)** is the PDF runtime: rendering, the selectable text layer,
+  search text, outline, links, form-field reading, metadata — and all in-place
+  editing (text rewrite, object move/resize/delete, redaction, form appearance
+  regeneration). **pdf-lib** (+ fontkit) assembles documents (merge, split,
+  forms, baking annotations on save). **JSZip** for zip exports. (pdf.js has
+  been fully removed.)
 - State in a single React context store; persistence via IndexedDB and
   localStorage. No backend.
 

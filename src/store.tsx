@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PdfDoc } from "./lib/pdf";
 import { toast } from "sonner";
 import type {
   Annotation,
@@ -55,14 +55,14 @@ export interface PendingStamp {
 /** The document's base bytes + its parsed pdf.js proxy at a point in history. */
 interface BaseState {
   bytes: Uint8Array;
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
 }
 
 interface OpenDoc {
   id: string;
   name: string;
   bytes: Uint8Array;
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   annotations: AnnotationMap;
   history: AnnotationMap[];
   /**
@@ -125,14 +125,14 @@ interface AppStore {
   docById: (id: string) => {
     id: string;
     name: string;
-    pdf: PDFDocumentProxy;
+    pdf: PdfDoc;
     numPages: number;
   } | null;
 
   docName: string | null;
   renameDoc: (name: string) => void;
   docBytes: Uint8Array | null;
-  pdf: PDFDocumentProxy | null;
+  pdf: PdfDoc | null;
   numPages: number;
   docVersion: number;
 
@@ -211,6 +211,9 @@ interface AppStore {
   tool: ToolKind;
   setTool: (t: ToolKind) => void;
   toolColor: string;
+  /** Highlighter has its own color memory (pastel palette). */
+  highlightColor: string;
+  setHighlightColor: (c: string) => void;
   setToolColor: (c: string) => void;
   /** Fill color for new rect/ellipse shapes; null = no fill. */
   toolFill: string | null;
@@ -352,9 +355,9 @@ function pushHistory(
 }
 
 /** Destroy every distinct pdf proxy a doc still references, except `keep`. */
-function destroyDocProxies(d: OpenDoc, keep?: PDFDocumentProxy) {
-  const seen = new Set<PDFDocumentProxy>();
-  const kill = (p?: PDFDocumentProxy) => {
+function destroyDocProxies(d: OpenDoc, keep?: PdfDoc) {
+  const seen = new Set<PdfDoc>();
+  const kill = (p?: PdfDoc) => {
     if (!p || p === keep || seen.has(p)) return;
     seen.add(p);
     p.destroy().catch(() => {});
@@ -406,9 +409,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [scale, setScale] = useState(1.1);
   const [fitMode, setFitMode] = useState<"width" | "page" | null>("width");
 
-  const [editMode, setEditModeState] = useState(false);
-  const [tool, setTool] = useState<ToolKind>("select");
+  // Modeless editing: "read" (text selection, links) is simply the state
+  // where no tool is armed. editMode is derived — kept on the store because
+  // many gates ("is any editing UI active?") still read it.
+  const [tool, setTool] = useState<ToolKind>("read");
+  const editMode = tool !== "read";
+  const setEditModeState = useCallback((v: boolean) => {
+    setTool((t) => (v ? (t === "read" ? "select" : t) : "read"));
+  }, []);
   const [toolColor, setToolColor] = useState("#e11d48");
+  const [highlightColor, setHighlightColor] = useState("#facc15");
   // Fill color for new rect/ellipse shapes; null = no fill (outline only).
   const [toolFill, setToolFill] = useState<string | null>(null);
   const [strokeWidth, setStrokeWidth] = useState(2);
@@ -608,9 +618,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSearchMatches([]);
     setActiveMatch(0);
     // A changed/opened document starts in read mode, not carrying over the
-    // previous doc's edit session. (Templates re-enable edit mode after opening.)
-    setEditModeState(false);
-    setTool("select");
+    // previous doc's edit session. (Templates re-arm editing after opening.)
+    setTool("read");
   }, []);
 
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
@@ -1425,14 +1434,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSearchMatches([]);
   }, []);
 
-  const setEditMode = useCallback((v: boolean) => {
-    setEditModeState(v);
-    if (!v) {
-      setTool("select");
-      setSelected(null);
-      setPendingStamp(null);
-    }
-  }, []);
+  const setEditMode = useCallback(
+    (v: boolean) => {
+      setEditModeState(v);
+      if (!v) {
+        setSelected(null);
+        setPendingStamp(null);
+      }
+    },
+    [setEditModeState],
+  );
 
   const tabs: TabInfo[] = useMemo(
     () => docs.map((d) => ({ id: d.id, name: d.name, hasEdits: docHasEdits(d) })),
@@ -1516,6 +1527,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     tool,
     setTool,
     toolColor,
+    highlightColor,
+    setHighlightColor,
     setToolColor,
     toolFill,
     setToolFill,

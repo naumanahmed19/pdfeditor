@@ -23,8 +23,9 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import { pdfjsLib } from "../../lib/pdf";
+import type { PdfDoc, PdfPage } from "../../lib/pdf";
+import { renderTextLayer } from "../../lib/pdf";
+import { FillControl, StrokeWidthSelect, TextStyleControls } from "./StyleControls";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import type { Annotation, FormFieldAnnotation, NoteAnnotation, TextAnnotation } from "../../types";
@@ -249,7 +250,7 @@ export function Viewer() {
           y: (r.top - pr.top) / effectiveScale,
           w: r.width / effectiveScale,
           h: r.height / effectiveScale,
-          color: app.toolColor,
+          color: app.highlightColor,
         });
         perPage.set(idx, list);
       }
@@ -272,7 +273,11 @@ export function Viewer() {
         target.tagName === "TEXTAREA" ||
         target.isContentEditable;
       if (inField) return;
-      if ((e.key === "Delete" || e.key === "Backspace") && app.selected) {
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        app.selected &&
+        app.editMode
+      ) {
         app.removeAnnotation(app.selected.page, app.selected.id);
       }
       if (
@@ -294,8 +299,14 @@ export function Viewer() {
         }
       }
       if (e.key === "Escape") {
-        app.setSelected(null);
-        app.setPendingStamp(null);
+        // First Escape clears the selection/stamp; a further Escape (nothing
+        // selected) disarms the active tool back to reading.
+        if (app.selected || app.pendingStamp) {
+          app.setSelected(null);
+          app.setPendingStamp(null);
+        } else if (app.tool !== "read") {
+          app.setTool("read");
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -646,7 +657,7 @@ function PageView({
   baseDims,
   scale,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   baseDims: PageDims;
   scale: number;
@@ -683,7 +694,7 @@ function PageView({
       const canvas = canvasRef.current;
       const textDiv = textLayerRef.current;
       if (!canvas || !textDiv) return;
-      let page: PDFPageProxy;
+      let page: PdfPage;
       try {
         page = await pdf.getPage(pageIndex + 1);
       } catch {
@@ -698,7 +709,7 @@ function PageView({
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       renderTask.current?.cancel();
-      const task = page.render({ canvasContext: ctx, viewport } as any);
+      const task = page.render({ canvasContext: ctx, viewport });
       renderTask.current = task as any;
       try {
         await task.promise;
@@ -708,16 +719,8 @@ function PageView({
 
       // Text layer at CSS scale
       if (cancelled) return;
-      textDiv.innerHTML = "";
-      const textViewport = page.getViewport({ scale });
-      textDiv.style.setProperty("--scale-factor", String(scale));
       try {
-        const layer = new (pdfjsLib as any).TextLayer({
-          textContentSource: page.streamTextContent(),
-          container: textDiv,
-          viewport: textViewport,
-        });
-        await layer.render();
+        renderTextLayer(page, textDiv, scale);
         if (!cancelled) setTextLayerReady((v) => v + 1);
       } catch {
         /* text layer optional */
@@ -785,12 +788,11 @@ function PageView({
     textLayerReady,
   ]);
 
-  // Text is selectable for reading/copy (select tool outside edit mode) and for
-  // click-to-edit (edittext). In edit mode the Select tool grabs page OBJECTS
-  // instead (via ObjectLayer), so text stays non-selectable there.
+  // Text is selectable for reading/copy (read tool) and for click-to-edit
+  // (edittext). The Select tool grabs page OBJECTS instead (via ObjectLayer),
+  // so text stays non-selectable there.
   const textSelectable =
-    ((app.tool === "select" && !app.editMode) || app.tool === "edittext") &&
-    !app.pendingStamp;
+    (app.tool === "read" || app.tool === "edittext") && !app.pendingStamp;
 
   // "Edit existing text": clicking a text run maps the click to the real
   // PDFium content-stream text object and opens an inline editor over it. On
@@ -1404,7 +1406,7 @@ function ObjectLayer({
   scale,
   canvasRef,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   scale: number;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -1851,7 +1853,7 @@ function LinkLayer({
   scale,
   visible,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   scale: number;
   visible: boolean;
@@ -1879,16 +1881,9 @@ function LinkLayer({
           };
           if (a.url) {
             out.push({ ...rect, url: a.url });
-          } else if (a.dest) {
-            try {
-              let dest = a.dest;
-              if (typeof dest === "string") dest = await pdf.getDestination(dest);
-              if (Array.isArray(dest) && dest[0]) {
-                out.push({ ...rect, destPage: await pdf.getPageIndex(dest[0]) });
-              }
-            } catch {
-              /* unresolvable destination */
-            }
+          } else if (a.destPage !== undefined) {
+            // The engine resolves internal destinations to a page index.
+            out.push({ ...rect, destPage: a.destPage });
           }
         }
         if (alive) setLinks(out);
@@ -1958,7 +1953,7 @@ function FormLayer({
   scale,
   visible,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   scale: number;
   visible: boolean;
@@ -2500,7 +2495,7 @@ function AnnotationLayer({
           app.addAnnotation(pageIndex, {
             ...base,
             kind: "highlight",
-            color: app.toolColor,
+            color: app.highlightColor,
           });
         } else if (app.tool === "whiteout") {
           app.addAnnotation(pageIndex, { ...base, kind: "whiteout" });
@@ -2592,13 +2587,13 @@ function AnnotationLayer({
             height: Math.abs(draft.y1 - draft.y0) * scale,
             borderColor:
               app.tool === "highlight"
-                ? "#eab308"
+                ? app.highlightColor
                 : app.tool === "whiteout"
                   ? "#94a3b8"
                   : app.toolColor,
             background:
               app.tool === "highlight"
-                ? "rgba(250,204,21,0.3)"
+                ? `${app.highlightColor}4d`
                 : app.tool === "whiteout"
                   ? "rgba(255,255,255,0.8)"
                   : "transparent",
@@ -2930,26 +2925,6 @@ function FieldProperties({
   );
 }
 
-const ANN_KIND_LABEL: Record<string, string> = {
-  text: "Text",
-  note: "Comment",
-  highlight: "Highlight",
-  whiteout: "Whiteout",
-  rect: "Rectangle",
-  ellipse: "Ellipse",
-  line: "Line",
-  ink: "Drawing",
-  image: "Image",
-};
-
-const ANN_FONTS: Array<{ v: string; label: string }> = [
-  { v: "helvetica", label: "Helvetica" },
-  { v: "times", label: "Times" },
-  { v: "courier", label: "Courier" },
-  { v: "carlito", label: "Carlito" },
-  { v: "caladea", label: "Caladea" },
-];
-
 /**
  * Contextual properties popover for a selected annotation (everything except
  * form fields, which have their own richer panel). Shows the controls relevant
@@ -3034,130 +3009,51 @@ function AnnotationProperties({
   const isFillable = k === "rect" || k === "ellipse";
   const hasStroke = isShape || k === "ink";
   const isText = k === "text";
-  const hasColor =
-    isText || isShape || k === "ink" || k === "highlight" || k === "whiteout";
-  const colorLabel = k === "highlight"
-    ? "Color"
-    : k === "whiteout"
-      ? "Patch"
-      : isShape || k === "ink"
-        ? "Stroke"
-        : "Color";
-  const lbl = "flex items-center gap-1 text-[10px] font-medium text-muted-foreground";
+  // Text gets its swatch from TextStyleControls.
+  const hasColor = isShape || k === "ink" || k === "highlight" || k === "whiteout";
+  const colorLabel = k === "whiteout" ? "Patch" : isShape || k === "ink" ? "Stroke" : "Color";
 
   return (
     <>
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {ANN_KIND_LABEL[k] ?? k}
-      </span>
-
-      {hasColor && (
-        <label className={lbl}>
-          {colorLabel}
-          <ColorSwatch
-            value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
-            onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
-            title={colorLabel}
-          />
-        </label>
+      {isText && (
+        <TextStyleControls
+          value={{
+            color: a.color ?? "#111111",
+            fontFamily: a.fontFamily ?? "helvetica",
+            fontSize: a.fontSize,
+            bold: !!a.bold,
+            italic: !!a.italic,
+          }}
+          onPatch={(p) =>
+            onPatch({
+              ...p,
+              // Clear the embedded display font so a chosen family shows.
+              ...(p.fontFamily !== undefined ? { displayFontCss: undefined } : {}),
+            } as Partial<Annotation>)
+          }
+        />
       )}
 
-      {isFillable && (
-        <label className={lbl}>
-          Fill
-          {a.fill ? (
-            <>
-              <ColorSwatch
-                value={a.fill}
-                onChange={(v) => onPatch({ fill: v } as Partial<Annotation>)}
-                title="Fill color"
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-1.5 text-[10px]"
-                onClick={() => onPatch({ fill: undefined } as Partial<Annotation>)}
-              >
-                None
-              </Button>
-            </>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 px-1.5 text-[10px]"
-              onClick={() => onPatch({ fill: "#3b82f6" } as Partial<Annotation>)}
-            >
-              Add
-            </Button>
-          )}
-        </label>
+      {hasColor && (
+        <ColorSwatch
+          value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
+          onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
+          title={colorLabel}
+        />
       )}
 
       {hasStroke && (
-        <label className={lbl}>
-          Width
-          <Select
-            className="h-6 w-14 px-1.5 text-xs"
-            value={String(a.strokeWidth ?? 2)}
-            onChange={(e) => onPatch({ strokeWidth: Number(e.target.value) } as Partial<Annotation>)}
-          >
-            {[0, 1, 2, 3, 4, 6, 8].map((w) => (
-              <option key={w} value={w}>
-                {w}
-              </option>
-            ))}
-          </Select>
-        </label>
+        <StrokeWidthSelect
+          value={a.strokeWidth ?? 2}
+          onChange={(w) => onPatch({ strokeWidth: w } as Partial<Annotation>)}
+        />
       )}
 
-      {isText && (
-        <>
-          <Select
-            className="h-6 w-24 px-1.5 text-xs"
-            value={a.fontFamily ?? "helvetica"}
-            onChange={(e) =>
-              onPatch({ fontFamily: e.target.value, displayFontCss: undefined } as Partial<Annotation>)
-            }
-          >
-            {ANN_FONTS.map((f) => (
-              <option key={f.v} value={f.v}>
-                {f.label}
-              </option>
-            ))}
-          </Select>
-          <Select
-            className="h-6 w-16 px-1.5 text-xs"
-            value={String(a.fontSize)}
-            onChange={(e) => onPatch({ fontSize: Number(e.target.value) } as Partial<Annotation>)}
-          >
-            {[...new Set([10, 12, 14, 16, 18, 22, 28, 36, a.fontSize])]
-              .sort((x, y) => x - y)
-              .map((s) => (
-                <option key={s} value={s}>
-                  {s}pt
-                </option>
-              ))}
-          </Select>
-          <Button
-            variant={a.bold ? "subtle" : "ghost"}
-            size="icon"
-            className="h-6 w-6"
-            title="Bold"
-            onClick={() => onPatch({ bold: !a.bold } as Partial<Annotation>)}
-          >
-            <Bold className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant={a.italic ? "subtle" : "ghost"}
-            size="icon"
-            className="h-6 w-6"
-            title="Italic"
-            onClick={() => onPatch({ italic: !a.italic } as Partial<Annotation>)}
-          >
-            <Italic className="h-3.5 w-3.5" />
-          </Button>
-        </>
+      {isFillable && (
+        <FillControl
+          value={a.fill ?? null}
+          onChange={(c) => onPatch({ fill: c ?? undefined } as Partial<Annotation>)}
+        />
       )}
 
       <div className="h-4 w-px bg-border" />
@@ -3268,6 +3164,20 @@ function AnnotationItem({
     (editing && editSize ? { ...ann, w: editSize.w, h: editSize.h } : ann);
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
+    // While reading, clicking a comment marker just opens its popup.
+    if (ann.kind === "note" && app.tool === "read") {
+      e.stopPropagation();
+      e.preventDefault();
+      app.setSelected({ page: pageIndex, id: ann.id });
+      return;
+    }
+    // Highlighter over an existing highlight = un-highlight (browser-style).
+    if (ann.kind === "highlight" && app.tool === "highlight") {
+      e.stopPropagation();
+      e.preventDefault();
+      app.removeAnnotation(pageIndex, ann.id);
+      return;
+    }
     if (app.tool !== "select") return;
     e.stopPropagation();
     e.preventDefault();
@@ -3322,18 +3232,22 @@ function AnnotationItem({
     window.addEventListener("pointerup", onUp);
   };
 
+  // Comment markers stay clickable while reading (comments are for readers
+  // too); with the highlighter armed, clicking an existing highlight removes
+  // it (browser-style un-highlight); everything else needs the Select tool.
+  const selectable = app.tool === "select" && !ann.locked;
+  const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
+  const unhighlight =
+    ann.kind === "highlight" && app.tool === "highlight" && !ann.locked;
   const style: React.CSSProperties = {
     position: "absolute",
     left: box.x * scale,
     top: box.y * scale,
     width: box.w * scale,
     height: box.h * scale,
-    pointerEvents:
-      app.editMode && app.tool === "select" && !ann.locked ? "auto" : "none",
-    cursor:
-      app.editMode && app.tool === "select" && !ann.locked ? "move" : "default",
-    touchAction:
-      app.editMode && app.tool === "select" && !ann.locked ? "none" : "auto",
+    pointerEvents: selectable || noteInRead || unhighlight ? "auto" : "none",
+    cursor: selectable ? "move" : noteInRead || unhighlight ? "pointer" : "default",
+    touchAction: selectable ? "none" : "auto",
   };
 
   let body: React.ReactNode = null;
@@ -3535,11 +3449,7 @@ function AnnotationItem({
       style={style}
       className={cn(
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
-        !isSelected &&
-          app.editMode &&
-          app.tool === "select" &&
-          !ann.locked &&
-          "hover:ring-1 hover:ring-blue-400/60",
+        !isSelected && (selectable || noteInRead) && "hover:ring-1 hover:ring-blue-400/60",
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
       onDoubleClick={(e) => {

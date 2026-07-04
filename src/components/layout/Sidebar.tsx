@@ -14,7 +14,7 @@ import {
   Plus,
   X,
 } from "lucide-react";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PdfDoc } from "../../lib/pdf";
 import { useApp, type RecentFile } from "../../store";
 import { cn } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
@@ -415,7 +415,7 @@ export function Thumbnail({
   onClick,
   width = 150,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   active?: boolean;
   onClick?: () => void;
@@ -545,7 +545,7 @@ function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
   );
 }
 
-function OutlinePanel({ pdf }: { pdf: PDFDocumentProxy }) {
+function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
   const app = useApp();
   const [outline, setOutline] = useState<OutlineNode[] | null>(null);
 

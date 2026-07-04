@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Minus,
   MousePointer2,
+  Move,
   PenLine,
   Pencil,
   Redo2,
@@ -25,6 +26,15 @@ import {
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
+import {
+  ColorPresets,
+  FillControl,
+  HIGHLIGHT_PRESETS,
+  INK_PRESETS,
+  SizePresets,
+  StrokeWidthSelect,
+  TextStyleControls,
+} from "./StyleControls";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
@@ -40,9 +50,14 @@ import type {
 
 const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   {
-    key: "select",
+    key: "read",
     icon: MousePointer2,
-    label: "Select / move — drag existing text & images, resize images, Delete to remove",
+    label: "Read — select & copy text, follow links",
+  },
+  {
+    key: "select",
+    icon: Move,
+    label: "Move / edit objects — drag existing text & images, resize images, Delete to remove",
   },
   { key: "text", icon: Type, label: "Add text" },
   { key: "edittext", icon: TextCursorInput, label: "Edit existing text (click a line)" },
@@ -256,130 +271,52 @@ export function EditorToolbar() {
 
       {/* style controls — contextual */}
       <div className="ml-1 flex items-center gap-1.5">
-        {showColor && (
-          <ColorSwatch
-            value={selectedText?.color ?? app.toolColor}
-            onChange={(v) => {
-              app.setToolColor(v);
-              patchSelectedText({ color: v });
+        {showFontControls ? (
+          <TextStyleControls
+            value={{
+              color: selectedText?.color ?? app.toolColor,
+              fontFamily,
+              fontSize: selectedText?.fontSize ?? app.fontSize,
+              bold: isBold,
+              italic: isItalic,
             }}
-            title="Color"
+            onPatch={(p) => {
+              if (p.color !== undefined) app.setToolColor(p.color);
+              if (p.fontFamily !== undefined) app.setFontFamily(p.fontFamily);
+              if (p.fontSize !== undefined) app.setFontSize(p.fontSize);
+              if (p.bold !== undefined) app.setFontBold(p.bold);
+              if (p.italic !== undefined) app.setFontItalic(p.italic);
+              // Clear the embedded display font so a chosen family shows.
+              patchSelectedText({
+                ...p,
+                ...(p.fontFamily !== undefined ? { displayFontCss: undefined } : {}),
+              });
+            }}
           />
-        )}
-        {showFontControls && (
+        ) : app.tool === "highlight" ? (
+          <ColorPresets
+            colors={HIGHLIGHT_PRESETS}
+            value={app.highlightColor}
+            onChange={app.setHighlightColor}
+          />
+        ) : app.tool === "ink" ? (
           <>
-            <Select
-              value={fontFamily}
-              onChange={(e) => {
-                const v = e.target.value as FontFamilyKind;
-                app.setFontFamily(v);
-                // Clear the embedded display font so the chosen family shows.
-                patchSelectedText({ fontFamily: v, displayFontCss: undefined });
-              }}
-              aria-label="Font family"
-              className="h-7 w-24 px-2 text-xs"
-            >
-              <option value="helvetica">Helvetica</option>
-              <option value="times">Times</option>
-              <option value="courier">Courier</option>
-              <option value="carlito">Carlito (Calibri)</option>
-              <option value="caladea">Caladea (Cambria)</option>
-            </Select>
-            <button
-              title="Bold"
-              onClick={() => {
-                const next = !isBold;
-                app.setFontBold(next);
-                patchSelectedText({ bold: next });
-              }}
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md border border-input transition-colors",
-                isBold
-                  ? "bg-accent text-foreground"
-                  : "bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Bold className="h-3.5 w-3.5" />
-            </button>
-            <button
-              title="Italic"
-              onClick={() => {
-                const next = !isItalic;
-                app.setFontItalic(next);
-                patchSelectedText({ italic: next });
-              }}
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md border border-input transition-colors",
-                isItalic
-                  ? "bg-accent text-foreground"
-                  : "bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Italic className="h-3.5 w-3.5" />
-            </button>
-            <Select
-              value={selectedText?.fontSize ?? app.fontSize}
-              onChange={(e) => {
-                app.setFontSize(Number(e.target.value));
-                patchSelectedText({ fontSize: Number(e.target.value) });
-              }}
-              aria-label="Font size"
-              className="h-7 w-[4.75rem] px-2 text-xs"
-            >
-              {[...new Set([10, 12, 14, 16, 18, 22, 28, 36, selectedText?.fontSize ?? app.fontSize])]
-                .sort((a, b) => a - b)
-                .map((s) => (
-                  <option key={s} value={s}>
-                    {s}pt
-                  </option>
-                ))}
-            </Select>
+            <ColorPresets
+              colors={INK_PRESETS}
+              value={app.toolColor}
+              onChange={app.setToolColor}
+            />
+            <SizePresets value={app.strokeWidth} onChange={app.setStrokeWidth} />
           </>
+        ) : (
+          showColor && (
+            <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />
+          )
         )}
-        {showStroke && (
-          <Select
-            value={app.strokeWidth}
-            onChange={(e) => app.setStrokeWidth(Number(e.target.value))}
-            aria-label="Stroke width"
-            className="h-7 w-[4.75rem] px-2 text-xs"
-          >
-            {[0, 1, 2, 3, 4, 6, 8].map((w) => (
-              <option key={w} value={w}>
-                {w === 0 ? "No border" : `${w}px`}
-              </option>
-            ))}
-          </Select>
+        {showStroke && app.tool !== "ink" && (
+          <StrokeWidthSelect value={app.strokeWidth} onChange={app.setStrokeWidth} />
         )}
-        {showFill && (
-          <div className="flex items-center gap-1 rounded-md border border-input px-1.5 py-0.5">
-            <span className="text-[10px] font-medium text-muted-foreground">Fill</span>
-            {fillValue ? (
-              <>
-                <ColorSwatch
-                  value={fillValue}
-                  onChange={setFill}
-                  title="Fill color"
-                  className="h-5 w-5"
-                />
-                <button
-                  title="Remove fill"
-                  onClick={() => setFill(null)}
-                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </>
-            ) : (
-              <button
-                title="Add a fill color"
-                onClick={() => setFill(fillValue || app.toolColor || "#3b82f6")}
-                className="rounded px-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                None
-              </button>
-            )}
-          </div>
-        )}
+        {showFill && <FillControl value={fillValue} onChange={setFill} />}
         {selectedFormField && (
           <>
             <Input

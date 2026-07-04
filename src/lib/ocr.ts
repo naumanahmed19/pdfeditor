@@ -1,5 +1,5 @@
 import { createWorker, OEM } from "tesseract.js";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PdfDoc } from "./pdf";
 
 export interface OcrWord {
   text: string;
@@ -27,7 +27,7 @@ const RENDER_SCALE = 2;
  * fetched once from a CDN and cached; the recognition itself runs locally.
  */
 export async function runOcr(
-  pdf: PDFDocumentProxy,
+  pdf: PdfDoc,
   onProgress: (page: number, total: number, phase: "prepare" | "recognize") => void,
   signal?: AbortSignal,
 ): Promise<OcrPage[]> {

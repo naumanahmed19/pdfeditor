@@ -9,8 +9,7 @@ import {
   renderPage,
   renderPageToCanvas,
 } from "./pdfium";
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { PdfDoc } from "./engine";
 
 async function samplePage(): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -90,21 +89,15 @@ export async function testFormAppearance() {
   const { regenerateFormAppearances } = await import("./pdfium");
   const fixed = await regenerateFormAppearances(bytes);
 
-  // Render with pdf.js (which paints widget appearances) and count dark pixels
-  // in the field region — confirms PDFium generated a real AP, not a blank one.
-  GlobalWorkerOptions.workerSrc = workerUrl;
+  // Render with the engine (which paints widget appearances) and count dark
+  // pixels in the field region — confirms PDFium generated a real AP.
   const darkPixels = async (b: Uint8Array) => {
-    const pdf = await getDocument({ data: b.slice() }).promise;
-    const page = await pdf.getPage(1);
-    const vp = page.getViewport({ scale: 3 });
+    const pdf = await PdfDoc.load(b);
     const canvas = document.createElement("canvas");
-    canvas.width = vp.width;
-    canvas.height = vp.height;
+    pdf.page(0).renderToCanvas(canvas, 3);
     const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    void pdf.destroy();
     let n = 0;
     for (let i = 0; i < data.length; i += 4) {
       if (data[i] < 110 && data[i + 1] < 110 && data[i + 2] < 110) n++;
@@ -159,13 +152,12 @@ export async function testFieldBake() {
 }
 
 async function extractText(bytes: Uint8Array): Promise<string> {
-  GlobalWorkerOptions.workerSrc = workerUrl;
-  const pdf = await getDocument({ data: bytes.slice() }).promise;
+  const pdf = await PdfDoc.load(bytes);
   let out = "";
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const tc = await (await pdf.getPage(i)).getTextContent();
-    out += tc.items.map((it: any) => it.str).join(" ") + "\n";
+  for (let i = 0; i < pdf.numPages; i++) {
+    out += pdf.page(i).getText() + "\n";
   }
+  void pdf.destroy();
   return out.trim();
 }
 

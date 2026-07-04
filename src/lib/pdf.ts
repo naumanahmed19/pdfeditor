@@ -1,21 +1,22 @@
-import * as pdfjsLib from "pdfjs-dist";
-import type { PDFDocumentProxy } from "pdfjs-dist";
-import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+// PDF utility hub — PDFium-backed (see engine.ts). pdf.js has been removed;
+// the same engine that edits documents now renders them, extracts text,
+// resolves outlines/links and reads form fields.
+import { PdfDoc, PasswordError, type PdfPage } from "./engine";
 import type { OutlineNode, SearchMatch } from "../types";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+export type { PdfPage };
+export { PdfDoc };
 
-export async function loadPdf(bytes: Uint8Array): Promise<PDFDocumentProxy> {
-  let password: string | undefined;
+/** Load a document, prompting for a password when the file needs one. */
+export async function loadPdf(bytes: Uint8Array): Promise<PdfDoc> {
+  let password = "";
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      // pdf.js transfers the buffer to the worker, so hand it a copy.
-      const copy = bytes.slice();
-      return await pdfjsLib.getDocument({ data: copy, password }).promise;
-    } catch (err: any) {
-      if (err?.name === "PasswordException") {
+      return await PdfDoc.load(bytes, password);
+    } catch (err) {
+      if (err instanceof PasswordError) {
         const label =
-          err.code === 2 || attempt > 0
+          password || attempt > 0
             ? "Wrong password. This PDF is password-protected — enter the password:"
             : "This PDF is password-protected. Enter the password:";
         const input = window.prompt(label);
@@ -35,24 +36,27 @@ export interface PageText {
   full: string;
 }
 
-const textCache = new WeakMap<PDFDocumentProxy, PageText[]>();
+const textCache = new WeakMap<PdfDoc, PageText[]>();
 
-export async function extractAllText(pdf: PDFDocumentProxy): Promise<PageText[]> {
+export async function extractAllText(pdf: PdfDoc): Promise<PageText[]> {
   const cached = textCache.get(pdf);
   if (cached) return cached;
   const pages: PageText[] = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    const items = content.items.map((it) => ("str" in it ? it.str : ""));
-    pages.push({ pageIndex: i - 1, items, full: items.join(" ") });
+  for (let i = 0; i < pdf.numPages; i++) {
+    const page = pdf.page(i);
+    const items = page.getTextRuns().map((r) => r.text);
+    pages.push({
+      pageIndex: i,
+      items,
+      full: items.length ? items.join(" ") : page.getText(),
+    });
   }
   textCache.set(pdf, pages);
   return pages;
 }
 
 export async function searchDocument(
-  pdf: PDFDocumentProxy,
+  pdf: PdfDoc,
   query: string,
 ): Promise<SearchMatch[]> {
   const q = query.trim().toLowerCase();
@@ -74,51 +78,72 @@ export async function searchDocument(
   return matches;
 }
 
-export async function getOutline(pdf: PDFDocumentProxy): Promise<OutlineNode[]> {
-  const raw = await pdf.getOutline().catch(() => null);
-  if (!raw) return [];
-
-  async function resolve(items: any[]): Promise<OutlineNode[]> {
-    const out: OutlineNode[] = [];
-    for (const item of items) {
-      let pageIndex: number | null = null;
-      try {
-        let dest = item.dest;
-        if (typeof dest === "string") dest = await pdf.getDestination(dest);
-        if (Array.isArray(dest) && dest[0]) {
-          pageIndex = await pdf.getPageIndex(dest[0]);
-        }
-      } catch {
-        pageIndex = null;
-      }
-      out.push({
-        title: item.title ?? "Untitled",
-        pageIndex,
-        children: item.items?.length ? await resolve(item.items) : [],
-      });
-    }
-    return out;
+export async function getOutline(pdf: PdfDoc): Promise<OutlineNode[]> {
+  try {
+    return pdf.getOutline();
+  } catch {
+    return [];
   }
-
-  return resolve(raw as any[]);
 }
 
 export async function renderPageToCanvas(
-  pdf: PDFDocumentProxy,
+  pdf: PdfDoc,
   pageIndex: number,
   canvas: HTMLCanvasElement,
   scale: number,
 ): Promise<void> {
-  const page = await pdf.getPage(pageIndex + 1);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const viewport = page.getViewport({ scale: scale * dpr });
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  canvas.style.width = `${viewport.width / dpr}px`;
-  canvas.style.height = `${viewport.height / dpr}px`;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  await page.render({ canvasContext: ctx, viewport } as any).promise;
+  const page = pdf.page(pageIndex);
+  page.renderToCanvas(canvas, scale * dpr);
+  canvas.style.width = `${(page.width * scale).toFixed(2)}px`;
+  canvas.style.height = `${(page.height * scale).toFixed(2)}px`;
 }
 
-export { pdfjsLib };
+// ---------------------------------------------------------------------------
+// Text layer — replaces pdf.js's TextLayer. Builds absolutely-positioned
+// spans (same `.textLayer > span` structure the selection, search-highlight
+// and click-to-edit code already rely on) from PDFium text-run geometry.
+// ---------------------------------------------------------------------------
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+function measure(text: string, fontPx: number): number {
+  if (!measureCtx) {
+    measureCtx = document.createElement("canvas").getContext("2d")!;
+  }
+  measureCtx.font = `${fontPx}px sans-serif`;
+  return measureCtx.measureText(text).width;
+}
+
+/**
+ * Populate `container` with selectable text spans for `page` at `scale`.
+ * Spans are transparent (styled by the .textLayer CSS) and horizontally
+ * scaled so their metric width matches the rendered glyphs — which is what
+ * makes native selection track the page text.
+ */
+export function renderTextLayer(
+  page: PdfPage,
+  container: HTMLElement,
+  scale: number,
+): void {
+  container.replaceChildren();
+  container.style.width = `${page.width * scale}px`;
+  container.style.height = `${page.height * scale}px`;
+
+  for (const run of page.getTextRuns()) {
+    const span = document.createElement("span");
+    span.textContent = run.text;
+    const h = run.h * scale;
+    const w = run.w * scale;
+    const fontPx = Math.max(1, h * 0.85);
+    const measured = measure(run.text, fontPx);
+    span.style.left = `${run.x * scale}px`;
+    span.style.top = `${run.y * scale}px`;
+    span.style.fontSize = `${fontPx}px`;
+    span.style.fontFamily = "sans-serif";
+    span.style.lineHeight = `${h}px`;
+    if (measured > 0) {
+      span.style.transform = `scaleX(${w / measured})`;
+    }
+    container.appendChild(span);
+  }
+}
