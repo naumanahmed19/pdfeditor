@@ -39,14 +39,42 @@ const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildPipeline(dev: "webgpu" | "wasm"): Promise<any> {
   device = dev;
+  // Aggregate download progress across ALL files (tokenizer + weight shards),
+  // otherwise the reported percent is per-file and appears to jump or stall.
+  const files = new Map<string, { loaded: number; total: number }>();
+  const postAggregate = () => {
+    let loaded = 0;
+    let total = 0;
+    for (const f of files.values()) {
+      loaded += f.loaded;
+      total += f.total;
+    }
+    post("progress", { loaded, total });
+  };
   return pipeline("text-generation", MODEL_ID, {
     device: dev,
     // q4f16 needs fp16 (WebGPU); plain q4 for the CPU/WASM path.
     dtype: dev === "webgpu" ? "q4f16" : "q4",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     progress_callback: (event: any) => {
-      if (event?.status === "progress") {
-        post("progress", { progress: event.progress ?? 0, file: event.file });
+      if (!event?.file) return;
+      if (event.status === "progress") {
+        files.set(event.file, {
+          loaded: event.loaded ?? 0,
+          total: event.total ?? 0,
+        });
+        postAggregate();
+      } else if (event.status === "done") {
+        const f = files.get(event.file);
+        if (f) files.set(event.file, { loaded: f.total || f.loaded, total: f.total || f.loaded });
+        postAggregate();
+        // All files in — the silent load/compile phase begins; say so instead
+        // of leaving a stale "Downloading …%" on screen.
+        if ([...files.values()].every((x) => x.loaded >= x.total)) {
+          post("status", {
+            text: "Download complete — preparing the model (first run can take a minute)…",
+          });
+        }
       }
     },
   });

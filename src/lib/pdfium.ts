@@ -1,15 +1,14 @@
-// Experimental PDFium (WASM) engine wrapper.
+// PDFium (WASM) engine wrapper — the app's EDITING engine.
 //
-// This is a prototype for the "Evaluate @embedpdf/pdfium" TODO item. It lazily
-// loads the ~5 MB PDFium WASM (bundled locally, not from the CDN default) and
-// exposes two capabilities pdf.js / pdf-lib can't do well on their own:
+// It lazily loads the ~5 MB PDFium WASM (bundled locally, not from the CDN
+// default) and provides the capabilities pdf.js / pdf-lib can't do on their
+// own: true in-place text editing (content-stream rewrite), moving/resizing/
+// deleting existing page objects, destructive redaction, high-fidelity
+// rasterization, and form-appearance regeneration.
 //
-//   1. renderPage()  — high-fidelity rasterization (PNG export, render-fallback)
-//   2. redactRegions() — TRUE redaction: destructively removes the underlying
-//      page content under a rectangle, not just a whiteout cover.
-//
-// Nothing here is wired into the main app yet; it's opt-in via the dev hooks so
-// we can validate the engine in our stack before committing to it.
+// Division of labour: pdf.js renders & provides the text layer (viewing),
+// pdf-lib assembles documents (merge/split/bake), PDFium edits page content.
+// The store wires these edits into the undo history via applyPdfiumEdit.
 
 import { init, type WrappedPdfiumModule } from "@embedpdf/pdfium";
 // Bundle the wasm as a local asset URL (keeps the app fully local-first).

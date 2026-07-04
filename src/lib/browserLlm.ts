@@ -56,6 +56,13 @@ function toChat(messages: ChatMessage[]) {
   return messages.map((m) => ({ role: m.role, content: m.content }));
 }
 
+function fmtBytes(b: number): string {
+  return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`;
+}
+
+/** How long without a progress event before we call the download stalled. */
+const STALL_MS = 25_000;
+
 /** Stream a chat completion from the in-browser Gemma 4 model (via the worker). */
 export function streamBrowserChat(
   messages: ChatMessage[],
@@ -65,30 +72,65 @@ export function streamBrowserChat(
   onStatus?: (status: string) => void,
 ): Promise<string> {
   const w = getWorker();
-  onStatus?.("Preparing the in-browser model…");
 
   return new Promise<string>((resolve, reject) => {
     let full = "";
     let firstToken = true;
+    // No status text unless there's something to say (download progress,
+    // stalls) — an empty status keeps the chat bubble on its typing dots,
+    // consistent with the other providers.
+    let genTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // If progress events stop arriving mid-download, say so instead of
+    // leaving a frozen percentage on screen.
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastDownloadStatus = "";
+    const armStallTimer = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        onStatus?.(
+          `${lastDownloadStatus} — connection looks stalled. Check your network; finished parts are cached, so Stop + retry resumes quickly.`,
+        );
+      }, STALL_MS);
+    };
 
     const onMessage = (e: MessageEvent) => {
       const d = e.data || {};
       switch (d.type) {
-        case "progress":
-          onStatus?.(
-            `Downloading Gemma 4 — ${Math.round(d.progress ?? 0)}% (one-time, then cached)`,
-          );
+        case "progress": {
+          const loaded = d.loaded ?? 0;
+          const total = d.total ?? 0;
+          const pct = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+          lastDownloadStatus = total
+            ? `Downloading Gemma 4 — ${pct}% (${fmtBytes(loaded)} of ${fmtBytes(total)})`
+            : `Downloading Gemma 4 — ${fmtBytes(loaded)}…`;
+          onStatus?.(`${lastDownloadStatus} · one-time, then cached`);
+          armStallTimer();
           break;
+        }
         case "status":
+          clearTimeout(stallTimer);
           onStatus?.(d.text ?? "");
           break;
         case "ready":
+          clearTimeout(stallTimer);
           ready = true;
-          onStatus?.("Generating…");
+          // Back to the typing dots; if the first token is slow (prefill /
+          // shader warm-up), explain rather than sit silent.
+          onStatus?.("");
+          clearTimeout(genTimer);
+          genTimer = setTimeout(() => {
+            if (firstToken) {
+              onStatus?.(
+                "Still working — the first response after loading the model can take a while…",
+              );
+            }
+          }, 30_000);
           break;
         case "token":
           if (firstToken) {
             firstToken = false;
+            clearTimeout(genTimer);
             onStatus?.("");
           }
           full += d.delta ?? "";
@@ -110,6 +152,8 @@ export function streamBrowserChat(
 
     const onAbort = () => w.postMessage({ type: "stop" });
     const cleanup = () => {
+      clearTimeout(stallTimer);
+      clearTimeout(genTimer);
       w.removeEventListener("message", onMessage);
       signal?.removeEventListener("abort", onAbort);
     };

@@ -363,6 +363,16 @@ export function AiPanel() {
     [busy, messages, buildContext, app.settings, app.docName, app.numPages, app.currentPage],
   );
 
+  // Prompts queued from elsewhere in the app (e.g. the viewer's copilot
+  // menu) via app.askAi. Waits for the current generation to finish.
+  const handledAskRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!app.aiAsk || handledAskRef.current === app.aiAsk.id) return;
+    if (busy) return;
+    handledAskRef.current = app.aiAsk.id;
+    void send(app.aiAsk.prompt);
+  }, [app.aiAsk, busy, send]);
+
   const stop = () => abortRef.current?.abort();
 
   const insertAsTextBox = (content: string) => {
