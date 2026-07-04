@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Columns2,
@@ -22,6 +22,11 @@ import {
   MenuTrigger,
 } from "./components/ui/menu";
 import { cn } from "./lib/utils";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "./components/ui/resizable";
 import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
@@ -271,14 +276,27 @@ function ContentHeader() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Split view: the header IS a row of pane segments (aligned with panes).
+  // On desktop each segment's width tracks its resizable pane's live size; on
+  // mobile the panes stack vertically, so the tab row stays evenly split.
   if (app.screen === "viewer" && app.panes.length >= 2) {
     return (
       <div className="sticky top-0 z-20 flex h-11 shrink-0 items-stretch overflow-hidden rounded-tl-lg border-b bg-background/95 backdrop-blur">
-        {app.panes.map((pane, i) => (
-          <div key={pane.id} className={cn("flex min-w-0 flex-1", i > 0 && "border-l")}>
-            <PaneTab pane={pane} />
-          </div>
-        ))}
+        {app.panes.map((pane, i) => {
+          const size = !app.isMobile ? app.paneSizes[i] : undefined;
+          return (
+            <div
+              key={pane.id}
+              className={cn("flex min-w-0", i > 0 && "border-l")}
+              style={
+                size != null
+                  ? { flex: `${size} 1 0%` }
+                  : { flex: "1 1 0%" }
+              }
+            >
+              <PaneTab pane={pane} />
+            </div>
+          );
+        })}
       </div>
     );
   }
@@ -428,19 +446,29 @@ function Shell() {
           <div className="min-h-0 flex-1">
             {app.screen === "viewer" &&
               (app.panes.length >= 2 ? (
-                <div className="flex h-full min-h-0 flex-col lg:flex-row">
+                <ResizablePanelGroup
+                  // Remount when the set of panes changes so sizes reset to
+                  // equal; on mobile the panes stack (vertical), else side by side.
+                  key={app.panes.map((p) => p.id).join("|")}
+                  direction={app.isMobile ? "vertical" : "horizontal"}
+                  onLayout={(sizes) => app.setPaneSizes(sizes)}
+                  className="min-h-0"
+                >
                   {app.panes.map((pane, i) => (
-                    <div
-                      key={pane.id}
-                      className={cn(
-                        "min-h-0 min-w-0 flex-1",
-                        i < app.panes.length - 1 && "border-b lg:border-b-0 lg:border-r",
-                      )}
-                    >
-                      <PaneShell pane={pane} />
-                    </div>
+                    <Fragment key={pane.id}>
+                      {i > 0 && <ResizableHandle withHandle />}
+                      <ResizablePanel
+                        id={pane.id}
+                        order={i}
+                        defaultSize={100 / app.panes.length}
+                        minSize={15}
+                        className="min-h-0 min-w-0"
+                      >
+                        <PaneShell pane={pane} />
+                      </ResizablePanel>
+                    </Fragment>
                   ))}
-                </div>
+                </ResizablePanelGroup>
               ) : (
                 <Viewer key={app.activeTabId ?? "empty"} />
               ))}

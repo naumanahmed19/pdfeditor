@@ -135,6 +135,10 @@ interface AppStore {
   /** Editor panes for split view. Empty = single view (uses activeTabId). */
   panes: Array<{ id: string; docId: string }>;
   activePaneId: string | null;
+  /** Live pane sizes (percent) from the resizable split — so the header tabs
+   *  stay aligned with the resized content panes. */
+  paneSizes: number[];
+  setPaneSizes: (sizes: number[]) => void;
   /** Split the current document into a new pane (VS Code style). */
   splitView: () => void;
   /** Open a document in a new pane. */
@@ -528,6 +532,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [panes, setPanes] = useState<Array<{ id: string; docId: string }>>([]);
   const [activePaneId, setActivePaneId] = useState<string | null>(null);
+  const [paneSizes, setPaneSizes] = useState<number[]>([]);
   const MAX_PANES = 4;
   const [docVersion, setDocVersion] = useState(0);
 
@@ -2117,6 +2122,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     closeTab,
     panes,
     activePaneId,
+    paneSizes,
+    setPaneSizes,
     splitView,
     openInPane,
     focusPane,
