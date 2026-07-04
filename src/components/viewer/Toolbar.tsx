@@ -1,10 +1,11 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   Bold,
   Circle,
   CircleDot,
   Eraser,
   FormInput,
+  Hand,
   Highlighter,
   Image as ImageIcon,
   Italic,
@@ -12,17 +13,15 @@ import {
   MessageSquare,
   Minus,
   MousePointer2,
-  Move,
-  PenLine,
   Pencil,
   Redo2,
+  Signature,
   SquareSlash,
   Square,
   SquareCheck,
   TextCursorInput,
   Type,
   Undo2,
-  X,
 } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
@@ -40,6 +39,7 @@ import { activeTextEditor } from "../../lib/activeTextEditor";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
+import { Tip, TooltipProvider } from "../ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn } from "../../lib/utils";
 import type {
@@ -50,36 +50,60 @@ import type {
   ToolKind,
 } from "../../types";
 
-const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
-  {
-    key: "read",
-    icon: MousePointer2,
-    label: "Read — select & copy text, follow links",
-  },
-  {
-    key: "select",
-    icon: Move,
-    label: "Move / edit objects — drag existing text & images, resize images, Delete to remove",
-  },
-  { key: "text", icon: Type, label: "Add text" },
-  { key: "edittext", icon: TextCursorInput, label: "Edit existing text (click a line)" },
-  { key: "highlight", icon: Highlighter, label: "Highlight" },
-  { key: "note", icon: MessageSquare, label: "Comment (click the page to add a note)" },
-  { key: "ink", icon: Pencil, label: "Draw freehand" },
-  { key: "rect", icon: Square, label: "Rectangle" },
-  { key: "ellipse", icon: Circle, label: "Ellipse" },
-  { key: "line", icon: Minus, label: "Line" },
-  { key: "whiteout", icon: Eraser, label: "Whiteout (cover content)" },
-  {
-    key: "redact",
-    icon: SquareSlash,
-    label: "Redact — permanently remove content (draw boxes, then Apply)",
-  },
+/** Tools in display order; `group` boundaries render as thin separators. */
+const TOOLS: Array<{
+  key: ToolKind;
+  icon: typeof Type;
+  name: string;
+  desc: string;
+  group: number;
+  shortcut?: string;
+}> = [
+  { key: "read", icon: MousePointer2, name: "Read", desc: "Select & copy text, follow links", group: 0, shortcut: "V" },
+  { key: "select", icon: Hand, name: "Move / edit objects", desc: "Drag existing text & images; Delete to remove", group: 0, shortcut: "M" },
+  { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
+  { key: "edittext", icon: TextCursorInput, name: "Edit existing text", desc: "Click a line of the document to retype it", group: 1, shortcut: "E" },
+  { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Drag over text, or click an existing highlight to remove it", group: 2, shortcut: "H" },
+  { key: "note", icon: MessageSquare, name: "Comment", desc: "Click the page to add a sticky note", group: 2, shortcut: "C" },
+  { key: "ink", icon: Pencil, name: "Draw freehand", desc: "Pen strokes in the chosen color & size", group: 2, shortcut: "D" },
+  { key: "rect", icon: Square, name: "Rectangle", desc: "Drag to draw; fill optional", group: 3, shortcut: "R" },
+  { key: "ellipse", icon: Circle, name: "Ellipse", desc: "Drag to draw; fill optional", group: 3, shortcut: "O" },
+  { key: "line", icon: Minus, name: "Line", desc: "Drag from start to end", group: 3, shortcut: "L" },
+  { key: "whiteout", icon: Eraser, name: "Whiteout", desc: "Covers content — it still exists in the file", group: 4, shortcut: "W" },
+  { key: "redact", icon: SquareSlash, name: "Redact", desc: "Permanently removes covered content — draw boxes, then Apply", group: 4, shortcut: "X" },
 ];
 
 export function EditorToolbar() {
   const app = useApp();
   const imageRef = useRef<HTMLInputElement>(null);
+
+  // Single-key tool shortcuts (V/M/T/E/H/C/D/R/O/L/W/X) — ignored while
+  // typing anywhere (inputs, selects, the rich text editor).
+  const setToolRef = useRef(app.setTool);
+  setToolRef.current = app.setTool;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      if (activeTextEditor.current) return;
+      const tool = TOOLS.find((x) => x.shortcut?.toLowerCase() === e.key.toLowerCase());
+      if (tool) {
+        e.preventDefault();
+        setToolRef.current(tool.key);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   if (!app.pdf) return null;
 
@@ -184,81 +208,91 @@ export function EditorToolbar() {
   return (
     // data-ann-controls: pressing toolbar controls must not deselect the
     // annotation or dismiss its popover (see AnnotationItem's onOpenChange).
+    <TooltipProvider delay={350}>
     <div
       data-ann-controls
+      role="toolbar"
+      aria-label="PDF editing tools"
       className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur"
     >
       {/* tools */}
-      <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-        <ToggleGroup
-          value={toolValue}
-          onValueChange={handleToolChange}
-          className="bg-transparent p-0"
-          aria-label="Annotation tools"
-        >
-          {TOOLS.map((t) => (
-            <ToggleGroupItem
-              key={t.key}
-              value={t.key}
-              title={t.label}
-              aria-label={t.label}
-            >
-              <t.icon className="h-4 w-4" />
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+      <ToggleGroup
+        value={toolValue}
+        onValueChange={handleToolChange}
+        className="flex flex-wrap items-center gap-1 bg-transparent p-0"
+        aria-label="Annotation tools"
+      >
+        {TOOLS.map((t, i) => (
+          <div key={t.key} className="flex items-center gap-1">
+            {i > 0 && t.group !== TOOLS[i - 1].group && (
+              <div className="mx-1 h-6 w-px bg-border" />
+            )}
+            <Tip label={t.name} desc={t.desc} shortcut={t.shortcut}>
+              <ToggleGroupItem
+                value={t.key}
+                aria-label={t.name}
+                className="h-8 w-8 rounded-md data-[pressed]:!bg-primary data-[pressed]:!text-primary-foreground"
+              >
+                <t.icon className="h-4 w-4" />
+              </ToggleGroupItem>
+            </Tip>
+          </div>
+        ))}
+      </ToggleGroup>
+      <div className="mx-1 h-6 w-px bg-border" />
+      <Tip label="Insert image" desc="PNG or JPEG, placed as a stamp">
         <button
-          title="Insert image"
           onClick={() => imageRef.current?.click()}
-          className="flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <ImageIcon className="h-4 w-4" />
         </button>
-        <Menu>
-          <MenuTrigger
-            className={cn(
-              "flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium transition-colors",
-              app.tool.startsWith("form")
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <FormInput className="h-4 w-4" />
-            Field
-          </MenuTrigger>
-          <MenuContent className="min-w-44">
-            <MenuItem onClick={() => app.setTool("formtext")}>
-              <FormInput className="h-4 w-4 text-muted-foreground" />
-              Text field
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formcheckbox")}>
-              <SquareCheck className="h-4 w-4 text-muted-foreground" />
-              Checkbox
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formradio")}>
-              <CircleDot className="h-4 w-4 text-muted-foreground" />
-              Radio button
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formdropdown")}>
-              <List className="h-4 w-4 text-muted-foreground" />
-              Dropdown
-            </MenuItem>
-          </MenuContent>
-        </Menu>
-        <button
-          title="Insert signature"
-          onClick={() => app.setSignatureModalOpen(true)}
+      </Tip>
+      <Menu>
+        <MenuTrigger
           className={cn(
-            "flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium transition-colors",
-            app.pendingStamp
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
+            "flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
+            app.tool.startsWith("form")
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
-          <PenLine className="h-4 w-4" />
+          <FormInput className="h-4 w-4" />
+          Field
+        </MenuTrigger>
+        <MenuContent className="min-w-44">
+          <MenuItem onClick={() => app.setTool("formtext")}>
+            <FormInput className="h-4 w-4 text-muted-foreground" />
+            Text field
+          </MenuItem>
+          <MenuItem onClick={() => app.setTool("formcheckbox")}>
+            <SquareCheck className="h-4 w-4 text-muted-foreground" />
+            Checkbox
+          </MenuItem>
+          <MenuItem onClick={() => app.setTool("formradio")}>
+            <CircleDot className="h-4 w-4 text-muted-foreground" />
+            Radio button
+          </MenuItem>
+          <MenuItem onClick={() => app.setTool("formdropdown")}>
+            <List className="h-4 w-4 text-muted-foreground" />
+            Dropdown
+          </MenuItem>
+        </MenuContent>
+      </Menu>
+      <Tip label="Insert signature" desc="Draw, type or upload; saved for reuse">
+        <button
+          onClick={() => app.setSignatureModalOpen(true)}
+          className={cn(
+            "flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
+            app.pendingStamp
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          <Signature className="h-4 w-4" />
           Sign
         </button>
-      </div>
+      </Tip>
       <input
         ref={imageRef}
         type="file"
@@ -435,28 +469,30 @@ export function EditorToolbar() {
         )}
       </div>
 
-      <div className="mx-1 h-5 w-px bg-border" />
+      <div className="mx-1 h-6 w-px bg-border" />
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7"
-        disabled={!app.canUndo}
-        onClick={app.undo}
-        title="Undo (Ctrl+Z)"
-      >
-        <Undo2 className="h-4 w-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7"
-        disabled={!app.canRedo}
-        onClick={app.redo}
-        title="Redo (Ctrl+Shift+Z)"
-      >
-        <Redo2 className="h-4 w-4" />
-      </Button>
+      <Tip label="Undo" shortcut="Ctrl+Z">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground"
+          disabled={!app.canUndo}
+          onClick={app.undo}
+        >
+          <Undo2 className="h-4 w-4" />
+        </Button>
+      </Tip>
+      <Tip label="Redo" shortcut="Ctrl+Shift+Z">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground"
+          disabled={!app.canRedo}
+          onClick={app.redo}
+        >
+          <Redo2 className="h-4 w-4" />
+        </Button>
+      </Tip>
 
       <div className="ml-auto flex items-center gap-1">
         {app.tool === "redact" && app.redactCount === 0 && (
@@ -482,5 +518,6 @@ export function EditorToolbar() {
         )}
       </div>
     </div>
+    </TooltipProvider>
   );
 }

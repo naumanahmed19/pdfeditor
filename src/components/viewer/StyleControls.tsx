@@ -14,6 +14,7 @@ import {
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Select } from "../ui/select";
+import { Tip } from "../ui/tooltip";
 import { hexToRgb01 } from "../../lib/utils";
 import type { FontFamilyKind } from "../../types";
 
@@ -90,51 +91,56 @@ export function TextStyleControls({
             </option>
           ))}
       </Select>
-      <Button
-        variant={value.bold ? "subtle" : "ghost"}
-        size="icon"
-        className="h-7 w-7"
-        title="Bold"
-        onClick={() => onPatch({ bold: !value.bold })}
-      >
-        <Bold className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant={value.italic ? "subtle" : "ghost"}
-        size="icon"
-        className="h-7 w-7"
-        title="Italic"
-        onClick={() => onPatch({ italic: !value.italic })}
-      >
-        <Italic className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant={value.underline ? "subtle" : "ghost"}
-        size="icon"
-        className="h-7 w-7"
-        title="Underline"
-        onClick={() => onPatch({ underline: !value.underline })}
-      >
-        <Underline className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant={value.strike ? "subtle" : "ghost"}
-        size="icon"
-        className="h-7 w-7"
-        title="Strikethrough"
-        onClick={() => onPatch({ strike: !value.strike })}
-      >
-        <Strikethrough className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7"
-        title={`Align: ${value.align} — click to change`}
-        onClick={() => onPatch({ align: NEXT_ALIGN[value.align] })}
-      >
-        <AlignIcon className="h-3.5 w-3.5" />
-      </Button>
+      <Tip label="Bold">
+        <Button
+          variant={value.bold ? "subtle" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => onPatch({ bold: !value.bold })}
+        >
+          <Bold className="h-3.5 w-3.5" />
+        </Button>
+      </Tip>
+      <Tip label="Italic">
+        <Button
+          variant={value.italic ? "subtle" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => onPatch({ italic: !value.italic })}
+        >
+          <Italic className="h-3.5 w-3.5" />
+        </Button>
+      </Tip>
+      <Tip label="Underline">
+        <Button
+          variant={value.underline ? "subtle" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => onPatch({ underline: !value.underline })}
+        >
+          <Underline className="h-3.5 w-3.5" />
+        </Button>
+      </Tip>
+      <Tip label="Strikethrough">
+        <Button
+          variant={value.strike ? "subtle" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => onPatch({ strike: !value.strike })}
+        >
+          <Strikethrough className="h-3.5 w-3.5" />
+        </Button>
+      </Tip>
+      <Tip label={`Align: ${value.align}`} desc="Click to cycle left / center / right">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => onPatch({ align: NEXT_ALIGN[value.align] })}
+        >
+          <AlignIcon className="h-3.5 w-3.5" />
+        </Button>
+      </Tip>
     </>
   );
 }
