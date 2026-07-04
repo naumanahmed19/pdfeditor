@@ -469,7 +469,7 @@ function Shell() {
         )}
       </div>
       <SignatureModal />
-      <Toaster richColors />
+      <Toaster />
     </div>
   );
 }

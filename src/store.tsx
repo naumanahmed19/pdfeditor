@@ -76,7 +76,7 @@ export interface PasswordRequest {
   error?: string;
 }
 
-/** The document's base bytes + its parsed pdf.js proxy at a point in history. */
+/** The document's base bytes + its parsed PDFium document at a point in history. */
 interface BaseState {
   bytes: Uint8Array;
   pdf: PdfDoc;

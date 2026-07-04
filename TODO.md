@@ -18,31 +18,28 @@ Replace it with a dedicated form-builder experience:
 - [ ] Live preview toggle (design ↔ fill) without leaving the builder
 - [ ] Validation: duplicate field names, empty dropdown options, overlaps
 
-## Evaluate @embedpdf/pdfium (PDFium engine)
+## PDFium engine (@embedpdf/pdfium)
 
-EmbedPDF (embedpdf.com, MIT) is an actively maintained PDFium-WASM binding +
-viewer framework — v2.14.x as of mid-2026, near-complete PDFium API surface
-(text geometry, annotations, forms). Evaluation plan:
-
-> **Prototype done** on the `pdfium-experiment` branch — see
-> [PDFIUM_EXPERIMENT.md](PDFIUM_EXPERIMENT.md). Rasterization and true redaction
-> both verified working (`src/lib/pdfium.ts`); not yet wired into the UI.
+> **Migration complete** — pdf.js has been removed entirely; PDFium
+> (`src/lib/engine.ts`) now handles rendering, text layer geometry, search
+> text, annotations and forms behind a pdf.js-compatible API surface. See
+> [PDFIUM_EXPERIMENT.md](PDFIUM_EXPERIMENT.md) for the original evaluation.
 
 - [x] Proof-of-concept: lazy-loaded PDFium engine (`getPdfium`), page
       rasterization (`renderPage`/`renderPageToCanvas`) and destructive
       redaction (`redactRegions` via `EPDFText_RedactInQuads`), wasm bundled
       locally, ~4.6 MB loaded on demand only
 - [x] Wire rasterization into "Export pages as PNG" (`renderPage`)
-- [ ] Opt-in render fallback for documents pdf.js draws incorrectly
 - [x] Wire `redactRegions` behind a **Redact tool** — draw black boxes with the
       Redact tool, then **Apply redactions** destructively strips the covered
       text/content (also enforced on save, so nothing leaks under an un-applied
       box). Image-only regions are covered but the underlying image object isn't
       yet removed — text redaction is fully destructive.
-- [ ] Long term: benchmark their engine + plugins (selection, search,
-      annotations, forms) against our pdf.js stack as a potential migration —
-      only worth it if fidelity/perf wins are clear, since edit-text font
-      detection, form designer/filler and search marks are wired to pdf.js APIs
+- [x] Full migration off pdf.js: rendering, text layer, search, annotations and
+      forms all run on PDFium (`engine.ts` exposes pdf.js-shaped APIs so
+      callers didn't change); `pdfjs-dist` dependency removed
+- [ ] Redaction: remove the underlying image object for image-only regions
+      (currently covered but still present in the file)
 - [ ] Desktop build alternative: pdfium-render (Rust) on the Tauri backend for
       native-speed rasterization without WASM bundle cost
 
