@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useReducer, useRef, useSyncExternalStore, type ReactNode } from "react";
 import {
   Bold,
   Circle,
@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Minus,
   MousePointer2,
+  PaintBucket,
   Pencil,
   Redo2,
   Signature,
@@ -76,7 +77,8 @@ const TOOLS: Array<{
   { key: "rect", icon: Square, name: "Rectangle", desc: "Drag to draw; fill optional", group: 3, shortcut: "R" },
   { key: "ellipse", icon: Circle, name: "Ellipse", desc: "Drag to draw; fill optional", group: 3, shortcut: "O" },
   { key: "line", icon: Minus, name: "Line", desc: "Drag from start to end", group: 3, shortcut: "L" },
-  { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across any element to remove it", group: 4, shortcut: "W" },
+  { key: "whiteout", icon: PaintBucket, name: "Whiteout", desc: "Cover page content with a filled box (hides, does not remove)", group: 4, shortcut: "W" },
+  { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across an annotation you added to delete it" , group: 4 },
   { key: "redact", icon: SquareSlash, name: "Redact", desc: "Permanently removes covered content — draw boxes, then Apply", group: 4, shortcut: "X" },
 ];
 
@@ -121,6 +123,12 @@ function DragScroll({
       onPointerMove={(e) => {
         const el = ref.current;
         if (!el || !st.current.down) return;
+        // Self-heal if the button was released off-element (no pointerup fired):
+        // a plain hover carries no buttons, so it must never scroll.
+        if (e.buttons === 0) {
+          st.current.down = false;
+          return;
+        }
         const dx = e.clientX - st.current.startX;
         if (!st.current.moved && Math.abs(dx) > 5) {
           st.current.moved = true;
@@ -147,6 +155,11 @@ function DragScroll({
         }
         st.current.down = false;
       }}
+      onPointerCancel={() => {
+        st.current.down = false;
+        st.current.moved = false;
+        if (ref.current) ref.current.style.cursor = "";
+      }}
     >
       {children}
     </div>
@@ -161,6 +174,18 @@ export function EditorToolbar() {
   // size / color controls render in this toolbar's contextual row.
   useSyncExternalStore(activeInlineEdit.subscribe, activeInlineEdit.getVersion);
   const inlineEdit = activeInlineEdit.current;
+
+  // Re-render as the caret/selection moves inside a rich-text box, so the
+  // B/I/U/S/font/size/color controls track the selection's style. Only active
+  // while a text box is being edited (activeTextEditor is set).
+  const [, bumpSel] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const onSel = () => {
+      if (activeTextEditor.current) bumpSel();
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  }, []);
 
   // Single-key tool shortcuts (V/M/T/E/H/C/D/R/O/L/W/X) — ignored while
   // typing anywhere (inputs, selects, the rich text editor).
@@ -284,11 +309,29 @@ export function EditorToolbar() {
     app.setSelected(null);
   };
 
-  const fontFamily = selectedText?.fontFamily ?? app.fontFamily;
-  const isBold = selectedText ? !!selectedText.bold : app.fontBold;
-  const isItalic = selectedText ? !!selectedText.italic : app.fontItalic;
-  const isUnderline = selectedText ? !!selectedText.underline : app.fontUnderline;
-  const isStrike = selectedText ? !!selectedText.strike : app.fontStrike;
+  // When a box is being edited, the B/I/U/S/font/size/color controls reflect
+  // the CURRENT SELECTION's resolved style (via the active editor), not the
+  // box-level style — otherwise a toggle over a run-styled selection would show
+  // the wrong state and invert (e.g. can't un-bold a bolded word). `selTick`
+  // re-runs this on caret/selection changes. Mixed selections → undefined,
+  // shown as "off" so a click sets the whole selection.
+  const liveEditor =
+    selectedText && activeTextEditor.current?.annId === selectedText.id
+      ? activeTextEditor.current
+      : null;
+  const sel = <K extends "bold" | "italic" | "underline" | "strike">(
+    key: K,
+    boxVal: boolean,
+  ): boolean => (liveEditor ? liveEditor.styleValue(key) ?? false : boxVal);
+
+  const fontFamily =
+    (liveEditor?.styleValue("fontFamily")) ??
+    selectedText?.fontFamily ??
+    app.fontFamily;
+  const isBold = sel("bold", selectedText ? !!selectedText.bold : app.fontBold);
+  const isItalic = sel("italic", selectedText ? !!selectedText.italic : app.fontItalic);
+  const isUnderline = sel("underline", selectedText ? !!selectedText.underline : app.fontUnderline);
+  const isStrike = sel("strike", selectedText ? !!selectedText.strike : app.fontStrike);
   const alignValue = selectedText?.align ?? app.textAlign;
 
   // A selected annotation whose color / stroke / fill the contextual row
@@ -547,8 +590,10 @@ export function EditorToolbar() {
           inlineEdit ? (
             // Editing a real text run: drive its detected style. Native <select>
             // (not the base-ui one) so the dropdown doesn't portal focus out and
-            // commit the edit prematurely.
-            <div className="flex items-center gap-1.5">
+            // commit the edit prematurely. Tagged so the inline editor keeps
+            // focus for THESE controls only — clicking Undo/Redo or a tool
+            // elsewhere in the toolbar commits the edit first.
+            <div data-inline-edit-controls className="flex items-center gap-1.5">
               <select
                 value={inlineEdit.family}
                 disabled={inlineEdit.saving}
@@ -625,9 +670,15 @@ export function EditorToolbar() {
         ) : showFontControls ? (
           <TextStyleControls
             value={{
-              color: selectedText?.color ?? app.toolColor,
+              color:
+                liveEditor?.styleValue("color") ??
+                selectedText?.color ??
+                app.toolColor,
               fontFamily,
-              fontSize: selectedText?.fontSize ?? app.fontSize,
+              fontSize:
+                liveEditor?.styleValue("fontSize") ??
+                selectedText?.fontSize ??
+                app.fontSize,
               bold: isBold,
               italic: isItalic,
               underline: isUnderline,

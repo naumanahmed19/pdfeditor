@@ -590,7 +590,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => typeof window === "undefined" || window.innerWidth >= 1024,
   );
   const [sidebarOpen, setSidebarOpen] = useState(
-    () => typeof window !== "undefined" && window.innerWidth > 1024,
+    () => typeof window !== "undefined" && window.innerWidth >= 1024,
   );
 
   const [aiAsk, setAiAsk] = useState<{ id: string; prompt: string } | null>(null);
@@ -608,9 +608,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const onResize = () => {
       const w = window.innerWidth;
       setIsMobile(w < 1024);
-      // Shrinking to a small screen auto-closes the left sidebar so the page
-      // keeps its room; it can still be reopened manually at any size.
-      if (w <= 1024 && prevWidth > 1024) setSidebarOpen(false);
+      // Crossing from desktop into the mobile breakpoint auto-closes the left
+      // sidebar so the page keeps its room; it can still be reopened manually.
+      if (w < 1024 && prevWidth >= 1024) setSidebarOpen(false);
       prevWidth = w;
     };
     window.addEventListener("resize", onResize);

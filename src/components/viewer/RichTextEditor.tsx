@@ -6,8 +6,10 @@ import {
   getRuns,
   getSelectionOffsets,
   parseEditorRuns,
+  rangeStyleValue,
   runsToHtml,
   setSelectionOffsets,
+  type ResolvedStyle,
 } from "../../lib/richtext";
 import { activeTextEditor } from "../../lib/activeTextEditor";
 
@@ -104,6 +106,18 @@ export const RichTextEditor = forwardRef<
     return true;
   };
 
+  /** Resolved style of the current selection (collapsed → the char before it),
+   *  or undefined when the selection spans mixed values. */
+  const styleValue = <K extends keyof ResolvedStyle>(key: K): ResolvedStyle[K] | undefined => {
+    const el = elRef.current;
+    if (!el) return undefined;
+    const runs = parseEditorRuns(el, annRef.current);
+    const total = runs.reduce((n, r) => n + r.text.length, 0);
+    if (total === 0) return undefined; // empty box → caller reads box style
+    const off = getSelectionOffsets(el) ?? { start: total, end: total };
+    return rangeStyleValue(runs, off.start, off.end, key, annRef.current);
+  };
+
   useImperativeHandle(ref, () => ({
     applyStyle,
     selection: () => (elRef.current ? getSelectionOffsets(elRef.current) : null),
@@ -117,6 +131,7 @@ export const RichTextEditor = forwardRef<
       annId: ann.id,
       applyStyle,
       selection: () => (elRef.current ? getSelectionOffsets(elRef.current) : null),
+      styleValue,
     };
     return () => {
       if (activeTextEditor.current?.annId === ann.id) activeTextEditor.current = null;
