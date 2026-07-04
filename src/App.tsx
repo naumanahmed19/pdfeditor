@@ -111,11 +111,6 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
           title="Unsaved edits"
         />
       )}
-      {isFocused && app.editMode && (
-        <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 sm:inline dark:text-blue-400">
-          editing
-        </span>
-      )}
       <div
         className="ml-auto flex shrink-0 items-center gap-1"
         onClick={(e) => e.stopPropagation()}
@@ -139,16 +134,17 @@ function PaneTab({ pane }: { pane: { id: string; docId: string } }) {
             <EllipsisVertical className="h-3.5 w-3.5" />
           </MenuTrigger>
           <MenuContent className="min-w-44">
-            <MenuItem
-              onClick={() => {
-                if (isFocused) app.setEditMode(!app.editMode);
-                else app.focusPane(pane.id);
-                app.setScreen("viewer");
-              }}
-            >
-              <SquarePen className="h-4 w-4 text-muted-foreground" />
-              {isFocused ? (app.editMode ? "Stop editing" : "Edit") : "Edit this pane"}
-            </MenuItem>
+            {!isFocused && (
+              <MenuItem
+                onClick={() => {
+                  app.focusPane(pane.id);
+                  app.setScreen("viewer");
+                }}
+              >
+                <SquarePen className="h-4 w-4 text-muted-foreground" />
+                Edit this pane
+              </MenuItem>
+            )}
             <MenuItem onClick={() => void app.printDoc(pane.docId)}>
               <Printer className="h-4 w-4 text-muted-foreground" />
               Print
@@ -244,65 +240,28 @@ function DocActions() {
       >
         <Printer className="h-4 w-4" />
       </Button>
-      {app.editMode ? (
-        <>
-          {app.hasAnnotations && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
-              onClick={() => {
-                toast("Discard all unsaved edits?", {
-                  action: {
-                    label: "Discard",
-                    onClick: () => {
-                      app.clearAnnotations();
-                      app.setEditMode(false);
-                      toast.success("Edits discarded");
-                    },
-                  },
-                });
-              }}
-            >
-              Discard
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7"
-            onClick={() => {
-              app.setEditMode(false);
-              app.setScreen("viewer");
-              const hasNewFields = Object.values(app.annotations)
-                .flat()
-                .some((a) => a.kind === "formfield");
-              if (hasNewFields) {
-                toast.info("New form fields become fillable after you save the PDF.");
-              }
-            }}
-          >
-            Done
-          </Button>
-          {saveBtn}
-        </>
-      ) : (
-        <>
-          {app.hasAnnotations && saveBtn}
-          <Button
-            variant={app.hasAnnotations ? "outline" : "default"}
-            size="sm"
-            className="h-7 gap-1.5"
-            onClick={() => {
-              app.setEditMode(true);
-              app.setScreen("viewer");
-            }}
-          >
-            <SquarePen className="h-3.5 w-3.5" />
-            Edit
-          </Button>
-        </>
+      {app.hasAnnotations && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => {
+            toast("Discard all unsaved edits?", {
+              action: {
+                label: "Discard",
+                onClick: () => {
+                  app.clearAnnotations();
+                  app.setEditMode(false);
+                  toast.success("Edits discarded");
+                },
+              },
+            });
+          }}
+        >
+          Discard
+        </Button>
       )}
+      {saveBtn}
     </div>
   );
 }
@@ -335,11 +294,6 @@ function ContentHeader() {
             className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
             title="Unsaved edits"
           />
-        )}
-        {app.editMode && (
-          <span className="hidden shrink-0 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 sm:inline dark:text-blue-400">
-            Editing
-          </span>
         )}
         <span className="hidden shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline">
           {app.numPages} pages
@@ -470,7 +424,7 @@ function Shell() {
         <Sidebar />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background lg:rounded-tl-lg lg:border-l lg:border-t lg:shadow-shell">
           <ContentHeader />
-          {app.screen === "viewer" && app.editMode && <EditorToolbar />}
+          {app.screen === "viewer" && <EditorToolbar />}
           <div className="min-h-0 flex-1">
             {app.screen === "viewer" &&
               (app.panes.length >= 2 ? (

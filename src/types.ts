@@ -1,4 +1,5 @@
 export type ToolKind =
+  | "read"
   | "select"
   | "text"
   | "edittext"
@@ -9,6 +10,7 @@ export type ToolKind =
   | "ellipse"
   | "line"
   | "whiteout"
+  | "redact"
   | "image"
   | "signature"
   | "formtext"
@@ -36,14 +38,33 @@ export type FontFamilyKind =
   | "carlito" // metric-compatible with Calibri (bundled)
   | "caladea"; // metric-compatible with Cambria (bundled)
 
+/** A styled span of a rich text box. Unset style fields inherit the box's. */
+export interface TextRun {
+  text: string;
+  color?: string;
+  fontSize?: number;
+  fontFamily?: FontFamilyKind;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+}
+
 export interface TextAnnotation extends BaseAnnotation {
   kind: "text";
+  /** Plain text (concatenation of `runs` when present) — for search/extract. */
   text: string;
+  /** Rich runs; when absent the whole `text` uses the box-level style below. */
+  runs?: TextRun[];
   fontSize: number;
   color: string;
   fontFamily?: FontFamilyKind;
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** Paragraph alignment for the whole box. */
+  align?: "left" | "center" | "right";
   /** Exact CSS font-family for on-screen display (e.g. the embedded PDF font). */
   displayFontCss?: string;
 }
@@ -65,6 +86,13 @@ export interface WhiteoutAnnotation extends BaseAnnotation {
   kind: "whiteout";
   /** Patch color — defaults to white; edit-text samples the page background. */
   color?: string;
+}
+
+/** A pending redaction region. Unlike whiteout (a cosmetic cover), applying it
+ *  destructively removes the underlying text/content via PDFium — the redacted
+ *  content no longer exists in the saved file. Rendered as a solid black box. */
+export interface RedactAnnotation extends BaseAnnotation {
+  kind: "redact";
 }
 
 export interface ShapeAnnotation extends BaseAnnotation {
@@ -144,6 +172,7 @@ export type Annotation =
   | HighlightAnnotation
   | NoteAnnotation
   | WhiteoutAnnotation
+  | RedactAnnotation
   | ShapeAnnotation
   | InkAnnotation
   | ImageAnnotation

@@ -36,9 +36,11 @@ context sent to the AI endpoint you configure (which can be fully local).
 ## Editor
 
 Annotations are overlaid live and **baked into the PDF on save** (correct on
-rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
-**Save** commits and exits edit mode in one step; **Done** parks pending
-changes; **Discard** (with confirmation) throws them away.
+rotated pages). Editing is **modeless** — the toolbar is always there, like a
+browser: the default **Read** cursor selects text and follows links; arming
+any tool switches what a click does, and **Escape** returns to reading.
+**Save** commits (and disarms); **Discard** (with confirmation) throws pending
+edits away.
 
 - **Add text** boxes that **auto-grow** to fit what you type (width then wrap).
 - **Edit existing text** truly in place (PDFium): click a line and edit it
@@ -55,6 +57,11 @@ changes; **Discard** (with confirmation) throws them away.
   edits with a live drag preview, on the same undo timeline.
 - **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
   **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
+- **Redact** (PDFium): draw black boxes over anything sensitive, then **Apply
+  redactions** to *destructively* strip the covered text from the content stream
+  — it's genuinely removed from the saved file, not just hidden, so it can't be
+  copied, searched or recovered. Redaction is also enforced on save, so an
+  un-applied box never leaks its content.
 - **Comments (sticky notes)** — drop a marker anywhere on a page and write a
   note in its popup; recolor or delete from the same popup. On save they become
   **real PDF popup annotations** (Acrobat, Chrome & co. show them as native
@@ -186,11 +193,12 @@ bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/targe
 ## Tech
 
 - **React 18 + Vite + TypeScript + Tailwind**, base-ui (shadcn-style) primitives.
-- Three PDF engines, each doing what it's best at: **pdf.js** renders (canvas,
-  text layer, search, outline); **PDFium** (WASM, lazy-loaded) edits page
-  content in place (text rewrite, object move/resize/delete, form appearance
-  regeneration); **pdf-lib** (+ fontkit) assembles documents (merge, split,
-  forms, baking annotations on save). **JSZip** for zip exports.
+- **PDFium (WASM)** is the PDF runtime: rendering, the selectable text layer,
+  search text, outline, links, form-field reading, metadata — and all in-place
+  editing (text rewrite, object move/resize/delete, redaction, form appearance
+  regeneration). **pdf-lib** (+ fontkit) assembles documents (merge, split,
+  forms, baking annotations on save). **JSZip** for zip exports. (pdf.js has
+  been fully removed.)
 - State in a single React context store; persistence via IndexedDB and
   localStorage. No backend.
 
@@ -199,8 +207,8 @@ bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/targe
 - Structural operations (rotate/delete/reorder/watermark) bake any pending
   annotations into the document first, then apply.
 - **Whiteout hides, it doesn't redact** — the covered text still exists in the
-  saved PDF. Don't use it to remove confidential content (true redaction is on
-  the roadmap — see [TODO.md](TODO.md)).
+  saved PDF. To actually *remove* confidential content, use the **Redact tool**
+  instead (it strips the content, not just covers it).
 - The reference (non-focused) split pane is read-only and shows the saved
   document; edit by focusing that pane.
 - In-place text editing reuses a run's own embedded font. If that font is a
@@ -215,5 +223,5 @@ bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/targe
 - OCR fetches its language model once from a CDN (cached); the recognition
   itself runs locally, so your document is never uploaded.
 
-See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, true redaction,
-and comment round-trip import).
+See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, richer search
+options, and a two-page spread view).

@@ -12,9 +12,11 @@ import {
   MessageSquare,
   Minus,
   MousePointer2,
+  Move,
   PenLine,
   Pencil,
   Redo2,
+  SquareSlash,
   Square,
   SquareCheck,
   TextCursorInput,
@@ -25,6 +27,16 @@ import {
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
+import {
+  ColorPresets,
+  FillControl,
+  HIGHLIGHT_PRESETS,
+  INK_PRESETS,
+  SizePresets,
+  StrokeWidthSelect,
+  TextStyleControls,
+} from "./StyleControls";
+import { activeTextEditor } from "../../lib/activeTextEditor";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
@@ -40,9 +52,14 @@ import type {
 
 const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   {
-    key: "select",
+    key: "read",
     icon: MousePointer2,
-    label: "Select / move — drag existing text & images, resize images, Delete to remove",
+    label: "Read — select & copy text, follow links",
+  },
+  {
+    key: "select",
+    icon: Move,
+    label: "Move / edit objects — drag existing text & images, resize images, Delete to remove",
   },
   { key: "text", icon: Type, label: "Add text" },
   { key: "edittext", icon: TextCursorInput, label: "Edit existing text (click a line)" },
@@ -53,6 +70,11 @@ const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   { key: "ellipse", icon: Circle, label: "Ellipse" },
   { key: "line", icon: Minus, label: "Line" },
   { key: "whiteout", icon: Eraser, label: "Whiteout (cover content)" },
+  {
+    key: "redact",
+    icon: SquareSlash,
+    label: "Redact — permanently remove content (draw boxes, then Apply)",
+  },
 ];
 
 export function EditorToolbar() {
@@ -141,6 +163,9 @@ export function EditorToolbar() {
   const fontFamily = selectedText?.fontFamily ?? app.fontFamily;
   const isBold = selectedText ? !!selectedText.bold : app.fontBold;
   const isItalic = selectedText ? !!selectedText.italic : app.fontItalic;
+  const isUnderline = selectedText ? !!selectedText.underline : app.fontUnderline;
+  const isStrike = selectedText ? !!selectedText.strike : app.fontStrike;
+  const alignValue = selectedText?.align ?? app.textAlign;
 
   // Contextual style controls: font options only while working with text,
   // stroke width only for drawing tools.
@@ -157,7 +182,12 @@ export function EditorToolbar() {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
+    // data-ann-controls: pressing toolbar controls must not deselect the
+    // annotation or dismiss its popover (see AnnotationItem's onOpenChange).
+    <div
+      data-ann-controls
+      className="flex flex-wrap items-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur"
+    >
       {/* tools */}
       <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
         <ToggleGroup
@@ -256,130 +286,73 @@ export function EditorToolbar() {
 
       {/* style controls — contextual */}
       <div className="ml-1 flex items-center gap-1.5">
-        {showColor && (
-          <ColorSwatch
-            value={selectedText?.color ?? app.toolColor}
-            onChange={(v) => {
-              app.setToolColor(v);
-              patchSelectedText({ color: v });
+        {showFontControls ? (
+          <TextStyleControls
+            value={{
+              color: selectedText?.color ?? app.toolColor,
+              fontFamily,
+              fontSize: selectedText?.fontSize ?? app.fontSize,
+              bold: isBold,
+              italic: isItalic,
+              underline: isUnderline,
+              strike: isStrike,
+              align: alignValue,
             }}
-            title="Color"
+            onPatch={(p) => {
+              // Tool defaults follow the last choice so new boxes match.
+              if (p.color !== undefined) app.setToolColor(p.color);
+              if (p.fontFamily !== undefined) app.setFontFamily(p.fontFamily);
+              if (p.fontSize !== undefined) app.setFontSize(p.fontSize);
+              if (p.bold !== undefined) app.setFontBold(p.bold);
+              if (p.italic !== undefined) app.setFontItalic(p.italic);
+              if (p.underline !== undefined) app.setFontUnderline(p.underline);
+              if (p.strike !== undefined) app.setFontStrike(p.strike);
+              if (p.align !== undefined) app.setTextAlign(p.align);
+              // Alignment is a box property — always patch the annotation directly.
+              const { align, ...runPatch } = p;
+              if (align !== undefined) patchSelectedText({ align });
+              if (!Object.keys(runPatch).length) return;
+              // Editing a box → style its current selection; an empty box has
+              // nothing to style yet (returns false) → patch the box itself.
+              const editor = activeTextEditor.current;
+              if (
+                editor &&
+                selectedText &&
+                editor.annId === selectedText.id &&
+                editor.applyStyle(runPatch)
+              ) {
+                return;
+              }
+              patchSelectedText({
+                ...runPatch,
+                ...(runPatch.fontFamily !== undefined ? { displayFontCss: undefined } : {}),
+              });
+            }}
           />
-        )}
-        {showFontControls && (
+        ) : app.tool === "highlight" ? (
+          <ColorPresets
+            colors={HIGHLIGHT_PRESETS}
+            value={app.highlightColor}
+            onChange={app.setHighlightColor}
+          />
+        ) : app.tool === "ink" ? (
           <>
-            <Select
-              value={fontFamily}
-              onChange={(e) => {
-                const v = e.target.value as FontFamilyKind;
-                app.setFontFamily(v);
-                // Clear the embedded display font so the chosen family shows.
-                patchSelectedText({ fontFamily: v, displayFontCss: undefined });
-              }}
-              aria-label="Font family"
-              className="h-7 w-24 px-2 text-xs"
-            >
-              <option value="helvetica">Helvetica</option>
-              <option value="times">Times</option>
-              <option value="courier">Courier</option>
-              <option value="carlito">Carlito (Calibri)</option>
-              <option value="caladea">Caladea (Cambria)</option>
-            </Select>
-            <button
-              title="Bold"
-              onClick={() => {
-                const next = !isBold;
-                app.setFontBold(next);
-                patchSelectedText({ bold: next });
-              }}
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md border border-input transition-colors",
-                isBold
-                  ? "bg-accent text-foreground"
-                  : "bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Bold className="h-3.5 w-3.5" />
-            </button>
-            <button
-              title="Italic"
-              onClick={() => {
-                const next = !isItalic;
-                app.setFontItalic(next);
-                patchSelectedText({ italic: next });
-              }}
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md border border-input transition-colors",
-                isItalic
-                  ? "bg-accent text-foreground"
-                  : "bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Italic className="h-3.5 w-3.5" />
-            </button>
-            <Select
-              value={selectedText?.fontSize ?? app.fontSize}
-              onChange={(e) => {
-                app.setFontSize(Number(e.target.value));
-                patchSelectedText({ fontSize: Number(e.target.value) });
-              }}
-              aria-label="Font size"
-              className="h-7 w-[4.75rem] px-2 text-xs"
-            >
-              {[...new Set([10, 12, 14, 16, 18, 22, 28, 36, selectedText?.fontSize ?? app.fontSize])]
-                .sort((a, b) => a - b)
-                .map((s) => (
-                  <option key={s} value={s}>
-                    {s}pt
-                  </option>
-                ))}
-            </Select>
+            <ColorPresets
+              colors={INK_PRESETS}
+              value={app.toolColor}
+              onChange={app.setToolColor}
+            />
+            <SizePresets value={app.strokeWidth} onChange={app.setStrokeWidth} />
           </>
+        ) : (
+          showColor && (
+            <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />
+          )
         )}
-        {showStroke && (
-          <Select
-            value={app.strokeWidth}
-            onChange={(e) => app.setStrokeWidth(Number(e.target.value))}
-            aria-label="Stroke width"
-            className="h-7 w-[4.75rem] px-2 text-xs"
-          >
-            {[0, 1, 2, 3, 4, 6, 8].map((w) => (
-              <option key={w} value={w}>
-                {w === 0 ? "No border" : `${w}px`}
-              </option>
-            ))}
-          </Select>
+        {showStroke && app.tool !== "ink" && (
+          <StrokeWidthSelect value={app.strokeWidth} onChange={app.setStrokeWidth} />
         )}
-        {showFill && (
-          <div className="flex items-center gap-1 rounded-md border border-input px-1.5 py-0.5">
-            <span className="text-[10px] font-medium text-muted-foreground">Fill</span>
-            {fillValue ? (
-              <>
-                <ColorSwatch
-                  value={fillValue}
-                  onChange={setFill}
-                  title="Fill color"
-                  className="h-5 w-5"
-                />
-                <button
-                  title="Remove fill"
-                  onClick={() => setFill(null)}
-                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </>
-            ) : (
-              <button
-                title="Add a fill color"
-                onClick={() => setFill(fillValue || app.toolColor || "#3b82f6")}
-                className="rounded px-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                None
-              </button>
-            )}
-          </div>
-        )}
+        {showFill && <FillControl value={fillValue} onChange={setFill} />}
         {selectedFormField && (
           <>
             <Input
@@ -486,6 +459,22 @@ export function EditorToolbar() {
       </Button>
 
       <div className="ml-auto flex items-center gap-1">
+        {app.tool === "redact" && app.redactCount === 0 && (
+          <span className="rounded-md bg-red-500/10 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400">
+            Draw boxes over content to remove
+          </span>
+        )}
+        {app.redactCount > 0 && (
+          <Button
+            size="sm"
+            className="h-7 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
+            onClick={app.applyRedactions}
+            title="Permanently remove the content under every redaction box"
+          >
+            <SquareSlash className="h-3.5 w-3.5" />
+            Apply {app.redactCount} redaction{app.redactCount === 1 ? "" : "s"}
+          </Button>
+        )}
         {app.pendingStamp && (
           <span className="rounded-md bg-blue-500/10 px-2 py-1 text-xs font-medium text-blue-600 dark:text-blue-400">
             Click on the page to place — Esc to cancel

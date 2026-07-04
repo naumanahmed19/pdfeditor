@@ -23,8 +23,19 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import { pdfjsLib } from "../../lib/pdf";
+import type { PdfDoc, PdfPage } from "../../lib/pdf";
+import { renderTextLayer } from "../../lib/pdf";
+import { FillControl, StrokeWidthSelect, TextStyleControls } from "./StyleControls";
+import { RichTextEditor, type RichTextHandle } from "./RichTextEditor";
+import {
+  getRuns,
+  measureRichText,
+  mergeRuns,
+  rangeStyleValue,
+  runsText,
+  runsToHtml,
+} from "../../lib/richtext";
+import { activeTextEditor } from "../../lib/activeTextEditor";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import type { Annotation, FormFieldAnnotation, NoteAnnotation, TextAnnotation } from "../../types";
@@ -56,6 +67,48 @@ function warnWhiteoutOnce() {
 }
 
 /** CSS font properties for displaying a text annotation on screen. */
+/** Single source of truth for text line spacing (editor, display, sizing). */
+const TEXT_LINE_HEIGHT = 1.25;
+
+/**
+ * Style values to show in the controls. When a box is being edited with a
+ * selection, reflect the selection's resolved style so the swatch/size match
+ * what you'd change; otherwise the box-level style.
+ */
+function textStyleValue(ann: TextAnnotation) {
+  const editor = activeTextEditor.current;
+  const sel = editor?.annId === ann.id ? editor.selection?.() : null;
+  if (sel) {
+    const runs = getRuns(ann);
+    const at = <
+      K extends "color" | "fontSize" | "fontFamily" | "bold" | "italic" | "underline" | "strike",
+    >(
+      k: K,
+      fb: NonNullable<ReturnType<typeof rangeStyleValue<K>>>,
+    ) => rangeStyleValue(runs, sel.start, sel.end, k, ann) ?? fb;
+    return {
+      color: at("color", ann.color),
+      fontFamily: at("fontFamily", ann.fontFamily ?? "helvetica"),
+      fontSize: at("fontSize", ann.fontSize),
+      bold: at("bold", !!ann.bold),
+      italic: at("italic", !!ann.italic),
+      underline: at("underline", !!ann.underline),
+      strike: at("strike", !!ann.strike),
+      align: ann.align ?? ("left" as const),
+    };
+  }
+  return {
+    color: ann.color ?? "#111111",
+    fontFamily: ann.fontFamily ?? "helvetica",
+    fontSize: ann.fontSize,
+    bold: !!ann.bold,
+    italic: !!ann.italic,
+    underline: !!ann.underline,
+    strike: !!ann.strike,
+    align: ann.align ?? ("left" as const),
+  };
+}
+
 function textAnnCss(ann: TextAnnotation): React.CSSProperties {
   const fallback =
     ann.fontFamily === "times"
@@ -249,7 +302,7 @@ export function Viewer() {
           y: (r.top - pr.top) / effectiveScale,
           w: r.width / effectiveScale,
           h: r.height / effectiveScale,
-          color: app.toolColor,
+          color: app.highlightColor,
         });
         perPage.set(idx, list);
       }
@@ -272,7 +325,11 @@ export function Viewer() {
         target.tagName === "TEXTAREA" ||
         target.isContentEditable;
       if (inField) return;
-      if ((e.key === "Delete" || e.key === "Backspace") && app.selected) {
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        app.selected &&
+        app.editMode
+      ) {
         app.removeAnnotation(app.selected.page, app.selected.id);
       }
       if (
@@ -294,8 +351,14 @@ export function Viewer() {
         }
       }
       if (e.key === "Escape") {
-        app.setSelected(null);
-        app.setPendingStamp(null);
+        // First Escape clears the selection/stamp; a further Escape (nothing
+        // selected) disarms the active tool back to reading.
+        if (app.selected || app.pendingStamp) {
+          app.setSelected(null);
+          app.setPendingStamp(null);
+        } else if (app.tool !== "read") {
+          app.setTool("read");
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -646,7 +709,7 @@ function PageView({
   baseDims,
   scale,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   baseDims: PageDims;
   scale: number;
@@ -683,7 +746,7 @@ function PageView({
       const canvas = canvasRef.current;
       const textDiv = textLayerRef.current;
       if (!canvas || !textDiv) return;
-      let page: PDFPageProxy;
+      let page: PdfPage;
       try {
         page = await pdf.getPage(pageIndex + 1);
       } catch {
@@ -698,7 +761,7 @@ function PageView({
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       renderTask.current?.cancel();
-      const task = page.render({ canvasContext: ctx, viewport } as any);
+      const task = page.render({ canvasContext: ctx, viewport });
       renderTask.current = task as any;
       try {
         await task.promise;
@@ -708,16 +771,8 @@ function PageView({
 
       // Text layer at CSS scale
       if (cancelled) return;
-      textDiv.innerHTML = "";
-      const textViewport = page.getViewport({ scale });
-      textDiv.style.setProperty("--scale-factor", String(scale));
       try {
-        const layer = new (pdfjsLib as any).TextLayer({
-          textContentSource: page.streamTextContent(),
-          container: textDiv,
-          viewport: textViewport,
-        });
-        await layer.render();
+        renderTextLayer(page, textDiv, scale);
         if (!cancelled) setTextLayerReady((v) => v + 1);
       } catch {
         /* text layer optional */
@@ -785,12 +840,11 @@ function PageView({
     textLayerReady,
   ]);
 
-  // Text is selectable for reading/copy (select tool outside edit mode) and for
-  // click-to-edit (edittext). In edit mode the Select tool grabs page OBJECTS
-  // instead (via ObjectLayer), so text stays non-selectable there.
+  // Text is selectable for reading/copy (read tool) and for click-to-edit
+  // (edittext). The Select tool grabs page OBJECTS instead (via ObjectLayer),
+  // so text stays non-selectable there.
   const textSelectable =
-    ((app.tool === "select" && !app.editMode) || app.tool === "edittext") &&
-    !app.pendingStamp;
+    (app.tool === "read" || app.tool === "edittext") && !app.pendingStamp;
 
   // "Edit existing text": clicking a text run maps the click to the real
   // PDFium content-stream text object and opens an inline editor over it. On
@@ -1404,7 +1458,7 @@ function ObjectLayer({
   scale,
   canvasRef,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   scale: number;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -1851,7 +1905,7 @@ function LinkLayer({
   scale,
   visible,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   scale: number;
   visible: boolean;
@@ -1879,16 +1933,9 @@ function LinkLayer({
           };
           if (a.url) {
             out.push({ ...rect, url: a.url });
-          } else if (a.dest) {
-            try {
-              let dest = a.dest;
-              if (typeof dest === "string") dest = await pdf.getDestination(dest);
-              if (Array.isArray(dest) && dest[0]) {
-                out.push({ ...rect, destPage: await pdf.getPageIndex(dest[0]) });
-              }
-            } catch {
-              /* unresolvable destination */
-            }
+          } else if (a.destPage !== undefined) {
+            // The engine resolves internal destinations to a page index.
+            out.push({ ...rect, destPage: a.destPage });
           }
         }
         if (alive) setLinks(out);
@@ -1958,7 +2005,7 @@ function FormLayer({
   scale,
   visible,
 }: {
-  pdf: PDFDocumentProxy;
+  pdf: PdfDoc;
   pageIndex: number;
   scale: number;
   visible: boolean;
@@ -2301,6 +2348,7 @@ function AnnotationLayer({
     "ellipse",
     "line",
     "whiteout",
+    "redact",
     "ink",
     "formtext",
     "formcheckbox",
@@ -2359,6 +2407,9 @@ function AnnotationLayer({
         fontFamily: app.fontFamily,
         bold: app.fontBold,
         italic: app.fontItalic,
+        underline: app.fontUnderline,
+        strike: app.fontStrike,
+        align: app.textAlign,
       };
       app.addAnnotation(pageIndex, ann);
       app.setSelected({ page: pageIndex, id: ann.id });
@@ -2500,11 +2551,13 @@ function AnnotationLayer({
           app.addAnnotation(pageIndex, {
             ...base,
             kind: "highlight",
-            color: app.toolColor,
+            color: app.highlightColor,
           });
         } else if (app.tool === "whiteout") {
           app.addAnnotation(pageIndex, { ...base, kind: "whiteout" });
           warnWhiteoutOnce();
+        } else if (app.tool === "redact") {
+          app.addAnnotation(pageIndex, { ...base, kind: "redact" });
         } else if (
           app.tool === "rect" ||
           app.tool === "ellipse" ||
@@ -2592,16 +2645,20 @@ function AnnotationLayer({
             height: Math.abs(draft.y1 - draft.y0) * scale,
             borderColor:
               app.tool === "highlight"
-                ? "#eab308"
+                ? app.highlightColor
                 : app.tool === "whiteout"
                   ? "#94a3b8"
-                  : app.toolColor,
+                  : app.tool === "redact"
+                    ? "#dc2626"
+                    : app.toolColor,
             background:
               app.tool === "highlight"
-                ? "rgba(250,204,21,0.3)"
+                ? `${app.highlightColor}4d`
                 : app.tool === "whiteout"
                   ? "rgba(255,255,255,0.8)"
-                  : "transparent",
+                  : app.tool === "redact"
+                    ? "rgba(0,0,0,0.85)"
+                    : "transparent",
           }}
         />
       )}
@@ -2625,57 +2682,6 @@ function AnnotationLayer({
 }
 
 /* ------------------------------------------------------------------ */
-
-/** Measure the tight box (in PDF points) that fits a text annotation's text. */
-let _measureCanvas: HTMLCanvasElement | null = null;
-function measureTextBox(
-  a: TextAnnotation,
-  text: string,
-  maxWidthPts: number,
-): { w: number; h: number } {
-  const canvas = (_measureCanvas ??= document.createElement("canvas"));
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return { w: a.w, h: a.h };
-  const family =
-    a.displayFontCss ||
-    (a.fontFamily === "times"
-      ? "'Times New Roman', Times, serif"
-      : a.fontFamily === "courier"
-        ? "'Courier New', Courier, monospace"
-        : "Helvetica, Arial, sans-serif");
-  ctx.font = `${a.italic ? "italic " : ""}${a.bold ? "700 " : "400 "}${a.fontSize}px ${family}`;
-  const pad = a.fontSize * 0.35 + 4;
-  const lines = text.length ? text.split("\n") : [""];
-  let longest = 0;
-  for (const l of lines) longest = Math.max(longest, ctx.measureText(l || " ").width);
-
-  let w: number;
-  let lineCount: number;
-  if (longest + pad <= maxWidthPts) {
-    w = Math.max(a.fontSize * 2, longest + pad);
-    lineCount = lines.length;
-  } else {
-    // Wraps at the page edge: count wrapped lines to grow height instead.
-    w = maxWidthPts;
-    const usable = maxWidthPts - pad;
-    lineCount = 0;
-    for (const l of lines) {
-      const words = l.split(/(\s+)/);
-      let cur = "";
-      let n = 1;
-      for (const word of words) {
-        if (cur && ctx.measureText(cur + word).width > usable) {
-          n++;
-          cur = word.trimStart();
-        } else {
-          cur += word;
-        }
-      }
-      lineCount += n;
-    }
-  }
-  return { w, h: lineCount * a.fontSize * 1.25 + pad * 0.6 };
-}
 
 const FIELD_TYPE_LABEL: Record<FormFieldAnnotation["fieldType"], string> = {
   text: "Text",
@@ -2930,26 +2936,6 @@ function FieldProperties({
   );
 }
 
-const ANN_KIND_LABEL: Record<string, string> = {
-  text: "Text",
-  note: "Comment",
-  highlight: "Highlight",
-  whiteout: "Whiteout",
-  rect: "Rectangle",
-  ellipse: "Ellipse",
-  line: "Line",
-  ink: "Drawing",
-  image: "Image",
-};
-
-const ANN_FONTS: Array<{ v: string; label: string }> = [
-  { v: "helvetica", label: "Helvetica" },
-  { v: "times", label: "Times" },
-  { v: "courier", label: "Courier" },
-  { v: "carlito", label: "Carlito" },
-  { v: "caladea", label: "Caladea" },
-];
-
 /**
  * Contextual properties popover for a selected annotation (everything except
  * form fields, which have their own richer panel). Shows the controls relevant
@@ -3034,130 +3020,52 @@ function AnnotationProperties({
   const isFillable = k === "rect" || k === "ellipse";
   const hasStroke = isShape || k === "ink";
   const isText = k === "text";
-  const hasColor =
-    isText || isShape || k === "ink" || k === "highlight" || k === "whiteout";
-  const colorLabel = k === "highlight"
-    ? "Color"
-    : k === "whiteout"
-      ? "Patch"
-      : isShape || k === "ink"
-        ? "Stroke"
-        : "Color";
-  const lbl = "flex items-center gap-1 text-[10px] font-medium text-muted-foreground";
+  // Text gets its swatch from TextStyleControls.
+  const hasColor = isShape || k === "ink" || k === "highlight" || k === "whiteout";
+  const colorLabel = k === "whiteout" ? "Patch" : isShape || k === "ink" ? "Stroke" : "Color";
 
   return (
     <>
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {ANN_KIND_LABEL[k] ?? k}
-      </span>
-
-      {hasColor && (
-        <label className={lbl}>
-          {colorLabel}
-          <ColorSwatch
-            value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
-            onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
-            title={colorLabel}
-          />
-        </label>
+      {isText && (
+        <TextStyleControls
+          value={textStyleValue(ann as TextAnnotation)}
+          onPatch={(p) => {
+            // Alignment is a box property — always patch the annotation.
+            const { align, ...runPatch } = p;
+            if (align !== undefined) onPatch({ align } as Partial<Annotation>);
+            if (!Object.keys(runPatch).length) return;
+            const editor = activeTextEditor.current;
+            // Editing → style the current selection; an empty box has nothing
+            // to style yet (applyStyle returns false) → patch the box itself.
+            if (editor && editor.annId === ann.id && editor.applyStyle(runPatch)) return;
+            onPatch({
+              ...runPatch,
+              ...(runPatch.fontFamily !== undefined ? { displayFontCss: undefined } : {}),
+            } as Partial<Annotation>);
+          }}
+        />
       )}
 
-      {isFillable && (
-        <label className={lbl}>
-          Fill
-          {a.fill ? (
-            <>
-              <ColorSwatch
-                value={a.fill}
-                onChange={(v) => onPatch({ fill: v } as Partial<Annotation>)}
-                title="Fill color"
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-1.5 text-[10px]"
-                onClick={() => onPatch({ fill: undefined } as Partial<Annotation>)}
-              >
-                None
-              </Button>
-            </>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 px-1.5 text-[10px]"
-              onClick={() => onPatch({ fill: "#3b82f6" } as Partial<Annotation>)}
-            >
-              Add
-            </Button>
-          )}
-        </label>
+      {hasColor && (
+        <ColorSwatch
+          value={a.color ?? (k === "whiteout" ? "#ffffff" : "#111111")}
+          onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
+          title={colorLabel}
+        />
       )}
 
       {hasStroke && (
-        <label className={lbl}>
-          Width
-          <Select
-            className="h-6 w-14 px-1.5 text-xs"
-            value={String(a.strokeWidth ?? 2)}
-            onChange={(e) => onPatch({ strokeWidth: Number(e.target.value) } as Partial<Annotation>)}
-          >
-            {[0, 1, 2, 3, 4, 6, 8].map((w) => (
-              <option key={w} value={w}>
-                {w}
-              </option>
-            ))}
-          </Select>
-        </label>
+        <StrokeWidthSelect
+          value={a.strokeWidth ?? 2}
+          onChange={(w) => onPatch({ strokeWidth: w } as Partial<Annotation>)}
+        />
       )}
 
-      {isText && (
-        <>
-          <Select
-            className="h-6 w-24 px-1.5 text-xs"
-            value={a.fontFamily ?? "helvetica"}
-            onChange={(e) =>
-              onPatch({ fontFamily: e.target.value, displayFontCss: undefined } as Partial<Annotation>)
-            }
-          >
-            {ANN_FONTS.map((f) => (
-              <option key={f.v} value={f.v}>
-                {f.label}
-              </option>
-            ))}
-          </Select>
-          <Select
-            className="h-6 w-16 px-1.5 text-xs"
-            value={String(a.fontSize)}
-            onChange={(e) => onPatch({ fontSize: Number(e.target.value) } as Partial<Annotation>)}
-          >
-            {[...new Set([10, 12, 14, 16, 18, 22, 28, 36, a.fontSize])]
-              .sort((x, y) => x - y)
-              .map((s) => (
-                <option key={s} value={s}>
-                  {s}pt
-                </option>
-              ))}
-          </Select>
-          <Button
-            variant={a.bold ? "subtle" : "ghost"}
-            size="icon"
-            className="h-6 w-6"
-            title="Bold"
-            onClick={() => onPatch({ bold: !a.bold } as Partial<Annotation>)}
-          >
-            <Bold className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant={a.italic ? "subtle" : "ghost"}
-            size="icon"
-            className="h-6 w-6"
-            title="Italic"
-            onClick={() => onPatch({ italic: !a.italic } as Partial<Annotation>)}
-          >
-            <Italic className="h-3.5 w-3.5" />
-          </Button>
-        </>
+      {isFillable && (
+        <FillControl
+          value={a.fill ?? null}
+          onChange={(c) => onPatch({ fill: c ?? undefined } as Partial<Annotation>)}
+        />
       )}
 
       <div className="h-4 w-px bg-border" />
@@ -3191,7 +3099,13 @@ function AnnotationItem({
   const [editing, setEditing] = useState(
     ann.kind === "text" && ann.text === "",
   );
-  const editRef = useRef<HTMLTextAreaElement | null>(null);
+  const richRef = useRef<RichTextHandle | null>(null);
+  // Tracks whether the box has any typed content, updated live from
+  // RichTextEditor's onRunsChange (ann.text itself only updates on commit) —
+  // drives the "empty placeholder" look (dashed border, hint text, handles).
+  const [hasContent, setHasContent] = useState(
+    ann.kind !== "text" || !!ann.text.trim(),
+  );
 
   // Commit the comment draft when the note is deselected — the popover can
   // be dismissed on pointerDOWN, before the textarea's blur ever fires, so
@@ -3226,21 +3140,9 @@ function AnnotationItem({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app.editRequestId, ann.id, ann.kind]);
 
-  useEffect(() => {
-    if (!editing) return;
-    // Focus after the browser has finished dispatching the originating
-    // pointer event, so nothing steals focus back.
-    const raf = requestAnimationFrame(() => {
-      const el = editRef.current;
-      if (el && document.activeElement !== el) {
-        el.focus();
-        el.setSelectionRange(el.value.length, el.value.length);
-      }
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [editing]);
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  // While editing, the box auto-grows to fit the typed text.
+  // While editing, the box auto-grows to fit the typed text (RichTextEditor
+  // reports run changes via onRunsChange → measureRichText).
   const [editSize, setEditSize] = useState<{ w: number; h: number } | null>(null);
   const dragRef = useRef<{
     mode: "move" | "resize";
@@ -3253,10 +3155,10 @@ function AnnotationItem({
 
   const maxTextWidth = Math.max(40, baseDims.width - ann.x - 2);
 
-  // Initialize / clear the auto-grow size as editing toggles.
+  // Seed / clear the auto-grow size as editing toggles.
   useEffect(() => {
     if (editing && ann.kind === "text") {
-      setEditSize(measureTextBox(ann, ann.text, maxTextWidth));
+      setEditSize(measureRichText(ann, getRuns(ann), maxTextWidth));
     } else {
       setEditSize(null);
     }
@@ -3268,6 +3170,20 @@ function AnnotationItem({
     (editing && editSize ? { ...ann, w: editSize.w, h: editSize.h } : ann);
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
+    // While reading, clicking a comment marker just opens its popup.
+    if (ann.kind === "note" && app.tool === "read") {
+      e.stopPropagation();
+      e.preventDefault();
+      app.setSelected({ page: pageIndex, id: ann.id });
+      return;
+    }
+    // Highlighter over an existing highlight = un-highlight (browser-style).
+    if (ann.kind === "highlight" && app.tool === "highlight") {
+      e.stopPropagation();
+      e.preventDefault();
+      app.removeAnnotation(pageIndex, ann.id);
+      return;
+    }
     if (app.tool !== "select") return;
     e.stopPropagation();
     e.preventDefault();
@@ -3322,18 +3238,22 @@ function AnnotationItem({
     window.addEventListener("pointerup", onUp);
   };
 
+  // Comment markers stay clickable while reading (comments are for readers
+  // too); with the highlighter armed, clicking an existing highlight removes
+  // it (browser-style un-highlight); everything else needs the Select tool.
+  const selectable = app.tool === "select" && !ann.locked;
+  const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
+  const unhighlight =
+    ann.kind === "highlight" && app.tool === "highlight" && !ann.locked;
   const style: React.CSSProperties = {
     position: "absolute",
     left: box.x * scale,
     top: box.y * scale,
     width: box.w * scale,
     height: box.h * scale,
-    pointerEvents:
-      app.editMode && app.tool === "select" && !ann.locked ? "auto" : "none",
-    cursor:
-      app.editMode && app.tool === "select" && !ann.locked ? "move" : "default",
-    touchAction:
-      app.editMode && app.tool === "select" && !ann.locked ? "none" : "auto",
+    pointerEvents: selectable || noteInRead || unhighlight ? "auto" : "none",
+    cursor: selectable ? "move" : noteInRead || unhighlight ? "pointer" : "default",
+    touchAction: selectable ? "none" : "auto",
   };
 
   let body: React.ReactNode = null;
@@ -3367,6 +3287,16 @@ function AnnotationItem({
         <div
           className="h-full w-full"
           style={{ background: ann.color ?? "#ffffff" }}
+        />
+      );
+      break;
+    case "redact":
+      // Pending redaction: solid black fill (previews the result) with a red
+      // dashed outline so it reads as "marked, not yet applied".
+      body = (
+        <div
+          className="h-full w-full bg-black"
+          style={{ outline: `${Math.max(1, scale)}px dashed #dc2626`, outlineOffset: "-1px" }}
         />
       );
       break;
@@ -3476,70 +3406,75 @@ function AnnotationItem({
       }
       break;
     }
-    case "text":
+    case "text": {
+      const textAnn = ann;
       body = editing ? (
-        <textarea
-          ref={editRef}
-          autoFocus
-          defaultValue={ann.text}
-          className="h-full w-full resize-none overflow-hidden whitespace-pre-wrap border-0 bg-transparent p-0 outline-none"
-          style={{
-            fontSize: ann.fontSize * scale,
-            lineHeight: 1.25,
-            color: ann.color,
-            ...textAnnCss(ann),
+        <RichTextEditor
+          ref={richRef}
+          ann={textAnn}
+          scale={scale}
+          maxWidth={maxTextWidth}
+          style={{ lineHeight: TEXT_LINE_HEIGHT, textAlign: textAnn.align ?? "left" }}
+          onRunsChange={(runs) => {
+            setEditSize(measureRichText(textAnn, runs, maxTextWidth));
+            setHasContent(!!runsText(runs).trim());
           }}
-          onInput={(e) => {
-            if (ann.kind === "text") {
-              setEditSize(
-                measureTextBox(ann, (e.target as HTMLTextAreaElement).value, maxTextWidth),
-              );
+          onCommit={(runs, focusTo) => {
+            // Focus moving to a style control (popover or toolbar) means the
+            // user is styling, not finishing — commit text, keep editing.
+            const toControls =
+              focusTo?.closest?.("[data-ann-controls]") ??
+              document.activeElement?.closest("[data-ann-controls]");
+            const plain = runsText(runs);
+            if (!plain.trim()) {
+              if (!toControls) {
+                setEditing(false);
+                app.removeAnnotation(pageIndex, ann.id);
+              }
+              return;
             }
+            const size = measureRichText(textAnn, runs, maxTextWidth);
+            const rich = mergeRuns(runs);
+            app.updateAnnotation(pageIndex, {
+              ...textAnn,
+              text: plain,
+              runs: rich.length > 1 || (rich[0] && Object.keys(rich[0]).length > 1) ? rich : undefined,
+              w: size.w,
+              h: size.h,
+            });
+            if (!toControls) setEditing(false);
           }}
-          onBlur={(e) => {
-            setEditing(false);
-            const text = e.target.value;
-            if (!text.trim()) {
-              app.removeAnnotation(pageIndex, ann.id);
-            } else if (ann.kind === "text") {
-              const size = measureTextBox(ann, text, maxTextWidth);
-              app.updateAnnotation(pageIndex, {
-                ...ann,
-                text,
-                w: size.w,
-                h: size.h,
-              });
-            }
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
         />
       ) : (
         <div
           className="h-full w-full whitespace-pre-wrap"
-          style={{
-            fontSize: ann.fontSize * scale,
-            lineHeight: 1.25,
-            color: ann.color,
-            ...textAnnCss(ann),
-          }}
-        >
-          {ann.text}
-        </div>
+          style={{ lineHeight: TEXT_LINE_HEIGHT, textAlign: textAnn.align ?? "left" }}
+          dangerouslySetInnerHTML={{ __html: runsToHtml(getRuns(textAnn), textAnn, scale) }}
+        />
       );
       break;
+    }
   }
+
+  // Text boxes keep one consistent dashed look — hovering, selected, blank,
+  // mid-type, or re-selected later all look the same; only the placeholder
+  // hint is specific to the still-blank state.
+  const isTextSelected = ann.kind === "text" && isSelected;
+  const isEmptyText = ann.kind === "text" && editing && !hasContent;
 
   return (
     <div
       ref={wrapRef}
       style={style}
       className={cn(
-        isSelected && "ring-2 ring-blue-500 ring-offset-1",
+        isTextSelected
+          ? "rounded-md border-2 border-dashed border-blue-400"
+          : isSelected && "ring-2 ring-blue-500 ring-offset-1",
+        isEmptyText && "bg-blue-50/40",
         !isSelected &&
-          app.editMode &&
-          app.tool === "select" &&
-          !ann.locked &&
-          "hover:ring-1 hover:ring-blue-400/60",
+          (ann.kind === "text"
+            ? selectable && "hover:rounded-md hover:border-2 hover:border-dashed hover:border-blue-400/60"
+            : (selectable || noteInRead) && "hover:ring-1 hover:ring-blue-400/60"),
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
       onDoubleClick={(e) => {
@@ -3549,6 +3484,26 @@ function AnnotationItem({
         }
       }}
     >
+      {isEmptyText && ann.kind === "text" && (
+        // Previews the picked color/font/weight so it's obvious *before*
+        // typing, not just once the first character lands.
+        <div
+          className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-2 opacity-45"
+          style={{
+            color: ann.color,
+            fontSize: ann.fontSize * scale,
+            fontFamily: ann.displayFontCss || FONT_CSS[ann.fontFamily ?? "helvetica"],
+            fontWeight: ann.bold ? 700 : 400,
+            fontStyle: ann.italic ? "italic" : "normal",
+            textDecoration:
+              [ann.underline && "underline", ann.strike && "line-through"]
+                .filter(Boolean)
+                .join(" ") || "none",
+          }}
+        >
+          Start typing here…
+        </div>
+      )}
       {body}
       {isSelected && ann.kind !== "note" && (
         <div
@@ -3582,36 +3537,53 @@ function AnnotationItem({
       )}
       {ann.kind !== "formfield" && !ann.locked && (
         <Popover
-          open={isSelected && !editing}
-          onOpenChange={(o: boolean, details?: { reason?: string }) => {
+          // Text keeps its style controls visible WHILE editing so color /
+          // font can be changed mid-type; other kinds show them when selected.
+          open={isSelected && (ann.kind === "text" || !editing)}
+          onOpenChange={(o: boolean, details?: { reason?: string; event?: Event }) => {
             if (o) return;
             const age = performance.now() - selectedAt.current;
-            if (ann.kind === "note" && import.meta.env.DEV) {
+            if (import.meta.env.DEV) {
               // Debug trace for popover dismissal issues.
               console.debug(
-                `[note] close requested — reason: ${details?.reason ?? "?"}, ${Math.round(age)}ms after open`,
+                `[${ann.kind}] popover close — reason: ${details?.reason ?? "?"}, ${Math.round(age)}ms after open`,
               );
             }
-            // The trusted click/focus shift that finishes the placement
-            // gesture arrives right after the popover mounts and reads as an
-            // outside press — ignore dismissals in that window.
-            if (
-              ann.kind === "note" &&
-              age < 500 &&
-              (details?.reason === "outside-press" || details?.reason === "focus-out")
-            ) {
-              return;
+            const pressLike =
+              details?.reason === "outside-press" || details?.reason === "focus-out";
+            if (pressLike) {
+              const target = details?.event?.target as HTMLElement | null;
+              // Interacting with the annotation itself (caret moves in the
+              // text editor, dragging the box) or with any style-controls
+              // surface (top toolbar) must not dismiss the popover.
+              if (
+                target &&
+                (wrapRef.current?.contains(target) || target.closest?.("[data-ann-controls]"))
+              ) {
+                return;
+              }
+              // While a text box is being edited, the editor's blur/commit
+              // owns ending the session — never the popover's outside-press.
+              if (ann.kind === "text" && editing) return;
+              // The trusted click that finishes placing/selecting lands
+              // outside the freshly-mounted popup — ignore that tail.
+              if (age < 500) return;
             }
             app.setSelected(null);
           }}
         >
           <PopoverContent
+            data-ann-controls
             anchor={wrapRef}
             side="top"
             align="start"
             sideOffset={10}
             className="flex flex-wrap items-center gap-2 px-2 py-1.5"
             onPointerDown={(e) => e.stopPropagation()}
+            // A text box being typed into must keep the caret focused — Base
+            // UI's popover normally grabs focus for accessibility, which was
+            // silently stealing it from the just-mounted RichTextEditor.
+            initialFocus={ann.kind === "text" && editing ? false : undefined}
           >
             {ann.kind === "note" ? (
               <NoteEditor
