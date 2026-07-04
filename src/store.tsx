@@ -1222,6 +1222,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lastOpened: Date.now(),
         open: true,
       }).then(refreshRecent);
+      // Browsers can't rename a file through its handle — be explicit about
+      // what the rename actually affects.
+      toast.success(
+        docHandles.current.get(active.id)
+          ? `Renamed to ${next} in PickPDF — the file on disk keeps its original name`
+          : `Renamed to ${next} — saved copies will use this name`,
+      );
     },
     [active, updateDoc, refreshRecent],
   );
