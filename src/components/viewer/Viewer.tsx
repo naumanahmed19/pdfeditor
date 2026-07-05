@@ -337,14 +337,17 @@ export function Viewer() {
     return () => window.removeEventListener("pdfwb:highlight-selection", handler);
   }, [app, effectiveScale]);
 
-  // With a text-markup tool armed, finishing a drag over text turns the
-  // selection into underline/strikeout/squiggly marks — no separate click
-  // needed. Reuses the handler above by re-dispatching its event.
+  // With a text-marking tool armed, finishing a drag over text turns the
+  // selection into marks — underline/strikeout/squiggly, or a highlight when
+  // the highlighter is in "text" mode — no separate click needed. Reuses the
+  // handler above by re-dispatching its event.
   useEffect(() => {
-    const style =
+    const style: "highlight" | MarkupStyle | null =
       app.tool === "underline" || app.tool === "strikeout" || app.tool === "squiggly"
         ? (app.tool as MarkupStyle)
-        : null;
+        : app.tool === "highlight" && app.highlightMode === "text"
+          ? "highlight"
+          : null;
     if (!style) return;
     const onUp = () => {
       const sel = window.getSelection();
@@ -359,7 +362,7 @@ export function Viewer() {
     };
     document.addEventListener("mouseup", onUp);
     return () => document.removeEventListener("mouseup", onUp);
-  }, [app.tool]);
+  }, [app.tool, app.highlightMode]);
 
   // While a highlight/markup tool is armed the annotation layer is inert (so
   // text stays selectable), so clicking empty space doesn't clear a selected
@@ -1057,23 +1060,25 @@ function PageView({
     textLayerReady,
   ]);
 
-  // The text-markup tools mark existing text: dragging over text selects it,
-  // then the selection becomes underline/strikeout/squiggly marks (see the
-  // markup-on-mouseup effect). So they need a selectable text layer, like read.
-  const isMarkupTool =
+  // Text-marking tools drag over text to mark it: the selection becomes
+  // underline/strikeout/squiggly marks — or a highlight when the highlighter
+  // is in "text" mode (see the mark-on-mouseup effect). They need a selectable
+  // text layer, like read. (Highlighter "area" mode free-draws a box instead.)
+  const textMarkTool =
     app.tool === "underline" ||
     app.tool === "strikeout" ||
-    app.tool === "squiggly";
+    app.tool === "squiggly" ||
+    (app.tool === "highlight" && app.highlightMode === "text");
 
   // Text is selectable for reading/copy (read tool), click-to-edit (edittext),
-  // and while a text-markup tool is armed. The Select tool grabs page OBJECTS
+  // and while a text-marking tool is armed. The Select tool grabs page OBJECTS
   // instead (via ObjectLayer), so text stays non-selectable there.
   const textSelectable =
-    (app.tool === "read" || app.tool === "edittext" || isMarkupTool) &&
+    (app.tool === "read" || app.tool === "edittext" || textMarkTool) &&
     !app.pendingStamp &&
     // Honor the copy restriction of protected documents (read-tool selection
-    // exists to copy; edittext and markup only annotate, never extract text).
-    (app.tool === "edittext" || isMarkupTool || app.docPermissions.copy);
+    // exists to copy; edittext and marking only annotate, never extract text).
+    (app.tool === "edittext" || textMarkTool || app.docPermissions.copy);
 
   // "Edit existing text": a click selects the whole visual LINE around the
   // hit run (PDFs fragment lines into many small runs), and the inline editor
@@ -1437,7 +1442,7 @@ function PageView({
         className={cn("textLayer", app.tool === "edittext" && "edit-mode")}
         style={{
           pointerEvents: textSelectable ? "auto" : "none",
-          cursor: app.tool === "edittext" || isMarkupTool ? "text" : undefined,
+          cursor: app.tool === "edittext" || textMarkTool ? "text" : undefined,
         }}
         onClick={onTextLayerClick}
       />
@@ -2885,28 +2890,29 @@ function AnnotationLayer({
   const notePending = useRef<{ x: number; y: number } | null>(null);
 
   const anns = app.annotations[pageIndex] ?? [];
-  // Note: underline / strikeout / squiggly are NOT drawing tools — they mark
-  // existing text via selection (handled on the text layer + markup-on-mouseup
-  // effect), not by dragging a box here. Highlight still free-draws a box so it
-  // can cover non-text regions too.
-  const drawingTool = [
-    "highlight",
-    "rect",
-    "ellipse",
-    "line",
-    "arrow",
-    "callout",
-    "whiteout",
-    "redact",
-    "ink",
-    "formtext",
-    "formcheckbox",
-    "formdropdown",
-    "formradio",
-    "formdate",
-    "formsignature",
-    "formbutton",
-  ].includes(app.tool);
+  // Note: underline / strikeout / squiggly mark existing text via selection
+  // (handled on the text layer + mark-on-mouseup effect), not by dragging a box
+  // here. Highlight free-draws a box only in "area" mode; in "text" mode it
+  // marks selected text like the others.
+  const drawingTool =
+    [
+      "rect",
+      "ellipse",
+      "line",
+      "arrow",
+      "callout",
+      "whiteout",
+      "redact",
+      "ink",
+      "formtext",
+      "formcheckbox",
+      "formdropdown",
+      "formradio",
+      "formdate",
+      "formsignature",
+      "formbutton",
+    ].includes(app.tool) ||
+    (app.tool === "highlight" && app.highlightMode === "area");
 
   const toLocal = (e: React.PointerEvent): { x: number; y: number } => {
     const rect = layerRef.current!.getBoundingClientRect();

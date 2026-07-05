@@ -88,7 +88,7 @@ const TOOLS: Array<{
   { key: "select", icon: Move, name: "Move / edit objects", desc: "Drag existing text & images; Delete to remove", group: 0, shortcut: "M" },
   { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
   { key: "edittext", icon: TextCursorInput, name: "Edit existing text", desc: "Click a line of the document to retype it", group: 1, shortcut: "E" },
-  { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Drag over text to highlight; click a highlight to recolor or delete it", group: 2, shortcut: "H" },
+  { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Text mode: drag over text. Area mode: drag a box over any region. Click a highlight to recolor or delete it", group: 2, shortcut: "H" },
   { key: "underline", icon: Underline, name: "Underline text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "U" },
   { key: "strikeout", icon: Strikethrough, name: "Strike through text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "S" },
   { key: "squiggly", icon: Waves, name: "Squiggly underline", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2 },
@@ -826,11 +826,37 @@ export function EditorToolbar() {
             )}
           </>
         ) : app.tool === "highlight" ? (
-          <ColorPresets
-            colors={HIGHLIGHT_PRESETS}
-            value={app.highlightColor}
-            onChange={app.setHighlightColor}
-          />
+          <div className="flex items-center gap-2">
+            <ToggleGroup
+              value={[app.highlightMode]}
+              onValueChange={(v) =>
+                v[0] && app.setHighlightMode(v[0] as "text" | "area")
+              }
+              aria-label="Highlighter mode"
+              className="shrink-0"
+            >
+              <ToggleGroupItem
+                value="text"
+                aria-label="Highlight text"
+                className="h-7 w-auto px-2.5 text-xs"
+              >
+                Text
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="area"
+                aria-label="Highlight area"
+                className="h-7 w-auto px-2.5 text-xs"
+              >
+                Area
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <Separator orientation="vertical" className="h-6 shrink-0" />
+            <ColorPresets
+              colors={HIGHLIGHT_PRESETS}
+              value={app.highlightColor}
+              onChange={app.setHighlightColor}
+            />
+          </div>
         ) : isMarkupTool ? (
           <div className="flex items-center gap-2">
             <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">

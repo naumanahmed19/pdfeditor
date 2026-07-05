@@ -312,6 +312,10 @@ interface AppStore {
   /** Highlighter has its own color memory (pastel palette). */
   highlightColor: string;
   setHighlightColor: (c: string) => void;
+  /** Highlighter mode: "text" drags over text (like the markup tools), "area"
+   *  free-draws a box over any region. */
+  highlightMode: "text" | "area";
+  setHighlightMode: (m: "text" | "area") => void;
   /** Text-markup (underline / strikeout / squiggly) ink color. */
   markupColor: string;
   setMarkupColor: (c: string) => void;
@@ -632,6 +636,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
   const [toolColor, setToolColor] = useState("#e11d48");
   const [highlightColor, setHighlightColor] = useState("#facc15");
+  const [highlightMode, setHighlightMode] = useState<"text" | "area">("text");
   const [markupColor, setMarkupColor] = useState("#dc2626");
   // Fill color for new rect/ellipse shapes; null = no fill (outline only).
   const [toolFill, setToolFill] = useState<string | null>(null);
@@ -2663,6 +2668,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toolColor,
     highlightColor,
     setHighlightColor,
+    highlightMode,
+    setHighlightMode,
     markupColor,
     setMarkupColor,
     setToolColor,
