@@ -424,7 +424,10 @@ export function EditorToolbar() {
   // annotation is handled by the styleAnn branch instead).
   const showFontControls = app.tool === "text" || !!selectedText;
   const showStroke = ["ink", "rect", "ellipse", "line", "arrow", "callout"].includes(app.tool);
-  const showColor = showFontControls || showStroke || app.tool === "highlight";
+  const isMarkupTool =
+    app.tool === "underline" || app.tool === "strikeout" || app.tool === "squiggly";
+  const showColor =
+    showFontControls || showStroke || app.tool === "highlight" || isMarkupTool;
   const showFill = app.tool === "rect" || app.tool === "ellipse";
   const fillValue = app.toolFill;
   const setFill = (v: string | null) => app.setToolFill(v);
@@ -828,6 +831,18 @@ export function EditorToolbar() {
             value={app.highlightColor}
             onChange={app.setHighlightColor}
           />
+        ) : isMarkupTool ? (
+          <div className="flex items-center gap-2">
+            <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
+              <Highlighter className="h-3.5 w-3.5" />
+              Drag over text to mark it
+            </span>
+            <ColorPresets
+              colors={INK_PRESETS}
+              value={app.markupColor}
+              onChange={app.setMarkupColor}
+            />
+          </div>
         ) : app.tool === "ink" ? (
           <>
             <ColorPresets

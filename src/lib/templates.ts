@@ -19,6 +19,41 @@ const RULE = rgb(0.8, 0.8, 0.84);
 const FIELD_BG = rgb(0.97, 0.975, 0.99);
 const ACCENT = rgb(0.15, 0.39, 0.92);
 
+// --- Blank document --------------------------------------------------------
+
+/** Named page sizes in PDF points (1pt = 1/72"), given portrait (w × h). */
+export const PAGE_SIZES = [
+  { id: "letter", name: "Letter", w: 612, h: 792, hint: '8.5 × 11"' },
+  { id: "legal", name: "Legal", w: 612, h: 1008, hint: '8.5 × 14"' },
+  { id: "tabloid", name: "Tabloid", w: 792, h: 1224, hint: '11 × 17"' },
+  { id: "a3", name: "A3", w: 842, h: 1191, hint: "297 × 420 mm" },
+  { id: "a4", name: "A4", w: 595, h: 842, hint: "210 × 297 mm" },
+  { id: "a5", name: "A5", w: 420, h: 595, hint: "148 × 210 mm" },
+] as const;
+
+export type PageSizeId = (typeof PAGE_SIZES)[number]["id"];
+export type Orientation = "portrait" | "landscape";
+
+export interface BlankPdfOptions {
+  size?: PageSizeId;
+  orientation?: Orientation;
+  pages?: number;
+}
+
+/** Build a blank PDF with the given page size, orientation and page count. */
+export async function createBlankPdf(
+  opts: BlankPdfOptions = {},
+): Promise<Uint8Array> {
+  const { size = "letter", orientation = "portrait", pages = 1 } = opts;
+  const def = PAGE_SIZES.find((s) => s.id === size) ?? PAGE_SIZES[0];
+  const [w, h] =
+    orientation === "landscape" ? [def.h, def.w] : [def.w, def.h];
+  const count = Math.max(1, Math.min(100, Math.floor(pages)));
+  const doc = await PDFDocument.create();
+  for (let i = 0; i < count; i++) doc.addPage([w, h]);
+  return doc.save();
+}
+
 export type TemplateCategory = "form" | "document";
 
 export interface TemplateDef {

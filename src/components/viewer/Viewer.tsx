@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns2,
+  FilePlus2,
   FileText,
   Maximize,
   MessageSquare,
@@ -318,7 +319,7 @@ export function Viewer() {
         list.push(
           style === "highlight"
             ? { ...box, kind: "highlight", color: app.highlightColor }
-            : { ...box, kind: "markup", style, color: MARKUP_COLORS[style] },
+            : { ...box, kind: "markup", style, color: app.markupColor },
         );
         perPage.set(idx, list);
       }
@@ -335,6 +336,30 @@ export function Viewer() {
     window.addEventListener("pdfwb:highlight-selection", handler);
     return () => window.removeEventListener("pdfwb:highlight-selection", handler);
   }, [app, effectiveScale]);
+
+  // With a text-markup tool armed, finishing a drag over text turns the
+  // selection into underline/strikeout/squiggly marks — no separate click
+  // needed. Reuses the handler above by re-dispatching its event.
+  useEffect(() => {
+    const style =
+      app.tool === "underline" || app.tool === "strikeout" || app.tool === "squiggly"
+        ? (app.tool as MarkupStyle)
+        : null;
+    if (!style) return;
+    const onUp = () => {
+      const sel = window.getSelection();
+      // After a drag-select the selection is complete at mouseup (a plain
+      // click leaves it collapsed → skipped). The handler above reads it,
+      // builds the marks and clears the selection.
+      if (!sel || sel.isCollapsed) return;
+      if (!sel.anchorNode?.parentElement?.closest(".textLayer")) return;
+      window.dispatchEvent(
+        new CustomEvent("pdfwb:highlight-selection", { detail: { style } }),
+      );
+    };
+    document.addEventListener("mouseup", onUp);
+    return () => document.removeEventListener("mouseup", onUp);
+  }, [app.tool]);
 
   // Delete key removes selected annotation
   useEffect(() => {
@@ -815,6 +840,17 @@ function EmptyState() {
           merge, split, organize and watermark documents — or ask the AI
           assistant about the content.
         </p>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            app.setScreen("templates");
+          }}
+          className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+        >
+          <FilePlus2 className="h-3.5 w-3.5" />
+          Create a blank PDF
+        </button>
         <input
           ref={fileRef}
           type="file"
@@ -1000,15 +1036,23 @@ function PageView({
     textLayerReady,
   ]);
 
-  // Text is selectable for reading/copy (read tool) and for click-to-edit
-  // (edittext). The Select tool grabs page OBJECTS instead (via ObjectLayer),
-  // so text stays non-selectable there.
+  // The text-markup tools mark existing text: dragging over text selects it,
+  // then the selection becomes underline/strikeout/squiggly marks (see the
+  // markup-on-mouseup effect). So they need a selectable text layer, like read.
+  const isMarkupTool =
+    app.tool === "underline" ||
+    app.tool === "strikeout" ||
+    app.tool === "squiggly";
+
+  // Text is selectable for reading/copy (read tool), click-to-edit (edittext),
+  // and while a text-markup tool is armed. The Select tool grabs page OBJECTS
+  // instead (via ObjectLayer), so text stays non-selectable there.
   const textSelectable =
-    (app.tool === "read" || app.tool === "edittext") &&
+    (app.tool === "read" || app.tool === "edittext" || isMarkupTool) &&
     !app.pendingStamp &&
     // Honor the copy restriction of protected documents (read-tool selection
-    // exists to copy; edittext is already gated by the modify permission).
-    (app.tool === "edittext" || app.docPermissions.copy);
+    // exists to copy; edittext and markup only annotate, never extract text).
+    (app.tool === "edittext" || isMarkupTool || app.docPermissions.copy);
 
   // "Edit existing text": a click selects the whole visual LINE around the
   // hit run (PDFs fragment lines into many small runs), and the inline editor
@@ -1372,7 +1416,7 @@ function PageView({
         className={cn("textLayer", app.tool === "edittext" && "edit-mode")}
         style={{
           pointerEvents: textSelectable ? "auto" : "none",
-          cursor: app.tool === "edittext" ? "text" : undefined,
+          cursor: app.tool === "edittext" || isMarkupTool ? "text" : undefined,
         }}
         onClick={onTextLayerClick}
       />
@@ -2820,11 +2864,12 @@ function AnnotationLayer({
   const notePending = useRef<{ x: number; y: number } | null>(null);
 
   const anns = app.annotations[pageIndex] ?? [];
+  // Note: underline / strikeout / squiggly are NOT drawing tools — they mark
+  // existing text via selection (handled on the text layer + markup-on-mouseup
+  // effect), not by dragging a box here. Highlight still free-draws a box so it
+  // can cover non-text regions too.
   const drawingTool = [
     "highlight",
-    "underline",
-    "strikeout",
-    "squiggly",
     "rect",
     "ellipse",
     "line",
