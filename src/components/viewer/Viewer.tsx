@@ -361,6 +361,27 @@ export function Viewer() {
     return () => document.removeEventListener("mouseup", onUp);
   }, [app.tool]);
 
+  // While a highlight/markup tool is armed the annotation layer is inert (so
+  // text stays selectable), so clicking empty space doesn't clear a selected
+  // mark the way the Select tool does. Clear it here — but keep the selection
+  // when the click lands on the mark itself (its handler stops propagation, so
+  // this never fires) or on the toolbar controls (recoloring / deleting it).
+  useEffect(() => {
+    const armed =
+      app.tool === "highlight" ||
+      app.tool === "underline" ||
+      app.tool === "strikeout" ||
+      app.tool === "squiggly";
+    if (!armed || !app.selected) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("[data-ann-controls]")) return;
+      app.setSelected(null);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [app.tool, app.selected]);
+
   // Delete key removes selected annotation
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
