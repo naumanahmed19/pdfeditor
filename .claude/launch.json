@@ -18,9 +18,9 @@
     {
       "name": "pickpdf-preview-2",
       "runtimeExecutable": "bunx",
-      "runtimeArgs": ["vite", "--host", "127.0.0.1", "--port", "5189", "--strictPort"],
+      "runtimeArgs": ["vite", "--host", "127.0.0.1"],
       "port": 5189,
-      "autoPort": false
+      "autoPort": true
     },
     {
       "name": "pickpdf-preview-3",

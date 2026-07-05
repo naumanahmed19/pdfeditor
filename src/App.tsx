@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ChevronRight,
   Columns2,
   EllipsisVertical,
   FileText,
@@ -30,6 +31,7 @@ import {
 import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
+import { DropZone } from "./components/layout/DropZone";
 import { Viewer } from "./components/viewer/Viewer";
 import { ReaderPane } from "./components/viewer/ReaderPane";
 import { EditorToolbar } from "./components/viewer/Toolbar";
@@ -39,12 +41,14 @@ import { SettingsScreen } from "./components/settings/SettingsScreen";
 import {
   CompressScreen,
   CropScreen,
+  ExportScreen,
   HeaderFooterScreen,
   MergeScreen,
   OrganizeScreen,
   SplitScreen,
   WatermarkScreen,
 } from "./components/tools/ToolsScreens";
+import { CompareScreen } from "./components/tools/CompareScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 
 const SCREEN_TITLES: Record<string, string> = {
@@ -57,8 +61,26 @@ const SCREEN_TITLES: Record<string, string> = {
   compress: "Compress",
   crop: "Crop pages",
   headerfooter: "Headers & footers",
+  export: "Export",
+  compare: "Compare documents",
   settings: "Settings",
 };
+
+/**
+ * Tool screens that act on the currently open document — their header shows a
+ * `filename › tool` breadcrumb. Screens that stand alone (templates, merge,
+ * settings) don't, so no misleading file context is implied.
+ */
+const FILE_SCOPED_SCREENS = new Set([
+  "organize",
+  "split",
+  "watermark",
+  "compress",
+  "crop",
+  "headerfooter",
+  "export",
+  "compare",
+]);
 
 function PaneShell({ pane }: { pane: { id: string; docId: string } }) {
   const app = useApp();
@@ -373,6 +395,20 @@ function ContentHeader() {
             }}
           />
         </>
+      ) : FILE_SCOPED_SCREENS.has(app.screen) && app.docName ? (
+        // Breadcrumb: the open document (click to return) › the tool.
+        <div className="flex min-w-0 items-center gap-1.5 text-sm">
+          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <button
+            className="min-w-0 max-w-[40vw] truncate rounded px-1 font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="Back to document"
+            onClick={() => app.setScreen("viewer")}
+          >
+            {app.docName}
+          </button>
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+          <span className="shrink-0 font-medium">{SCREEN_TITLES[app.screen]}</span>
+        </div>
       ) : (
         <span className="text-sm font-medium">{SCREEN_TITLES[app.screen]}</span>
       )}
@@ -486,6 +522,8 @@ function Shell() {
             {app.screen === "compress" && <CompressScreen />}
             {app.screen === "crop" && <CropScreen />}
             {app.screen === "headerfooter" && <HeaderFooterScreen />}
+            {app.screen === "export" && <ExportScreen />}
+            {app.screen === "compare" && <CompareScreen />}
             {app.screen === "settings" && <SettingsScreen />}
           </div>
         </main>
@@ -506,6 +544,7 @@ function Shell() {
         )}
       </div>
       <SignatureModal />
+      <DropZone />
       <Toaster />
     </div>
   );

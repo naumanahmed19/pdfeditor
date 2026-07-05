@@ -1,5 +1,6 @@
 export type ToolKind =
   | "read"
+  | "pan"
   | "select"
   | "text"
   | "edittext"
@@ -294,4 +295,6 @@ export type Screen =
   | "compress"
   | "crop"
   | "headerfooter"
+  | "export"
+  | "compare"
   | "settings";

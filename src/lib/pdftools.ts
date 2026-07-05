@@ -57,6 +57,31 @@ export async function extractPages(
   return out.save();
 }
 
+/**
+ * Build a print-ready PDF: keep only `pageIndexes` (in order) and optionally
+ * scale each page's content. At scale 1 this is a faithful page subset
+ * (rotation, annotations preserved via copyPages). At other scales each page
+ * is re-emitted as a scaled XObject on a page of the scaled size, so a browser
+ * printing "actual size" reproduces the chosen zoom.
+ */
+export async function buildPrintDoc(
+  bytes: Uint8Array,
+  pageIndexes: number[],
+  scale = 1,
+): Promise<Uint8Array> {
+  if (scale === 1) return extractPages(bytes, pageIndexes);
+  const src = await load(bytes);
+  const out = await PDFDocument.create();
+  const pages = pageIndexes.map((i) => src.getPage(i));
+  const embedded = await out.embedPages(pages);
+  embedded.forEach((emb, k) => {
+    const { width, height } = pages[k].getSize();
+    const page = out.addPage([width * scale, height * scale]);
+    page.drawPage(emb, { xScale: scale, yScale: scale });
+  });
+  return out.save();
+}
+
 export async function deletePages(
   bytes: Uint8Array,
   pageIndexes: number[],

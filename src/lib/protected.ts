@@ -22,6 +22,16 @@ const IV_LEN = 12;
 const PBKDF2_ITERATIONS = 250_000;
 
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  // SubtleCrypto is only exposed in a secure context. In a non-secure origin
+  // (plain http://, a LAN IP, or Windows' default http://tauri.localhost webview)
+  // `crypto.subtle` is undefined — surface that clearly instead of a raw
+  // "reading 'importKey' of undefined" TypeError.
+  if (!crypto?.subtle) {
+    throw new Error(
+      "Encryption is unavailable here because the app isn't running in a secure context. " +
+        "Open PickPDF over https:// (or localhost) and try again.",
+    );
+  }
   const base = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(password),

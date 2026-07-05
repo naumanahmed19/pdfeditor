@@ -17,6 +17,7 @@ import { Select } from "../ui/select";
 import { cn, uid } from "../../lib/utils";
 import { extractAllText } from "../../lib/pdf";
 import { checkConnection, streamChat } from "../../lib/ai";
+import { BROWSER_MODEL_LABEL } from "../../lib/modelConfig";
 import type { ChatMessage } from "../../types";
 
 interface UiMessage {
@@ -26,6 +27,9 @@ interface UiMessage {
 }
 
 const CHAT_KEY = "pickpdf-chat";
+
+// Sentinel option value that navigates to Settings instead of selecting a model.
+const SWITCH_PROVIDER = "__switch_provider__";
 
 function loadChat(): UiMessage[] {
   try {
@@ -607,32 +611,36 @@ export function AiPanel() {
             className="w-full resize-none border-0 bg-transparent px-4 py-3 text-sm outline-none placeholder:text-muted-foreground"
           />
           <div className="flex items-center justify-between gap-2 px-2 pb-2">
-            {models.length > 0 ? (
-              <Select
-                value={app.settings.model}
-                onChange={(e) =>
-                  app.setSettings({ ...app.settings, model: e.target.value })
+            <Select
+              value={
+                app.settings.provider === "browser"
+                  ? BROWSER_MODEL_LABEL
+                  : app.settings.model
+              }
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === SWITCH_PROVIDER) {
+                  app.setScreen("settings");
+                  return;
                 }
-                aria-label="Model"
-                className="h-6 w-28 max-w-[55%] border-0 bg-transparent px-1 text-[10px] text-muted-foreground shadow-none"
-              >
-                {[...new Set([...models, app.settings.model])].map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </Select>
-            ) : (
-              <span className="px-1.5 text-[11px] text-muted-foreground">
-                {app.settings.provider === "browser"
-                  ? "Gemma (in-browser)"
-                  : app.settings.provider === "ollama"
-                    ? "Ollama (local)"
-                    : app.settings.provider === "lmstudio"
-                      ? "LM Studio (local)"
-                      : "Custom API"}
-              </span>
-            )}
+                // Browser provider has no selectable model — ignore.
+                if (app.settings.provider !== "browser") {
+                  app.setSettings({ ...app.settings, model: v });
+                }
+              }}
+              aria-label="Model"
+              className="h-6 w-40 max-w-[60%] border-0 bg-transparent px-1 text-[10px] text-muted-foreground shadow-none"
+            >
+              {(app.settings.provider === "browser"
+                ? [BROWSER_MODEL_LABEL]
+                : [...new Set([app.settings.model, ...models].filter(Boolean))]
+              ).map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+              <option value={SWITCH_PROVIDER}>Switch provider…</option>
+            </Select>
             {busy ? (
               <Button variant="outline" size="icon" className="h-7 w-7" onClick={stop} title="Stop">
                 <Square className="h-3.5 w-3.5" />

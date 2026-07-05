@@ -2,20 +2,28 @@
 // Generation happens off the main thread so the UI stays responsive. Mirrors the
 // proven `pipeline("text-generation", …)` setup: WebGPU when available, with an
 // automatic CPU (WASM) fallback so machines without a GPU still work (just slower).
+// Import FIRST — this patches `fetch` on import, before Transformers.js captures
+// its own reference to it. Our resumable IndexedDB cache streams the model
+// download in chunks and picks up where it left off, because Transformers.js's
+// own Cache Storage can't persist a partial download (a refresh mid-download
+// would otherwise restart the multi-GB weights from zero).
+import "./modelCache";
 import {
   env,
   InterruptableStoppingCriteria,
   pipeline,
   TextStreamer,
 } from "@huggingface/transformers";
+import { BROWSER_MODEL } from "./modelConfig";
 
-const MODEL_ID = "onnx-community/gemma-4-E2B-it-ONNX";
-
-// Download weights from the Hugging Face hub (cached after first use), never local.
+// Download weights from the Hugging Face hub, never local.
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (env.backends as any).onnx.wasm.proxy = false;
+
+// Persistence is handled by ./modelCache, so disable the built-in Cache Storage.
+env.useBrowserCache = false;
 
 type Role = "system" | "user" | "assistant";
 interface Msg {
@@ -51,10 +59,11 @@ function buildPipeline(dev: "webgpu" | "wasm"): Promise<any> {
     }
     post("progress", { loaded, total });
   };
-  return pipeline("text-generation", MODEL_ID, {
+  return pipeline("text-generation", BROWSER_MODEL.id, {
     device: dev,
-    // q4f16 needs fp16 (WebGPU); plain q4 for the CPU/WASM path.
-    dtype: dev === "webgpu" ? "q4f16" : "q4",
+    // WebGPU can use the fp16-friendly variant; CPU/WASM falls back to plain q4.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    dtype: (dev === "webgpu" ? BROWSER_MODEL.dtype.webgpu : BROWSER_MODEL.dtype.wasm) as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     progress_callback: (event: any) => {
       if (!event?.file) return;
@@ -161,7 +170,7 @@ self.addEventListener("message", async (event: MessageEvent) => {
     post("error", {
       message:
         (error as Error)?.message ||
-        "Could not run Gemma 4 locally. Use Chrome/Edge with WebGPU, or free up memory.",
+        `Could not run ${BROWSER_MODEL.name} locally. Use Chrome/Edge with WebGPU, or free up memory.`,
     });
   }
 });
