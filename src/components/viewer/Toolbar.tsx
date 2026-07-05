@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Bold,
+  Check,
   ChevronDown,
   Circle,
   Copy,
@@ -22,6 +23,7 @@ import {
   MessageSquareQuote,
   Minus,
   MousePointer2,
+  MousePointerClick,
   Move,
   MoveUpRight,
   PaintBucket,
@@ -29,6 +31,7 @@ import {
   Redo2,
   RotateCw,
   Signature,
+  SquarePen,
   SquareSlash,
   Square,
   Stamp,
@@ -85,9 +88,8 @@ const TOOLS: Array<{
 }> = [
   { key: "read", icon: MousePointer2, name: "Read", desc: "Select & copy text, follow links", group: 0, shortcut: "V" },
   { key: "pan", icon: Hand, name: "Pan", desc: "Drag to scroll the page", group: 0 },
-  { key: "select", icon: Move, name: "Move / edit objects", desc: "Drag existing text & images; Delete to remove", group: 0, shortcut: "M" },
+  { key: "select", icon: Move, name: "Move / select", desc: "Move, resize or delete annotations you added (highlights, shapes, text boxes, stamps…)", group: 0, shortcut: "M" },
   { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
-  { key: "edittext", icon: TextCursorInput, name: "Edit existing text", desc: "Click a line of the document to retype it", group: 1, shortcut: "E" },
   { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Text mode: drag over text. Area mode: drag a box over any region. Click a highlight to recolor or delete it", group: 2, shortcut: "H" },
   { key: "underline", icon: Underline, name: "Underline text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "U" },
   { key: "strikeout", icon: Strikethrough, name: "Strike through text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "S" },
@@ -102,6 +104,23 @@ const TOOLS: Array<{
   { key: "whiteout", icon: PaintBucket, name: "Whiteout", desc: "Cover page content with a filled box (hides, does not remove)", group: 4, shortcut: "W" },
   { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across an annotation you added to delete it" , group: 4 },
   { key: "redact", icon: SquareSlash, name: "Redact", desc: "Permanently removes covered content — draw boxes, then Apply", group: 4, shortcut: "X" },
+];
+
+/**
+ * "Edit existing content" sub-tools, surfaced through a single dropdown button
+ * (not the toggle row). Both edit the real document — retyping text runs, or
+ * moving/resizing existing text & images — so they're grouped apart from the
+ * annotation tools. Shortcuts stay live via the same handler as TOOLS.
+ */
+const EDIT_TOOLS: Array<{
+  key: ToolKind;
+  icon: typeof Type;
+  name: string;
+  desc: string;
+  shortcut?: string;
+}> = [
+  { key: "edittext", icon: TextCursorInput, name: "Edit text", desc: "Click a line of the document to retype it, or change its font, size and color", shortcut: "E" },
+  { key: "editobject", icon: MousePointerClick, name: "Move objects", desc: "Click existing text or an image to move, resize, recolor or delete it", shortcut: "G" },
 ];
 
 /**
@@ -230,7 +249,7 @@ export function EditorToolbar() {
     return () => document.removeEventListener("selectionchange", onSel);
   }, []);
 
-  // Single-key tool shortcuts (V/M/T/E/H/C/D/R/O/L/W/X) — ignored while
+  // Single-key tool shortcuts (V/M/T/E/G/H/C/D/R/O/L/W/X) — ignored while
   // typing anywhere (inputs, selects, the rich text editor).
   const setToolRef = useRef(app.setTool);
   setToolRef.current = app.setTool;
@@ -248,7 +267,9 @@ export function EditorToolbar() {
         return;
       }
       if (activeTextEditor.current) return;
-      const tool = TOOLS.find((x) => x.shortcut?.toLowerCase() === e.key.toLowerCase());
+      const tool = [...TOOLS, ...EDIT_TOOLS].find(
+        (x) => x.shortcut?.toLowerCase() === e.key.toLowerCase(),
+      );
       if (tool) {
         e.preventDefault();
         setToolRef.current(tool.key);
@@ -290,6 +311,21 @@ export function EditorToolbar() {
     app.setPendingStamp(null);
     if (key !== "select") app.setSelected(null);
   };
+
+  // Arm one of the "edit existing content" sub-tools from the dropdown. Neither
+  // is "select", so any live annotation selection is cleared (same as above).
+  const armEditTool = (key: ToolKind) => {
+    app.setTool(key);
+    app.setPendingStamp(null);
+    app.setSelected(null);
+  };
+  const editActive = app.tool === "edittext" || app.tool === "editobject";
+  const EditIcon =
+    app.tool === "editobject"
+      ? MousePointerClick
+      : app.tool === "edittext"
+        ? TextCursorInput
+        : SquarePen;
 
   // When a text box is selected, style controls edit it directly.
   const selectedText = (() => {
@@ -477,6 +513,53 @@ export function EditorToolbar() {
                   <t.icon className="h-4 w-4" />
                 </ToggleGroupItem>
               </Tip>
+              {/* Edit-existing-content dropdown sits right after "Add text":
+                  retype text runs, or move/resize existing text & images —
+                  kept out of the annotation toggle row so the two never fight
+                  over the same click. */}
+              {t.key === "text" && (
+                <Menu>
+                  <Tip
+                    label="Edit content"
+                    desc="Retype existing text, or move existing text & images"
+                  >
+                    <MenuTrigger
+                      className={cn(
+                        "flex h-8 shrink-0 items-center justify-center gap-0.5 rounded-md px-1.5 text-xs font-medium transition-colors",
+                        editActive
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      <EditIcon className="h-4 w-4" />
+                      <ChevronDown className="h-3 w-3 opacity-70" />
+                    </MenuTrigger>
+                  </Tip>
+                  <MenuContent className="min-w-56">
+                    {EDIT_TOOLS.map((et) => (
+                      <MenuItem key={et.key} onClick={() => armEditTool(et.key)}>
+                        <et.icon className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="flex items-center gap-1.5 font-medium">
+                            {et.name}
+                            {et.shortcut && (
+                              <kbd className="rounded border bg-muted px-1 text-[10px] font-normal text-muted-foreground">
+                                {et.shortcut}
+                              </kbd>
+                            )}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {et.desc}
+                          </span>
+                        </span>
+                        {app.tool === et.key && (
+                          <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        )}
+                      </MenuItem>
+                    ))}
+                  </MenuContent>
+                </Menu>
+              )}
             </div>
           ))}
         </ToggleGroup>

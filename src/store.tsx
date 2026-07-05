@@ -2323,7 +2323,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const p = docPermissions;
       if (!p.restricted || t === "read") return true;
       // True content-stream edits need the modify permission…
-      if (t === "edittext" || t === "redact") return p.modify;
+      if (t === "edittext" || t === "editobject" || t === "redact") return p.modify;
       // …form tools need form-fill (or modify)…
       if (t.startsWith("form")) return p.fillForms || p.modify;
       // …Select and Eraser primarily manage the annotation layer (move/delete

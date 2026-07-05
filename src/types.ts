@@ -4,6 +4,7 @@ export type ToolKind =
   | "select"
   | "text"
   | "edittext"
+  | "editobject"
   | "note"
   | "highlight"
   | "underline"

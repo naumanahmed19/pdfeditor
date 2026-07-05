@@ -1191,6 +1191,23 @@ function PageView({
       }
     }
 
+    // Load the clicked run's real embedded font so the on-screen editor shows
+    // the page's actual face and metrics — but only when that subset can render
+    // the current line's characters. A bare-CFF/CID subset fontkit can't parse
+    // (or that lacks a Unicode cmap) would draw tofu in the textarea, so in that
+    // case we keep the CSS fallback instead.
+    let embeddedFont: Uint8Array | null = null;
+    try {
+      const fi = await app.getTextFontInfo(pageIndex, hit.index);
+      if (fi?.data) {
+        const chars = [...new Set(joined.replace(/\s+/g, ""))];
+        const miss = await missingGlyphs(fi.data, chars);
+        if (miss && miss.length === 0) embeddedFont = fi.data;
+      }
+    } catch {
+      /* keep the CSS fallback */
+    }
+
     setInlineEdit({
       runs,
       original: joined,
@@ -1204,6 +1221,7 @@ function PageView({
       fontSize: hit.fontSize,
       fontName: (hit.fontName || "").replace(/^[A-Z]{6}\+/, ""),
       fallbackFamily: f.family,
+      embeddedFont,
       bold: f.bold,
       italic: f.italic,
       anchor: [runs[0].originX, runs[0].originY],
@@ -1312,15 +1330,19 @@ function PageView({
         return true;
       }
 
-      // Glyph preflight: embedded fonts are subsets that only carry the
-      // glyphs the document already uses — and coverage is per FACE (a 'c'
-      // in the regular face proves nothing about the bold subset), so each
-      // edited run is checked against its own font. Refuse to silently bake
-      // characters that would render as blanks or garbage.
+      // Glyph preflight: embedded fonts are subsets that only carry the glyphs
+      // the document already uses — coverage is per FACE (a 'c' in the regular
+      // face proves nothing about the bold subset), so each edited run is
+      // checked against its own font. Any character the run's face can't render
+      // (or that fontkit can't verify) means the in-place FPDFText_SetText would
+      // bake blanks/garbage. Rather than block the edit, we substitute a close
+      // full font for just the affected runs so the change always lands. A run
+      // that only reuses characters already on the page in its face is left
+      // in-place, keeping the original embedded face pixel-for-pixel.
+      let substitute = false;
+      let badFace = edit.fontName;
+      const badChars: string[] = [];
       if (textChanged) {
-        const bad: string[] = [];
-        let unverified = false;
-        let badFace = edit.fontName;
         for (let i = 0; i < edit.runs.length; i++) {
           const newText = runEdits[i].text;
           if (!newText) continue; // unchanged or removed run
@@ -1334,50 +1356,23 @@ function PageView({
           const info = await app.getTextFontInfo(pageIndex, run.objectIndex);
           const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
           const runBad = missing === null ? fresh : missing;
-          if (runBad.length && !bad.length) {
-            badFace = run.fontName.replace(/^[A-Z]{6}\+/, "");
-            unverified = missing === null;
+          if (runBad.length) {
+            if (!substitute) badFace = run.fontName.replace(/^[A-Z]{6}\+/, "");
+            substitute = true;
+            badChars.push(...runBad);
           }
-          bad.push(...runBad);
         }
-        if (bad.length) {
-          const chars = [...new Set(bad)].map((c) => `"${c}"`).join(" ");
-          toast.warning(
-            unverified
-              ? `Couldn't verify that this PDF's font "${badFace}" contains ${chars}.`
-              : `This PDF's font "${badFace}" doesn't contain ${chars} — the edit would show blanks.`,
-            {
-              description:
-                "Replace the edited text's font with a close match, or change the text.",
-              action: {
-                label: "Replace font",
-                onClick: () => {
-                  void (async () => {
-                    setSavingEdit(true);
-                    try {
-                      await commitRecreate(
-                        edit,
-                        runEdits,
-                        newFill,
-                        newSize,
-                        family,
-                        bold,
-                        italic,
-                        true, // only the edited runs lose their face
-                      );
-                    } catch {
-                      toast.error("Couldn't replace the font on this line.");
-                    } finally {
-                      setSavingEdit(false);
-                      setInlineEdit(null);
-                    }
-                  })();
-                },
-              },
-            },
-          );
-          return false; // keep the editor open so nothing is lost
-        }
+      }
+      if (substitute) {
+        // Recreate only the edited runs with a close bundled/standard face; the
+        // untouched neighbors keep their original embedded fonts.
+        await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic, true);
+        const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
+        toast.info(
+          `The embedded font "${badFace}" doesn't include ${chars}, so the edited text was set in a close matching font.`,
+        );
+        setInlineEdit(null);
+        return true;
       }
 
       await app.applyTextRuns(pageIndex, runEdits, {
@@ -1450,10 +1445,13 @@ function PageView({
         onClick={onTextLayerClick}
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
-      {/* Object editing lives on the Select tool (in edit mode). Rendered
-          BELOW the form and annotation layers so form fields and your own
-          annotations keep priority — clicks that miss them fall through here. */}
-      {app.editMode && app.tool === "select" && visible && (
+      {/* Existing-content editing lives on its own "Move objects" tool
+          (app.tool === "editobject"), kept separate from Select so moving your
+          own annotations never fights with grabbing underlying page text /
+          images. Rendered BELOW the form and annotation layers so form fields
+          and your own annotations keep priority — clicks that miss them fall
+          through here. */}
+      {app.tool === "editobject" && visible && (
         <ObjectLayer
           pdf={pdf}
           pageIndex={pageIndex}
@@ -1510,6 +1508,9 @@ interface InlineEdit {
   fontName: string;
   /** Closest bundled family — used only when the face must be replaced. */
   fallbackFamily: string;
+  /** The clicked run's real embedded font program, for the on-screen preview.
+   *  Null when it can't be loaded or can't render the line (CSS fallback then). */
+  embeddedFont: Uint8Array | null;
   /** Style detected from the font name (initial state of the B/I toggles). */
   bold: boolean;
   italic: boolean;
@@ -1686,6 +1687,9 @@ async function resolveTextFont(
   return { standardName: STD_FONT_NAMES[sub][idx] };
 }
 
+/** Unique @font-face family per inline-edit session (embedded-font preview). */
+let inlineFaceSeq = 0;
+
 /**
  * Inline editor shown over a text run while editing it in place. It's a
  * transient input (not a persisted annotation) — on commit the underlying
@@ -1718,7 +1722,38 @@ function InlineTextEditor({
   const [family, setFamily] = useState("original");
   const [bold, setBold] = useState(edit.bold);
   const [italic, setItalic] = useState(edit.italic);
+  // CSS family name of the page's real embedded font, once it's registered as
+  // an @font-face — null until loaded (or if the browser rejects the program).
+  const [embeddedFamily, setEmbeddedFamily] = useState<string | null>(null);
   const done = useRef(false);
+
+  // Register the clicked run's embedded font so the textarea shows the exact
+  // face and glyph widths on the page, not a generic CSS substitute. Loading is
+  // async and can fail (unsupported program) — fall back to CSS in that case.
+  useEffect(() => {
+    if (!edit.embeddedFont || typeof FontFace === "undefined") return;
+    const family = `pdfedit-face-${++inlineFaceSeq}`;
+    const face = new FontFace(family, edit.embeddedFont as BufferSource);
+    let cancelled = false;
+    face
+      .load()
+      .then(() => {
+        if (cancelled) return;
+        document.fonts.add(face);
+        setEmbeddedFamily(family);
+      })
+      .catch(() => {
+        /* unsupported program — keep the CSS fallback */
+      });
+    return () => {
+      cancelled = true;
+      try {
+        document.fonts.delete(face);
+      } catch {
+        /* not added */
+      }
+    };
+  }, [edit.embeddedFont]);
 
   useEffect(() => {
     window.getSelection()?.removeAllRanges();
@@ -1813,11 +1848,35 @@ function InlineTextEditor({
           color: colorHex,
           padding: "0 1px",
           fontFamily:
-            (family === "original"
-              ? FONT_CSS[edit.fallbackFamily]
-              : FONT_CSS[family]) ?? "Helvetica, Arial, sans-serif",
-          fontWeight: bold ? 700 : 400,
-          fontStyle: italic ? "italic" : "normal",
+            family === "original"
+              ? // Prefer the page's real embedded face; CSS family is the
+                // fallback stack while it loads or if it can't be used.
+                [
+                  embeddedFamily && `"${embeddedFamily}"`,
+                  FONT_CSS[edit.fallbackFamily] ?? "Helvetica, Arial, sans-serif",
+                ]
+                  .filter(Boolean)
+                  .join(", ")
+              : FONT_CSS[family] ?? "Helvetica, Arial, sans-serif",
+          // On the real embedded face the weight/slant is already baked in, so
+          // only faux-emphasize the DELTA the user just toggled on; on the CSS
+          // fallback the toggle's absolute state drives it.
+          fontWeight:
+            family === "original" && embeddedFamily
+              ? bold && !edit.bold
+                ? 700
+                : 400
+              : bold
+                ? 700
+                : 400,
+          fontStyle:
+            family === "original" && embeddedFamily
+              ? italic && !edit.italic
+                ? "italic"
+                : "normal"
+              : italic
+                ? "italic"
+                : "normal",
         }}
       />
     </div>
@@ -1996,8 +2055,9 @@ type Corner = "nw" | "ne" | "sw" | "se";
 const HANDLE = 9; // px hit radius for resize handles
 
 /**
- * Object editor (active on the Select tool in edit mode): click any existing
- * text run, image or vector shape (rectangles, lines, fills) to select it, drag
+ * Object editor (active on the "Move objects" tool, app.tool === "editobject"):
+ * click any existing text run, image or vector shape (rectangles, lines, fills)
+ * to select it, drag
  * to move, drag a corner (images/shapes) to resize, recolor via the color chip,
  * or press Delete to remove it. Everything commits through PDFium — true
  * content-stream edits, unified undo.
@@ -3145,6 +3205,30 @@ function AnnotationLayer({
         return;
       }
 
+      // A line accepts any drag direction (including pure horizontal /
+      // vertical), like arrows. The box branch below needs BOTH dimensions,
+      // so a straight line — where one dimension is ~0 — would be dropped.
+      // Clamp the box to a minimum of 1 so the on-screen SVG stroke keeps a
+      // real thickness (a 0-height box collapses the stroke to nothing).
+      if (app.tool === "line" && (w > 3 || h > 3)) {
+        app.addAnnotation(pageIndex, {
+          id: uid(),
+          kind: "line",
+          x,
+          y,
+          w: Math.max(1, w),
+          h: Math.max(1, h),
+          color: app.toolColor,
+          strokeWidth: app.strokeWidth,
+          // Keep the drag's diagonal direction — the box alone can't tell
+          // "\" from "/" (both normalize to the same rect).
+          down: (draft.x1 - draft.x0) * (draft.y1 - draft.y0) > 0,
+        });
+        setDraft(null);
+        setInkPoints([]);
+        return;
+      }
+
       if (w > 3 && h > 3) {
         const base = { id: uid(), x, y, w, h };
         if (app.tool === "highlight") {
@@ -3169,23 +3253,13 @@ function AnnotationLayer({
           warnWhiteoutOnce();
         } else if (app.tool === "redact") {
           app.addAnnotation(pageIndex, { ...base, kind: "redact" });
-        } else if (
-          app.tool === "rect" ||
-          app.tool === "ellipse" ||
-          app.tool === "line"
-        ) {
+        } else if (app.tool === "rect" || app.tool === "ellipse") {
           app.addAnnotation(pageIndex, {
             ...base,
             kind: app.tool,
             color: app.toolColor,
             strokeWidth: app.strokeWidth,
-            // Fill applies to rect/ellipse only (a line can't be filled).
-            ...(app.tool !== "line" && app.toolFill ? { fill: app.toolFill } : {}),
-            // Keep the drag's diagonal direction — the box alone can't tell
-            // "\" from "/" (both normalize to the same rect).
-            ...(app.tool === "line"
-              ? { down: (draft.x1 - draft.x0) * (draft.y1 - draft.y0) > 0 }
-              : {}),
+            ...(app.toolFill ? { fill: app.toolFill } : {}),
           });
         }
       }
