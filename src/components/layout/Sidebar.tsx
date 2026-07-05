@@ -70,9 +70,22 @@ export function Sidebar() {
             <div className="ml-auto flex items-center gap-1">
               <TabButton
                 active={activeTab === "pages"}
-                onClick={() => setTab("pages")}
+                onClick={() => {
+                  setTab("pages");
+                  if (app.formBuilder) app.setFormBuilder(false);
+                }}
                 icon={<Files className="h-4 w-4" />}
                 label="Pages"
+                iconOnly
+              />
+              <TabButton
+                active={activeTab === "outline"}
+                onClick={() => {
+                  setTab("outline");
+                  if (app.formBuilder) app.setFormBuilder(false);
+                }}
+                icon={<BookOpen className="h-4 w-4" />}
+                label="Outline"
                 iconOnly
               />
               <MoreTabsMenu activeTab={activeTab} setTab={setTab} />
@@ -373,11 +386,10 @@ type SidebarTab =
   | "recent";
 
 const MORE_TABS: Array<{
-  key: Exclude<SidebarTab, "pages" | "recent">;
+  key: Exclude<SidebarTab, "pages" | "outline" | "recent">;
   label: string;
   icon: LucideIcon;
 }> = [
-  { key: "outline", label: "Outline", icon: BookOpen },
   { key: "comments", label: "Comments", icon: MessageSquare },
   { key: "attachments", label: "Attachments", icon: Paperclip },
   { key: "form", label: "Form builder", icon: FormInput },
