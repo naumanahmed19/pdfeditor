@@ -39,12 +39,14 @@ import { SettingsScreen } from "./components/settings/SettingsScreen";
 import {
   CompressScreen,
   CropScreen,
+  ExportScreen,
   HeaderFooterScreen,
   MergeScreen,
   OrganizeScreen,
   SplitScreen,
   WatermarkScreen,
 } from "./components/tools/ToolsScreens";
+import { CompareScreen } from "./components/tools/CompareScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 
 const SCREEN_TITLES: Record<string, string> = {
@@ -486,6 +488,8 @@ function Shell() {
             {app.screen === "compress" && <CompressScreen />}
             {app.screen === "crop" && <CropScreen />}
             {app.screen === "headerfooter" && <HeaderFooterScreen />}
+            {app.screen === "export" && <ExportScreen />}
+            {app.screen === "compare" && <CompareScreen />}
             {app.screen === "settings" && <SettingsScreen />}
           </div>
         </main>

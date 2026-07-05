@@ -193,6 +193,7 @@ interface AppStore {
   bakeToBytes: () => Promise<Uint8Array | null>;
   downloadCurrent: () => Promise<void>;
   printCurrent: () => Promise<void>;
+  printWith: (pageIndexes: number[] | null, scale: number) => Promise<void>;
 
   /** In-place text editing via PDFium (replaces the whiteout+overlay hack). */
   getPageTextObjects: (pageIndex: number) => Promise<TextObject[]>;
@@ -292,6 +293,12 @@ interface AppStore {
   /** null = manual zoom via `scale`. */
   fitMode: "width" | "page" | null;
   setFitMode: (m: "width" | "page" | null) => void;
+  /** Two-page spread layout in the main viewer. */
+  spread: boolean;
+  setSpread: (v: boolean) => void;
+  /** Print dialog (page range + scale) visibility. */
+  printModalOpen: boolean;
+  setPrintModalOpen: (v: boolean) => void;
 
   /** Edit mode gates the editor toolbar and annotation interactivity. */
   editMode: boolean;
@@ -606,14 +613,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [scale, setScale] = useState(1.1);
   const [fitMode, setFitMode] = useState<"width" | "page" | null>("width");
+  const [spread, setSpread] = useState(false);
+  const [printModalOpen, setPrintModalOpen] = useState(false);
 
   // Modeless editing: "read" (text selection, links) is simply the state
   // where no tool is armed. editMode is derived — kept on the store because
   // many gates ("is any editing UI active?") still read it.
   const [tool, setTool] = useState<ToolKind>("read");
-  const editMode = tool !== "read";
+  // "read" and "pan" are both non-editing viewing modes.
+  const editMode = tool !== "read" && tool !== "pan";
   const setEditModeState = useCallback((v: boolean) => {
-    setTool((t) => (v ? (t === "read" ? "select" : t) : "read"));
+    setTool((t) => (v ? (t === "read" || t === "pan" ? "select" : t) : "read"));
   }, []);
   const [toolColor, setToolColor] = useState("#e11d48");
   const [highlightColor, setHighlightColor] = useState("#facc15");
@@ -2367,13 +2377,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     runOcrRef.current = runOcrText;
   }, [runOcrText]);
 
-  const printCurrent = useCallback(async () => {
-    if (active && !permissionsOf(active.pdf).print) {
-      toast.error("This document's permissions don't allow printing.");
-      return;
-    }
-    const bytes = await bakeToBytes();
-    if (!bytes) return;
+  /** Send bytes to the browser print dialog via a hidden iframe. */
+  const printBytes = useCallback((bytes: Uint8Array) => {
     const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     const iframe = document.createElement("iframe");
@@ -2393,7 +2398,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }, 60_000);
     };
     document.body.appendChild(iframe);
-  }, [bakeToBytes, active]);
+  }, []);
+
+  /** Open the print dialog (page range + scale). */
+  const printCurrent = useCallback(async () => {
+    if (active && !permissionsOf(active.pdf).print) {
+      toast.error("This document's permissions don't allow printing.");
+      return;
+    }
+    if (!active) return;
+    setPrintModalOpen(true);
+  }, [active]);
+
+  /**
+   * Print a subset of pages at a given scale. `pageIndexes` null = all pages;
+   * scale 1 = actual size. Bakes annotations first so markup prints.
+   */
+  const printWith = useCallback(
+    async (pageIndexes: number[] | null, scale: number) => {
+      if (active && !permissionsOf(active.pdf).print) {
+        toast.error("This document's permissions don't allow printing.");
+        return;
+      }
+      const baked = await bakeToBytes();
+      if (!baked) return;
+      let bytes = baked;
+      const needsSubset =
+        pageIndexes != null &&
+        (pageIndexes.length !== active!.pdf.numPages ||
+          pageIndexes.some((p, i) => p !== i));
+      if (needsSubset || scale !== 1) {
+        const { buildPrintDoc } = await import("./lib/pdftools");
+        const idx =
+          pageIndexes ?? Array.from({ length: active!.pdf.numPages }, (_, i) => i);
+        bytes = await buildPrintDoc(baked, idx, scale);
+      }
+      setPrintModalOpen(false);
+      printBytes(bytes);
+    },
+    [active, bakeToBytes, printBytes],
+  );
 
   /* ---------------- navigation & search ---------------- */
 
@@ -2535,6 +2579,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     answerPassword,
     downloadCurrent,
     printCurrent,
+    printWith,
     ocrBusy,
     runOcrText,
     currentPage: active?.currentPage ?? 0,
@@ -2544,6 +2589,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setScale,
     fitMode,
     setFitMode,
+    spread,
+    setSpread,
+    printModalOpen,
+    setPrintModalOpen,
     editMode,
     setEditMode,
     tool,

@@ -7,8 +7,10 @@ import {
   Copy,
   Crop,
   Download,
+  FileCode2,
   FileImage,
   FilePlus2,
+  FileText,
   FolderOpen,
   Import,
   Minimize2,
@@ -20,9 +22,12 @@ import {
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Input } from "../ui/input";
+import { Radio, RadioGroup } from "../ui/radio";
 import { Select } from "../ui/select";
+import { Slider } from "../ui/slider";
 import { Thumbnail } from "../layout/Sidebar";
 import {
   addHeadersFooters,
@@ -242,14 +247,16 @@ function IconBtn({
   disabled?: boolean;
 }) {
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="icon"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      className="h-6 w-6 rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -426,27 +433,6 @@ export function SplitScreen() {
     }
   };
 
-  const exportImages = async () => {
-    setBusy(true);
-    try {
-      const zipFiles: Array<{ name: string; data: Blob }> = [];
-      for (let i = 0; i < app.numPages; i++) {
-        const canvas = document.createElement("canvas");
-        await renderPageToCanvas(app.pdf!, i, canvas, 2);
-        const blob = await new Promise<Blob>((resolve, reject) =>
-          canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("render failed"))), "image/png"),
-        );
-        zipFiles.push({ name: `${name}-p${i + 1}.png`, data: blob });
-      }
-      await downloadZip(zipFiles, `${name}-images.zip`);
-      toast.success(`Exported ${app.numPages} page image(s)`);
-    } catch (err) {
-      toast.error(`Export failed: ${err instanceof Error ? err.message : "error"}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <ToolShell
       title="Split & extract"
@@ -479,14 +465,139 @@ export function SplitScreen() {
         </Button>
       </div>
 
-      <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
-        <p className="pb-1 text-sm font-medium">Export pages as images</p>
-        <p className="pb-3 text-xs text-muted-foreground">
-          Renders every page as a high-resolution PNG and downloads them as a zip.
-        </p>
-        <Button variant="outline" disabled={busy} className="gap-2" onClick={() => void exportImages()}>
-          <FileImage className="h-4 w-4" /> Export PNGs (zip)
-        </Button>
+      <div className="mt-4 rounded-xl border border-dashed bg-muted/30 p-4 text-xs text-muted-foreground">
+        Looking to export as images, text or HTML? Use{" "}
+        <button
+          className="font-medium text-foreground underline underline-offset-2"
+          onClick={() => app.setScreen("export")}
+        >
+          Tools → Export
+        </button>
+        .
+      </div>
+    </ToolShell>
+  );
+}
+
+/* ---------------- Export (text / HTML / images) ---------------- */
+
+export function ExportScreen() {
+  const app = useApp();
+  const [busy, setBusy] = useState<null | "text" | "html" | "png">(null);
+
+  if (!app.pdf || !app.docBytes) {
+    return (
+      <ToolShell title="Export" description="Export the document as text, HTML or page images.">
+        <NeedsDocument />
+      </ToolShell>
+    );
+  }
+  const bytes = app.docBytes;
+  const numPages = app.numPages;
+  const name = (app.docName ?? "document.pdf").replace(/\.pdf$/i, "");
+
+  const exportText = async () => {
+    setBusy("text");
+    try {
+      const { toPlainText } = await import("../../lib/export");
+      const { downloadText } = await import("../../lib/utils");
+      const text = await toPlainText(bytes, numPages);
+      if (!text.trim()) {
+        toast.error("No extractable text — this may be a scanned PDF. Try Tools → Make searchable (OCR) first.");
+        return;
+      }
+      downloadText(text, `${name}.txt`, "text/plain");
+      toast.success("Exported text");
+    } catch (err) {
+      toast.error(`Export failed: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const exportHtml = async () => {
+    setBusy("html");
+    try {
+      const { toHtml } = await import("../../lib/export");
+      const { downloadText } = await import("../../lib/utils");
+      const html = await toHtml(bytes, numPages, name);
+      downloadText(html, `${name}.html`, "text/html");
+      toast.success("Exported HTML");
+    } catch (err) {
+      toast.error(`Export failed: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const exportImages = async () => {
+    setBusy("png");
+    try {
+      const zipFiles: Array<{ name: string; data: Blob }> = [];
+      for (let i = 0; i < numPages; i++) {
+        const canvas = document.createElement("canvas");
+        await renderPageToCanvas(app.pdf!, i, canvas, 2);
+        const blob = await new Promise<Blob>((resolve, reject) =>
+          canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("render failed"))), "image/png"),
+        );
+        zipFiles.push({ name: `${name}-p${i + 1}.png`, data: blob });
+      }
+      await downloadZip(zipFiles, `${name}-images.zip`);
+      toast.success(`Exported ${numPages} page image(s)`);
+    } catch (err) {
+      toast.error(`Export failed: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const card = (
+    title: string,
+    desc: string,
+    icon: React.ReactNode,
+    label: string,
+    onClick: () => void,
+    disabled: boolean,
+  ) => (
+    <div className="rounded-xl border bg-card p-4 shadow-shell">
+      <p className="pb-1 text-sm font-medium">{title}</p>
+      <p className="pb-3 text-xs text-muted-foreground">{desc}</p>
+      <Button variant="outline" disabled={!!busy} className="gap-2" onClick={onClick}>
+        {icon} {disabled ? "Working…" : label}
+      </Button>
+    </div>
+  );
+
+  return (
+    <ToolShell
+      title="Export"
+      description="Convert the document to plain text, a styled HTML page, or page images."
+    >
+      <div className="flex flex-col gap-4">
+        {card(
+          "Plain text (.txt)",
+          "Extracts the document's text in reading order, one line per line, pages separated by a form feed.",
+          <FileText className="h-4 w-4" />,
+          "Export text",
+          () => void exportText(),
+          busy === "text",
+        )}
+        {card(
+          "HTML (.html)",
+          "A styled web page with headings and paragraphs detected from font sizes and spacing. Layout is approximate.",
+          <FileCode2 className="h-4 w-4" />,
+          "Export HTML",
+          () => void exportHtml(),
+          busy === "html",
+        )}
+        {card(
+          "Page images (.png, zip)",
+          "Renders every page as a high-resolution PNG and downloads them as a zip.",
+          <FileImage className="h-4 w-4" />,
+          "Export PNGs (zip)",
+          () => void exportImages(),
+          busy === "png",
+        )}
       </div>
     </ToolShell>
   );
@@ -522,40 +633,38 @@ export function WatermarkScreen() {
         <div className="flex flex-col gap-3">
           <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Watermark text" />
           <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-            <label className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
               Opacity
-              <input
-                type="range"
+              <Slider
+                value={opacity}
+                onValueChange={setOpacity}
                 min={0.05}
                 max={0.6}
                 step={0.05}
-                value={opacity}
-                onChange={(e) => setOpacity(Number(e.target.value))}
+                aria-label="Opacity"
+                className="w-28"
               />
-              {Math.round(opacity * 100)}%
-            </label>
-            <label className="flex items-center gap-2">
+              <span className="w-8 tabular-nums">{Math.round(opacity * 100)}%</span>
+            </div>
+            <div className="flex items-center gap-2">
               Size
-              <input
-                type="range"
+              <Slider
+                value={size}
+                onValueChange={setSize}
                 min={24}
                 max={120}
                 step={4}
-                value={size}
-                onChange={(e) => setSize(Number(e.target.value))}
+                aria-label="Watermark size"
+                className="w-28"
               />
-              {size}pt
-            </label>
+              <span className="w-9 tabular-nums">{size}pt</span>
+            </div>
             <label className="flex items-center gap-2">
               Color
               <ColorSwatch value={color} onChange={setColor} title="Watermark color" />
             </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={diagonal}
-                onChange={(e) => setDiagonal(e.target.checked)}
-              />
+            <label className="flex cursor-pointer items-center gap-2">
+              <Checkbox checked={diagonal} onCheckedChange={(v: boolean) => setDiagonal(v)} />
               Diagonal
             </label>
           </div>
@@ -672,18 +781,19 @@ export function CompressScreen() {
     >
       <div className="rounded-xl border bg-card p-4 shadow-shell">
         <div className="flex flex-wrap items-center gap-5 text-xs text-muted-foreground">
-          <label className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
             Image quality
-            <input
-              type="range"
+            <Slider
+              value={quality}
+              onValueChange={setQuality}
               min={0.4}
               max={0.95}
               step={0.05}
-              value={quality}
-              onChange={(e) => setQuality(Number(e.target.value))}
+              aria-label="Image quality"
+              className="w-28"
             />
-            {Math.round(quality * 100)}%
-          </label>
+            <span className="w-8 tabular-nums">{Math.round(quality * 100)}%</span>
+          </div>
           <label className="flex items-center gap-2">
             Max resolution
             <Select
@@ -898,18 +1008,15 @@ export function CropScreen() {
         <div className="flex min-w-56 flex-1 flex-col gap-3">
           <div className="rounded-xl border bg-card p-4 text-sm shadow-shell">
             <p className="pb-2 font-medium">Apply to</p>
-            <div className="flex flex-col gap-1.5 text-xs">
-              <label className="flex items-center gap-2">
-                <input type="radio" checked={scope === "all"} onChange={() => setScope("all")} />
-                All pages
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" checked={scope === "page"} onChange={() => setScope("page")} />
-                This page only
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" checked={scope === "range"} onChange={() => setScope("range")} />
-                Pages
+            <RadioGroup
+              value={scope}
+              onValueChange={(v) => setScope(v as "all" | "page" | "range")}
+              className="text-xs"
+            >
+              <Radio value="all">All pages</Radio>
+              <Radio value="page">This page only</Radio>
+              <div className="flex items-center gap-2">
+                <Radio value="range">Pages</Radio>
                 <Input
                   value={range}
                   onChange={(e) => {
@@ -919,14 +1026,13 @@ export function CropScreen() {
                   placeholder={`e.g. 1-3, 5`}
                   className="h-7 w-32 px-2 text-xs"
                 />
-              </label>
-            </div>
+              </div>
+            </RadioGroup>
             <label className="mt-3 flex items-start gap-2 border-t pt-3 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
+              <Checkbox
                 className="mt-0.5"
                 checked={permanent}
-                onChange={(e) => setPermanent(e.target.checked)}
+                onCheckedChange={(v: boolean) => setPermanent(v)}
               />
               <span>
                 Remove the cropped area permanently (rewrites the page boundaries; otherwise the
@@ -1105,8 +1211,8 @@ export function HeaderFooterScreen() {
       </div>
 
       <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input type="checkbox" checked={batesOn} onChange={(e) => setBatesOn(e.target.checked)} />
+        <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+          <Checkbox checked={batesOn} onCheckedChange={(v: boolean) => setBatesOn(v)} />
           Bates numbering
         </label>
         <p className="pb-3 pt-1 text-xs text-muted-foreground">

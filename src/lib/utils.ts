@@ -36,6 +36,21 @@ export function downloadBytes(bytes: Uint8Array, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** Download a text/HTML string as a file with the given MIME type. */
+export function downloadText(
+  content: string,
+  filename: string,
+  mime = "text/plain",
+) {
+  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 /** Parse a page-range expression like "1-3, 5, 8-10" into 0-based page indexes. */
 export function parsePageRanges(input: string, pageCount: number): number[] {
   const out: number[] = [];
