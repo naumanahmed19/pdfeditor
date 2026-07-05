@@ -34,6 +34,7 @@ import type { AttachmentInfo } from "../../lib/pdfium";
 import type { FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
+import { Skeleton } from "../ui/skeleton";
 
 export function Sidebar() {
   const app = useApp();
@@ -222,31 +223,51 @@ function RecentList() {
 
       {app.folderRoot && <FolderSection root={app.folderRoot} />}
 
-      {openDocs.length > 0 && (
-        <div className="flex flex-col gap-0.5 pb-1">
-          {openDocs.map((r) => (
-            <RecentRow key={r.id} r={r} />
-          ))}
-        </div>
-      )}
+      {app.recentLoading ? (
+        <RecentListSkeleton />
+      ) : (
+        <>
+          {openDocs.length > 0 && (
+            <div className="flex flex-col gap-0.5 pb-1">
+              {openDocs.map((r) => (
+                <RecentRow key={r.id} r={r} />
+              ))}
+            </div>
+          )}
 
-      {!openDocs.length && !app.folderRoot && (
-        <p className="px-2 pb-2 text-[11px] text-muted-foreground">
-          No document open. Use + to open a file or the folder icon to browse a
-          folder.
-        </p>
-      )}
+          {!openDocs.length && !app.folderRoot && (
+            <p className="px-2 pb-2 text-[11px] text-muted-foreground">
+              No document open. Use + to open a file or the folder icon to browse
+              a folder.
+            </p>
+          )}
 
-      {closedDocs.length > 0 && (
-        <div className="pt-2">
-          <SectionLabel>Recently closed</SectionLabel>
-          <div className="flex flex-col gap-0.5">
-            {closedDocs.map((r) => (
-              <RecentRow key={r.id} r={r} />
-            ))}
-          </div>
-        </div>
+          {closedDocs.length > 0 && (
+            <div className="pt-2">
+              <SectionLabel>Recently closed</SectionLabel>
+              <div className="flex flex-col gap-0.5">
+                {closedDocs.map((r) => (
+                  <RecentRow key={r.id} r={r} />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+/** Placeholder rows shown while the recent-files list loads on startup. */
+function RecentListSkeleton() {
+  return (
+    <div className="flex flex-col gap-0.5" aria-hidden>
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-2 rounded-md px-2 py-1.5">
+          <Skeleton className="h-3.5 w-3.5 shrink-0 rounded-sm" />
+          <Skeleton className="h-3 flex-1" style={{ maxWidth: `${70 - i * 8}%` }} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -305,6 +326,9 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function RecentRow({ r }: { r: RecentFile }) {
   const app = useApp();
   const isActive = r.id === app.activeTabId;
+  // "Loaded" = actually in memory (a live tab). An open doc that isn't loaded
+  // is one restored from last session but not yet activated — it loads on click.
+  const isLoaded = app.tabs.some((t) => t.id === r.id);
   const hasEdits = app.tabs.find((t) => t.id === r.id)?.hasEdits ?? false;
   const open = () => {
     void app.openRecent(r.id);
@@ -341,21 +365,33 @@ function RecentRow({ r }: { r: RecentFile }) {
           <span
             className={cn(
               "h-1.5 w-1.5 shrink-0 rounded-full group-hover:hidden",
-              hasEdits ? "bg-amber-500" : "bg-emerald-500",
+              !isLoaded
+                ? "border border-muted-foreground/50"
+                : hasEdits
+                  ? "bg-amber-500"
+                  : "bg-emerald-500",
             )}
-            title={hasEdits ? "Unsaved edits" : "Currently open"}
+            title={
+              !isLoaded
+                ? "Open — click to load"
+                : hasEdits
+                  ? "Unsaved edits"
+                  : "Currently open"
+            }
           />
           <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-            <button
-              className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title="Open in a split pane"
-              onClick={(e) => {
-                e.stopPropagation();
-                app.openInPane(r.id);
-              }}
-            >
-              <Columns2 className="h-3 w-3" />
-            </button>
+            {isLoaded && (
+              <button
+                className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Open in a split pane"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  app.openInPane(r.id);
+                }}
+              >
+                <Columns2 className="h-3 w-3" />
+              </button>
+            )}
             <button
               className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               title="Close document"

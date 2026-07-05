@@ -75,6 +75,7 @@ import { ColorSwatch } from "../ui/color-swatch";
 import { Input } from "../ui/input";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Select } from "../ui/select";
+import { Skeleton } from "../ui/skeleton";
 import { Textarea } from "../ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 
@@ -848,6 +849,7 @@ function PageView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
+  const [painted, setPainted] = useState(false);
   const renderTask = useRef<{ cancel: () => void } | null>(null);
   const [textLayerReady, setTextLayerReady] = useState(0);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
@@ -893,7 +895,11 @@ function PageView({
 
   // Render canvas + text layer when visible or scale changes
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setPainted(false);
+      return;
+    }
+    setPainted(false);
     let cancelled = false;
     const timer = setTimeout(async () => {
       const canvas = canvasRef.current;
@@ -924,6 +930,7 @@ function PageView({
 
       // Text layer at CSS scale
       if (cancelled) return;
+      setPainted(true);
       try {
         renderTextLayer(page, textDiv, scale);
         if (!cancelled) setTextLayerReady((v) => v + 1);
@@ -1351,6 +1358,9 @@ function PageView({
       }}
       onDrop={onFieldDrop}
     >
+      {visible && !painted && (
+        <Skeleton className="absolute inset-0 h-full w-full rounded-none" />
+      )}
       {visible && (
         <canvas
           ref={canvasRef}

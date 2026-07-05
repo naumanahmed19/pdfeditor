@@ -176,6 +176,8 @@ interface AppStore {
   /** Save in place when a handle exists, otherwise download a copy. */
   saveCurrent: () => Promise<void>;
   recentFiles: RecentFile[];
+  /** True until the first recent-files load completes (drives sidebar skeleton). */
+  recentLoading: boolean;
   openRecent: (id: string) => Promise<void>;
   closeDocument: () => void;
 
@@ -1147,6 +1149,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
+  const [recentLoading, setRecentLoading] = useState(true);
   const [folderRoot, setFolderRoot] = useState<FolderNode | null>(null);
   const [folderBusy, setFolderBusy] = useState(false);
   const docHandles = useRef(new Map<string, any>());
@@ -1223,6 +1226,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
               });
               if (input === null) {
                 await pdfDoc.destroy();
+                // A cancelled unlock must not leave the doc lingering as "open"
+                // in persistence — otherwise it can't be closed from the
+                // sidebar and its dialog re-appears on every session restore.
+                // Demote the persisted record to recently-closed.
+                if (id) void markDocClosed(id).then(refreshRecent);
                 return null;
               }
               try {
@@ -1233,6 +1241,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 if (attempt >= 3) {
                   await pdfDoc.destroy();
                   toast.error("Too many wrong password attempts");
+                  if (id) void markDocClosed(id).then(refreshRecent);
                   return null;
                 }
               }
@@ -1319,7 +1328,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           .catch(() => {});
         return doc.id;
       } catch (err) {
-        if ((err as Error)?.message !== "Password required") {
+        if ((err as Error)?.message === "Password required") {
+          // Cancelled a standard-encrypted doc's unlock prompt — don't leave it
+          // lingering as "open" (mirrors the wrapper-cancel path above).
+          if (id) void markDocClosed(id).then(refreshRecent);
+        } else {
           toast.error(
             `Could not open PDF: ${err instanceof Error ? err.message : "unknown error"}`,
           );
@@ -1405,22 +1418,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [openBytesInternal]);
 
-  // Restore tabs that were open last session; load the recent-files list.
+  // Peek whether stored bytes need a password to open — WITHOUT prompting for
+  // one. Covers both lock types so session restore can defer the dialog:
+  //   • standard-encrypted PDFs (non-empty user password) — PdfDoc.load throws
+  //     PasswordError; we must NOT use loadPdf() here, which would prompt.
+  //   • PickPDF-locked wrappers — open fine, but carry the encrypted payload.
+  // A doc encrypted with an EMPTY user password (owner-only restrictions) opens
+  // without a prompt, so it returns false and restores normally.
+  const needsPasswordToOpen = useCallback(async (bytes: Uint8Array) => {
+    const engine = await import("./lib/engine");
+    let pdfDoc: PdfDoc;
+    try {
+      pdfDoc = await engine.PdfDoc.load(bytes, "");
+    } catch (err) {
+      // Encrypted with a real user password — defer to lazy unlock.
+      return err instanceof engine.PasswordError;
+    }
+    try {
+      const payload = pdfDoc.getAttachment("pickpdf-protected.bin");
+      if (!payload) return false;
+      const { isProtectedPayload } = await import("./lib/protected");
+      return isProtectedPayload(payload);
+    } catch {
+      return false;
+    } finally {
+      await pdfDoc.destroy();
+    }
+  }, []);
+
+  // Restore the last session: open ONLY the most-recently-active document into
+  // the viewer. The other still-"open" docs stay as sidebar entries and load
+  // lazily when the user activates them. Opening every one would flash the
+  // viewer through each in turn and, with many tabs, load dozens of PDFs into
+  // memory on startup.
   const restoredRef = useRef(false);
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
     void (async () => {
       const stored = await listStoredDocs();
-      const toOpen = stored
+      const active = stored
         .filter((d) => d.open)
-        .sort((a, b) => a.lastOpened - b.lastOpened);
-      for (const d of toOpen) {
-        await openBytesInternal(d.bytes, d.name, d.id, true);
+        .sort((a, b) => b.lastOpened - a.lastOpened)[0];
+      // Skip auto-open when the active doc is locked (PickPDF wrapper or
+      // standard-encrypted) — it would pop a password dialog on startup. It
+      // unlocks lazily when the user activates it.
+      if (active && !(await needsPasswordToOpen(active.bytes))) {
+        await openBytesInternal(active.bytes, active.name, active.id, true);
       }
       await refreshRecent();
+      setRecentLoading(false);
     })();
-  }, [openBytesInternal, refreshRecent]);
+  }, [openBytesInternal, refreshRecent, needsPasswordToOpen]);
 
   const openRecent = useCallback(
     async (id: string) => {
@@ -1495,7 +1544,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const closeTab = useCallback(
     (id: string) => {
       const doc = docs.find((d) => d.id === id);
-      if (!doc) return;
+      if (!doc) {
+        // Phantom entry: persisted as open but never loaded (e.g. a protected
+        // doc whose password prompt was cancelled). Still let the user clear it
+        // from the sidebar and drop any stale protection state.
+        protectionInfo.current.delete(id);
+        markProtected(id, false);
+        docHandles.current.delete(id);
+        void markDocClosed(id).then(refreshRecent);
+        return;
+      }
       if (docHasEdits(doc)) {
         const ok = window.confirm(
           `“${doc.name}” has unsaved edits. Close it anyway?`,
@@ -2547,6 +2605,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeHasHandle: !!(activeTabId && docHandles.current.has(activeTabId)),
     saveCurrent,
     recentFiles,
+    recentLoading,
     openRecent,
     closeDocument,
     folderRoot,

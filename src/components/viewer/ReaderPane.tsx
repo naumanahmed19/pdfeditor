@@ -11,6 +11,7 @@ import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
 import { renderTextLayer } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
+import { Skeleton } from "../ui/skeleton";
 
 const PAGE_GAP = 20;
 
@@ -169,6 +170,7 @@ function ReaderPage({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
+  const [painted, setPainted] = useState(false);
 
   const w = baseDims.width * scale;
   const h = baseDims.height * scale;
@@ -185,7 +187,11 @@ function ReaderPage({
   }, []);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setPainted(false);
+      return;
+    }
+    setPainted(false);
     let cancelled = false;
     const timer = setTimeout(async () => {
       const canvas = canvasRef.current;
@@ -210,6 +216,7 @@ function ReaderPage({
         return;
       }
       if (cancelled) return;
+      setPainted(true);
       try {
         renderTextLayer(p, textDiv, scale);
       } catch {
@@ -231,6 +238,9 @@ function ReaderPage({
       )}
       style={{ width: w, height: h, scrollMarginTop: 12 }}
     >
+      {visible && !painted && (
+        <Skeleton className="absolute inset-0 h-full w-full rounded-none" />
+      )}
       {visible && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />}
       <div ref={textLayerRef} className="textLayer" />
     </div>

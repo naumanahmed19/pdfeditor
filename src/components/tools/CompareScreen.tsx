@@ -27,47 +27,12 @@ export function CompareScreen() {
   const diffCanvasRef = useRef<HTMLCanvasElement>(null);
   const [pixelChanged, setPixelChanged] = useState<number | null>(null);
 
-  if (!app.pdf || !app.docBytes) {
-    return (
-      <ToolShellLite title="Compare documents" desc="Open a PDF first to compare it with another.">
-        <div className="rounded-xl border border-dashed bg-card px-6 py-10 text-center text-sm text-muted-foreground">
-          Open a PDF first (title bar → Open PDF), then pick a second file to compare.
-        </div>
-      </ToolShellLite>
-    );
-  }
-
+  // Render the pixel diff whenever the page or mode changes. Declared BEFORE the
+  // early return below so the hook order stays stable when a document opens or
+  // closes — otherwise React throws "Rendered fewer hooks than expected" (#300).
   const bytesA = app.docBytes;
-  const pagesA = app.numPages;
-  const pagesB = pdfB?.numPages ?? 0;
-  const maxPages = Math.max(pagesA, pagesB);
-
-  const onPickFile = async (file: File) => {
-    setBusy(true);
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const doc = await loadPdf(bytes);
-      const [ta, tb] = await Promise.all([
-        extractAllText(app.pdf!),
-        extractAllText(doc),
-      ]);
-      setBytesB(bytes);
-      setNameB(file.name);
-      setPdfB(doc);
-      setTextA(ta.map((p) => p.full));
-      setTextB(tb.map((p) => p.full));
-      setPage(0);
-      toast.success(`Comparing against ${file.name}`);
-    } catch (err) {
-      toast.error(`Couldn't open that PDF: ${err instanceof Error ? err.message : "error"}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Render the pixel diff whenever the page or mode changes.
   useEffect(() => {
-    if (mode !== "pixel" || !bytesB) return;
+    if (mode !== "pixel" || !bytesB || !bytesA) return;
     let cancelled = false;
     setBusy(true);
     setPixelChanged(null);
@@ -95,6 +60,43 @@ export function CompareScreen() {
       cancelled = true;
     };
   }, [mode, page, bytesA, bytesB]);
+
+  if (!app.pdf || !bytesA) {
+    return (
+      <ToolShellLite title="Compare documents" desc="Open a PDF first to compare it with another.">
+        <div className="rounded-xl border border-dashed bg-card px-6 py-10 text-center text-sm text-muted-foreground">
+          Open a PDF first (title bar → Open PDF), then pick a second file to compare.
+        </div>
+      </ToolShellLite>
+    );
+  }
+
+  const pagesA = app.numPages;
+  const pagesB = pdfB?.numPages ?? 0;
+  const maxPages = Math.max(pagesA, pagesB);
+
+  const onPickFile = async (file: File) => {
+    setBusy(true);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      const [ta, tb] = await Promise.all([
+        extractAllText(app.pdf!),
+        extractAllText(doc),
+      ]);
+      setBytesB(bytes);
+      setNameB(file.name);
+      setPdfB(doc);
+      setTextA(ta.map((p) => p.full));
+      setTextB(tb.map((p) => p.full));
+      setPage(0);
+      toast.success(`Comparing against ${file.name}`);
+    } catch (err) {
+      toast.error(`Couldn't open that PDF: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const parts: DiffPart[] =
     bytesB && page < Math.max(textA.length, textB.length)

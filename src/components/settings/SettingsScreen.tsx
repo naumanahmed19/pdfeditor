@@ -1,5 +1,14 @@
-import { useEffect, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Check,
+  Download,
+  Loader2,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
+import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -7,14 +16,22 @@ import { Select } from "../ui/select";
 import { Slider } from "../ui/slider";
 import { cn } from "../../lib/utils";
 import { checkConnection, DEFAULT_MODEL } from "../../lib/ai";
+import {
+  clearBrowserModelCache,
+  isBrowserModelDownloaded,
+  type ModelLoadProgress,
+  preloadBrowserModel,
+  webgpuAvailable,
+} from "../../lib/browserLlm";
+import { BROWSER_MODEL } from "../../lib/modelConfig";
 import { ACCENTS } from "../../lib/accents";
 import type { ProviderKind } from "../../types";
 
 const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   {
     value: "browser",
-    label: "Built-in (Gemma 4)",
-    hint: "Runs in your browser — no setup. Downloads once (~2 GB). Uses your GPU (WebGPU) when available, otherwise CPU (slower).",
+    label: `Built-in (${BROWSER_MODEL.name})`,
+    hint: `Runs in your browser — no setup. Downloads once (${BROWSER_MODEL.sizeLabel}). Uses your GPU (WebGPU) when available, otherwise CPU (slower).`,
   },
   { value: "ollama", label: "Ollama", hint: "Local models via Ollama (default port 11434)" },
   { value: "lmstudio", label: "LM Studio", hint: "Local models via LM Studio server (default port 1234)" },
@@ -162,14 +179,7 @@ export function SettingsScreen() {
           )}
 
           {s.provider === "browser" ? (
-            <Row
-              title="Model"
-              description="Gemma 4 (E2B) runs in your browser via Transformers.js — GPU (WebGPU) when available, otherwise CPU. It downloads once (~2 GB) on first use, then works offline — no server or API key."
-            >
-              <span className="rounded-md border border-input px-2 py-1 text-xs text-muted-foreground">
-                Gemma 4 · built-in
-              </span>
-            </Row>
+            <GemmaModelPanel />
           ) : (
             <Row
               title="Model"
@@ -183,20 +193,22 @@ export function SettingsScreen() {
             </Row>
           )}
 
-          <Row
-            title="Connection"
-            description={status ?? "Checking…"}
-            descriptionClass={ok === false ? "text-destructive" : ok ? "text-emerald-600" : undefined}
-          >
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void refresh()} disabled={checking}>
-              {checking ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5" />
-              )}
-              Test
-            </Button>
-          </Row>
+          {s.provider !== "browser" && (
+            <Row
+              title="Connection"
+              description={status ?? "Checking…"}
+              descriptionClass={ok === false ? "text-destructive" : ok ? "text-emerald-600" : undefined}
+            >
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void refresh()} disabled={checking}>
+                {checking ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Test
+              </Button>
+            </Row>
+          )}
 
           {s.provider !== "browser" && models.length > 0 && (
             <div className="border-t px-4 py-3">
@@ -297,6 +309,135 @@ function Row({
         )}
       </div>
       <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+type DownloadState = "idle" | "downloading" | "preparing" | "ready" | "error";
+
+/**
+ * Download status, progress and controls for the in-browser Gemma model — lets
+ * users pre-download it, watch progress, retry a failed load, or clear a bad
+ * cache, all without having to start a chat.
+ */
+function GemmaModelPanel() {
+  const [state, setState] = useState<DownloadState>(() =>
+    isBrowserModelDownloaded() ? "ready" : "idle",
+  );
+  const [progress, setProgress] = useState<ModelLoadProgress | null>(null);
+  const [error, setError] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
+  const gpu = webgpuAvailable();
+
+  const start = async () => {
+    setError("");
+    setProgress(null);
+    setState("downloading");
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      await preloadBrowserModel((p) => {
+        setProgress(p);
+        setState(p.phase === "preparing" ? "preparing" : "downloading");
+      }, ac.signal);
+      setState("ready");
+      setProgress(null);
+      toast.success(`${BROWSER_MODEL.name} is ready — it now runs offline`);
+    } catch (e) {
+      if ((e as Error).name === "AbortError") {
+        setState(isBrowserModelDownloaded() ? "ready" : "idle");
+      } else {
+        setError((e as Error).message || "Download failed");
+        setState("error");
+      }
+    } finally {
+      abortRef.current = null;
+    }
+  };
+
+  const cancel = () => abortRef.current?.abort();
+
+  const clear = async () => {
+    cancel();
+    await clearBrowserModelCache();
+    setState("idle");
+    setProgress(null);
+    setError("");
+    toast.success("Cached model cleared — it will download again on next use");
+  };
+
+  const busy = state === "downloading" || state === "preparing";
+  const pct = progress?.pct ?? null;
+
+  return (
+    <div className="border-t px-4 py-3">
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <p className="text-sm">Model</p>
+          <p className="pt-0.5 text-xs text-muted-foreground">
+            {BROWSER_MODEL.name} runs privately in your browser — no server or API
+            key. Downloads once ({BROWSER_MODEL.sizeLabel}), then works offline.{" "}
+            {gpu
+              ? "Uses your GPU (WebGPU) when available."
+              : "No WebGPU detected — it will run on CPU (slower)."}
+          </p>
+        </div>
+        <div className="shrink-0">
+          {state === "ready" && (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-600">
+              <Check className="h-3.5 w-3.5" /> Ready · offline
+            </span>
+          )}
+          {state === "idle" && (
+            <Button size="sm" className="gap-1.5" onClick={() => void start()}>
+              <Download className="h-3.5 w-3.5" /> Download model
+            </Button>
+          )}
+          {state === "error" && (
+            <Button size="sm" className="gap-1.5" onClick={() => void start()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Retry
+            </Button>
+          )}
+          {busy && (
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={cancel}>
+              <X className="h-3.5 w-3.5" /> Cancel
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {busy && (
+        <div className="pt-3">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn(
+                "h-full rounded-full bg-primary transition-all",
+                pct === null && "animate-pulse",
+              )}
+              style={{ width: pct === null ? "100%" : `${pct}%` }}
+            />
+          </div>
+          <p className="pt-1.5 text-xs text-muted-foreground">
+            {progress?.text || "Starting…"}
+          </p>
+        </div>
+      )}
+
+      {state === "error" && error && (
+        <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {(state === "ready" || state === "error") && (
+        <button
+          onClick={() => void clear()}
+          className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+        >
+          <Trash2 className="h-3 w-3" /> Clear cached model
+        </button>
+      )}
     </div>
   );
 }
