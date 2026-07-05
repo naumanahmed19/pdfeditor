@@ -1,8 +1,15 @@
-import { useEffect, useReducer, useRef, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useEffect,
+  useReducer,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+  type SelectHTMLAttributes,
+} from "react";
 import {
   Bold,
+  ChevronDown,
   Circle,
-  CircleDot,
   Copy,
   Eraser,
   FormInput,
@@ -10,22 +17,27 @@ import {
   Highlighter,
   Image as ImageIcon,
   Italic,
-  List,
   Lock,
   MessageSquare,
+  MessageSquareQuote,
   Minus,
   MousePointer2,
+  MoveUpRight,
   PaintBucket,
   Pencil,
   Redo2,
+  RotateCw,
   Signature,
   SquareSlash,
   Square,
-  SquareCheck,
+  Stamp,
+  Strikethrough,
   TextCursorInput,
   Trash2,
   Type,
+  Underline,
   Undo2,
+  Waves,
 } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
@@ -33,10 +45,13 @@ import { ColorSwatch } from "../ui/color-swatch";
 import {
   ColorPresets,
   FillControl,
+  FONT_OPTIONS,
+  FONT_SIZES,
   HIGHLIGHT_PRESETS,
   INK_PRESETS,
   SizePresets,
   StrokeWidthSelect,
+  StyleToggle,
   TextStyleControls,
 } from "./StyleControls";
 import { activeTextEditor } from "../../lib/activeTextEditor";
@@ -47,8 +62,8 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Separator } from "../ui/separator";
 import { Tip, TooltipProvider } from "../ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
-import { uid } from "../../lib/utils";
-import { cn } from "../../lib/utils";
+import { cn, ROTATABLE_KINDS } from "../../lib/utils";
+import { STAMPS, makeStamp } from "../../lib/stamps";
 import type {
   Annotation,
   FontFamilyKind,
@@ -72,11 +87,16 @@ const TOOLS: Array<{
   { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
   { key: "edittext", icon: TextCursorInput, name: "Edit existing text", desc: "Click a line of the document to retype it", group: 1, shortcut: "E" },
   { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Drag over text, or click an existing highlight to remove it", group: 2, shortcut: "H" },
+  { key: "underline", icon: Underline, name: "Underline text", desc: "Select text first, or drag over it; click an existing mark to remove it", group: 2, shortcut: "U" },
+  { key: "strikeout", icon: Strikethrough, name: "Strike through text", desc: "Select text first, or drag over it; click an existing mark to remove it", group: 2, shortcut: "S" },
+  { key: "squiggly", icon: Waves, name: "Squiggly underline", desc: "Select text first, or drag over it; click an existing mark to remove it", group: 2 },
   { key: "note", icon: MessageSquare, name: "Comment", desc: "Click the page to add a sticky note", group: 2, shortcut: "C" },
   { key: "ink", icon: Pencil, name: "Draw freehand", desc: "Pen strokes in the chosen color & size", group: 2, shortcut: "D" },
   { key: "rect", icon: Square, name: "Rectangle", desc: "Drag to draw; fill optional", group: 3, shortcut: "R" },
   { key: "ellipse", icon: Circle, name: "Ellipse", desc: "Drag to draw; fill optional", group: 3, shortcut: "O" },
   { key: "line", icon: Minus, name: "Line", desc: "Drag from start to end", group: 3, shortcut: "L" },
+  { key: "arrow", icon: MoveUpRight, name: "Arrow", desc: "Drag from tail to head", group: 3, shortcut: "A" },
+  { key: "callout", icon: MessageSquareQuote, name: "Callout", desc: "Drag from the target to where the note should sit", group: 3, shortcut: "K" },
   { key: "whiteout", icon: PaintBucket, name: "Whiteout", desc: "Cover page content with a filled box (hides, does not remove)", group: 4, shortcut: "W" },
   { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across an annotation you added to delete it" , group: 4 },
   { key: "redact", icon: SquareSlash, name: "Redact", desc: "Permanently removes covered content — draw boxes, then Apply", group: 4, shortcut: "X" },
@@ -166,6 +186,27 @@ function DragScroll({
   );
 }
 
+/**
+ * Native <select> dressed exactly like the shadcn Select trigger (ui/select).
+ * The inline text editor needs NATIVE semantics: the shared Select renders its
+ * listbox in a portal, which moves focus out of [data-inline-edit-controls]
+ * and would commit the in-place edit prematurely.
+ */
+function NativeSelect({
+  className,
+  ...props
+}: SelectHTMLAttributes<HTMLSelectElement> & { className?: string }) {
+  return (
+    <span className={cn("relative inline-flex", className)}>
+      <select
+        {...props}
+        className="h-8 w-full appearance-none truncate rounded-md border border-input bg-background pl-2 pr-7 text-xs text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    </span>
+  );
+}
+
 export function EditorToolbar() {
   const app = useApp();
   const imageRef = useRef<HTMLInputElement>(null);
@@ -225,14 +266,21 @@ export function EditorToolbar() {
   const handleToolChange = (values: string[]) => {
     const key = values[0] as ToolKind | undefined;
     if (!key) return; // ignore toggling the active tool off
-    if (key === "highlight") {
+    if (
+      key === "highlight" ||
+      key === "underline" ||
+      key === "strikeout" ||
+      key === "squiggly"
+    ) {
       const sel = window.getSelection();
       if (
         sel &&
         !sel.isCollapsed &&
         sel.anchorNode?.parentElement?.closest(".textLayer")
       ) {
-        window.dispatchEvent(new CustomEvent("pdfwb:highlight-selection"));
+        window.dispatchEvent(
+          new CustomEvent("pdfwb:highlight-selection", { detail: { style: key } }),
+        );
         return;
       }
     }
@@ -286,8 +334,10 @@ export function EditorToolbar() {
     rect: { icon: Square, label: "Rectangle" },
     ellipse: { icon: Circle, label: "Ellipse" },
     line: { icon: Minus, label: "Line" },
+    arrow: { icon: MoveUpRight, label: "Arrow" },
     ink: { icon: Pencil, label: "Drawing" },
     highlight: { icon: Highlighter, label: "Highlight" },
+    markup: { icon: Underline, label: "Text markup" },
     note: { icon: MessageSquare, label: "Comment" },
     image: { icon: ImageIcon, label: "Image" },
     whiteout: { icon: Eraser, label: "Whiteout" },
@@ -296,11 +346,16 @@ export function EditorToolbar() {
   };
   const selectedKind = selectedAnn ? KIND_CHIP[selectedAnn.kind] : undefined;
 
-  const duplicateSelected = () => {
+  // Group-aware (copies a callout's arrow + text together) — lives in the store.
+  const duplicateSelected = () => app.duplicateSelectedAnnotation();
+
+  const rotateSelected = () => {
     if (!selectedAnn || !app.selected) return;
-    const copy = { ...selectedAnn, id: uid(), x: selectedAnn.x + 12, y: selectedAnn.y + 12 };
-    app.addAnnotation(app.selected.page, copy);
-    app.setSelected({ page: app.selected.page, id: copy.id });
+    const next = ((selectedAnn.rotation ?? 0) + 90) % 360;
+    app.updateAnnotation(app.selected.page, {
+      ...selectedAnn,
+      rotation: next === 0 ? undefined : next,
+    });
   };
 
   const deleteSelected = () => {
@@ -339,7 +394,7 @@ export function EditorToolbar() {
   // no style). This replaces the old floating properties popover.
   const styleAnn =
     selectedAnn &&
-    ["rect", "ellipse", "line", "ink", "highlight", "whiteout"].includes(selectedAnn.kind)
+    ["rect", "ellipse", "line", "arrow", "ink", "highlight", "markup", "whiteout"].includes(selectedAnn.kind)
       ? selectedAnn
       : null;
   const styleA = styleAnn as unknown as {
@@ -351,6 +406,7 @@ export function EditorToolbar() {
     styleAnn?.kind === "rect" ||
     styleAnn?.kind === "ellipse" ||
     styleAnn?.kind === "line" ||
+    styleAnn?.kind === "arrow" ||
     styleAnn?.kind === "ink";
   const styleIsFillable = styleAnn?.kind === "rect" || styleAnn?.kind === "ellipse";
   const styleColorLabel =
@@ -365,7 +421,7 @@ export function EditorToolbar() {
   // stroke width only for drawing tools (armed-tool defaults; a *selected*
   // annotation is handled by the styleAnn branch instead).
   const showFontControls = app.tool === "text" || !!selectedText;
-  const showStroke = ["ink", "rect", "ellipse", "line"].includes(app.tool);
+  const showStroke = ["ink", "rect", "ellipse", "line", "arrow", "callout"].includes(app.tool);
   const showColor = showFontControls || showStroke || app.tool === "highlight";
   const showFill = app.tool === "rect" || app.tool === "ellipse";
   const fillValue = app.toolFill;
@@ -385,7 +441,10 @@ export function EditorToolbar() {
     // data-ann-controls: pressing toolbar controls must not deselect the
     // annotation or dismiss its popover (see AnnotationItem's onOpenChange).
     <TooltipProvider delay={350}>
-    <div data-ann-controls className="border-b bg-background/95 backdrop-blur">
+    {/* relative + z-40: the contextual row below is an absolute overlay that
+        drops over the document (viewer internals go up to z-30) instead of
+        taking layout height — so arming/disarming a tool never shifts the page. */}
+    <div data-ann-controls className="relative z-40 border-b bg-background/95 backdrop-blur">
     <div
       role="toolbar"
       aria-label="PDF editing tools"
@@ -425,35 +484,50 @@ export function EditorToolbar() {
             <ImageIcon className="h-4 w-4" />
           </button>
         </Tip>
-        <Menu>
-          <MenuTrigger
+        <Tip
+          label="Form builder"
+          desc="Design fillable forms: palette, tab order, validation"
+        >
+          <button
+            onClick={() => app.setFormBuilder(!app.formBuilder)}
             className={cn(
               "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
-              app.tool.startsWith("form")
+              app.formBuilder || app.tool.startsWith("form")
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
             <FormInput className="h-4 w-4" />
-            Field
-          </MenuTrigger>
-          <MenuContent className="min-w-44">
-            <MenuItem onClick={() => app.setTool("formtext")}>
-              <FormInput className="h-4 w-4 text-muted-foreground" />
-              Text field
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formcheckbox")}>
-              <SquareCheck className="h-4 w-4 text-muted-foreground" />
-              Checkbox
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formradio")}>
-              <CircleDot className="h-4 w-4 text-muted-foreground" />
-              Radio button
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formdropdown")}>
-              <List className="h-4 w-4 text-muted-foreground" />
-              Dropdown
-            </MenuItem>
+            Form
+          </button>
+        </Tip>
+        <Menu>
+          <Tip label="Stamp" desc="Place a predefined stamp (APPROVED, DRAFT, …)">
+            <MenuTrigger className="flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+              <Stamp className="h-4 w-4" />
+              Stamp
+            </MenuTrigger>
+          </Tip>
+          <MenuContent className="min-w-48">
+            {STAMPS.map((s) => (
+              <MenuItem
+                key={s.label}
+                onClick={() => {
+                  const { dataUrl, aspect } = makeStamp(s);
+                  app.setPendingStamp({ dataUrl, aspect });
+                }}
+              >
+                <span
+                  className="rounded border-2 px-1.5 py-0.5 text-[10px] font-bold italic"
+                  style={{ borderColor: s.color, color: s.color }}
+                >
+                  {s.label}
+                </span>
+                {s.withDate && (
+                  <span className="text-[10px] text-muted-foreground">+ date</span>
+                )}
+              </MenuItem>
+            ))}
           </MenuContent>
         </Menu>
         <Tip label="Insert signature" desc="Draw, type or upload; saved for reuse">
@@ -572,9 +646,18 @@ export function EditorToolbar() {
       </div>
     </div>
 
-    {/* sub-options — a second row, contextual to the armed tool / selection */}
-    {hasContextual && (
-      <div className="flex items-center gap-1.5 border-t border-border/60 px-3 py-1.5">
+    {/* sub-options — contextual to the armed tool / selection. Always mounted
+        (its content is empty when hasContextual is false, so nothing stays
+        tabbable) and shown as an overlay sliding down over the document. */}
+      <div
+        aria-hidden={!hasContextual}
+        className={cn(
+          "absolute inset-x-0 top-full flex items-center gap-1.5 border-b border-t border-t-border/60 bg-background/95 px-3 py-1.5 shadow-sm backdrop-blur transition-all duration-200 ease-out",
+          hasContextual
+            ? "translate-y-0 opacity-100"
+            : "pointer-events-none -translate-y-2 opacity-0",
+        )}
+      >
       <DragScroll className="flex-1 gap-1.5">
         {selectedKind && (
           <>
@@ -588,47 +671,71 @@ export function EditorToolbar() {
         )}
         {app.tool === "edittext" ? (
           inlineEdit ? (
-            // Editing a real text run: drive its detected style. Native <select>
-            // (not the base-ui one) so the dropdown doesn't portal focus out and
-            // commit the edit prematurely. Tagged so the inline editor keeps
-            // focus for THESE controls only — clicking Undo/Redo or a tool
-            // elsewhere in the toolbar commits the edit first.
+            // Editing a real text run: same look as TextStyleControls (family ·
+            // size | B I | color), but on NATIVE controls (see NativeSelect) so
+            // no portal steals focus. Tagged so the inline editor keeps focus
+            // for THESE controls only — clicking Undo/Redo or a tool elsewhere
+            // in the toolbar commits the edit first.
             <div data-inline-edit-controls className="flex items-center gap-1.5">
-              <select
+              {/* "Original" keeps the document's embedded face (bold/italic are
+                  then synthesized on it); picking a family below is an explicit
+                  font replacement — never triggered by accident. */}
+              <NativeSelect
                 value={inlineEdit.family}
                 disabled={inlineEdit.saving}
                 onChange={(e) => inlineEdit.setFamily(e.target.value)}
                 aria-label="Font family"
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                title={
+                  inlineEdit.fontName
+                    ? `Document font: ${inlineEdit.fontName}`
+                    : undefined
+                }
+                className="w-44"
               >
-                <option value="helvetica">Helvetica</option>
-                <option value="times">Times</option>
-                <option value="courier">Courier</option>
-                <option value="carlito">Carlito</option>
-                <option value="caladea">Caladea</option>
-              </select>
-              <Tip label="Bold">
-                <Button
-                  variant={inlineEdit.bold ? "subtle" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8"
-                  disabled={inlineEdit.saving}
-                  onClick={inlineEdit.toggleBold}
-                >
-                  <Bold className="h-4 w-4" />
-                </Button>
-              </Tip>
-              <Tip label="Italic">
-                <Button
-                  variant={inlineEdit.italic ? "subtle" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8"
-                  disabled={inlineEdit.saving}
-                  onClick={inlineEdit.toggleItalic}
-                >
-                  <Italic className="h-4 w-4" />
-                </Button>
-              </Tip>
+                <option value="original">
+                  {inlineEdit.fontName
+                    ? `Original (${inlineEdit.fontName})`
+                    : "Original font"}
+                </option>
+                {FONT_OPTIONS.map((f) => (
+                  <option key={f.v} value={f.v}>
+                    Replace: {f.label}
+                  </option>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                value={String(inlineEdit.sizePt)}
+                disabled={inlineEdit.saving}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  inlineEdit.setSizePt(() => n);
+                }}
+                aria-label="Font size"
+                className="w-[4.75rem]"
+              >
+                {[...new Set([...FONT_SIZES, inlineEdit.sizePt])]
+                  .sort((a, b) => a - b)
+                  .map((s) => (
+                    <option key={s} value={s}>
+                      {s}pt
+                    </option>
+                  ))}
+              </NativeSelect>
+              <Separator orientation="vertical" className="mx-0.5 h-6" />
+              <StyleToggle
+                label="Bold"
+                icon={Bold}
+                pressed={inlineEdit.bold}
+                disabled={inlineEdit.saving}
+                onPressedChange={() => inlineEdit.toggleBold()}
+              />
+              <StyleToggle
+                label="Italic"
+                icon={Italic}
+                pressed={inlineEdit.italic}
+                disabled={inlineEdit.saving}
+                onPressedChange={() => inlineEdit.toggleItalic()}
+              />
               <Separator orientation="vertical" className="mx-0.5 h-6" />
               <ColorSwatch
                 value={inlineEdit.colorHex}
@@ -636,30 +743,6 @@ export function EditorToolbar() {
                 onChange={inlineEdit.setColorHex}
                 title="Text color"
               />
-              <Separator orientation="vertical" className="mx-0.5 h-6" />
-              <div className="flex items-center rounded-md border border-input">
-                <button
-                  type="button"
-                  aria-label="Smaller"
-                  disabled={inlineEdit.saving}
-                  onClick={() => inlineEdit.setSizePt((s) => Math.max(4, s - 1))}
-                  className="flex h-8 w-7 items-center justify-center rounded-l-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                >
-                  −
-                </button>
-                <span className="w-8 text-center text-xs tabular-nums">
-                  {inlineEdit.sizePt}
-                </span>
-                <button
-                  type="button"
-                  aria-label="Larger"
-                  disabled={inlineEdit.saving}
-                  onClick={() => inlineEdit.setSizePt((s) => Math.min(200, s + 1))}
-                  className="flex h-8 w-7 items-center justify-center rounded-r-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                >
-                  +
-                </button>
-              </div>
             </div>
           ) : (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -844,6 +927,19 @@ export function EditorToolbar() {
       </DragScroll>
         {selectedAnn && (
           <div className="flex shrink-0 items-center gap-1">
+            {ROTATABLE_KINDS.has(selectedAnn.kind) && (
+              <Tip label="Rotate 90°" desc="Or drag the round handle above the selection">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground"
+                  aria-label="Rotate 90 degrees"
+                  onClick={rotateSelected}
+                >
+                  <RotateCw className="h-4 w-4" />
+                </Button>
+              </Tip>
+            )}
             <Tip label="Duplicate">
               <Button
                 variant="ghost"
@@ -869,7 +965,6 @@ export function EditorToolbar() {
           </div>
         )}
       </div>
-    )}
     </div>
     </TooltipProvider>
   );

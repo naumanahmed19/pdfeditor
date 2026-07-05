@@ -7,7 +7,16 @@ import {
   useState,
 } from "react";
 import {
+  AlignCenterHorizontal,
+  AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignHorizontalSpaceAround,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignVerticalSpaceAround,
   Bot,
+  Calendar,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -16,6 +25,7 @@ import {
   MessageSquare,
   Minimize,
   MoveHorizontal,
+  PenLine,
   Scan,
   Trash2,
   ZoomIn,
@@ -34,10 +44,30 @@ import {
 } from "../../lib/richtext";
 import { activeTextEditor } from "../../lib/activeTextEditor";
 import { activeInlineEdit } from "../../lib/activeInlineEdit";
+import type { TextObject, TextRunEdit } from "../../lib/pdfium";
+import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
 import { toast } from "sonner";
 import { useApp } from "../../store";
-import type { Annotation, FormFieldAnnotation, NoteAnnotation, TextAnnotation } from "../../types";
-import { cn, uid } from "../../lib/utils";
+import { MARKUP_COLORS, MARKUP_LABEL, squigglyPath } from "../../lib/markup";
+import {
+  DATE_FORMATS,
+  FIELD_DND_MIME,
+  FIELD_FOR_TOOL,
+  FIELD_META,
+  buildFormField,
+  paletteDrag,
+  snapMovingRect,
+  snapResizingRect,
+} from "../../lib/formbuilder";
+import type {
+  Annotation,
+  FormFieldAnnotation,
+  MarkupStyle,
+  NoteAnnotation,
+  ShapeAnnotation,
+  TextAnnotation,
+} from "../../types";
+import { cn, uid, ROTATABLE_KINDS } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { ColorSwatch } from "../ui/color-swatch";
@@ -217,9 +247,14 @@ export function Viewer() {
     }
   }, [dims, effectiveScale, app]);
 
-  // Convert the current text selection into highlight annotations.
+  // Convert the current text selection into highlight / text-markup
+  // annotations (detail.style: "highlight" | "underline" | "strikeout" |
+  // "squiggly"; missing = highlight).
   useEffect(() => {
-    const handler = () => {
+    const handler = (e: Event) => {
+      const style = ((e as CustomEvent).detail?.style ?? "highlight") as
+        | "highlight"
+        | MarkupStyle;
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed) return;
       const pages = Array.from(
@@ -260,22 +295,29 @@ export function Viewer() {
         const pr = pageEl.getBoundingClientRect();
         const idx = Number(pageEl.dataset.pageIndex);
         const list = perPage.get(idx) ?? [];
-        list.push({
+        const box = {
           id: uid(),
-          kind: "highlight",
           groupId,
           x: (r.left - pr.left) / effectiveScale,
           y: (r.top - pr.top) / effectiveScale,
           w: r.width / effectiveScale,
           h: r.height / effectiveScale,
-          color: app.highlightColor,
-        });
+        };
+        list.push(
+          style === "highlight"
+            ? { ...box, kind: "highlight", color: app.highlightColor }
+            : { ...box, kind: "markup", style, color: MARKUP_COLORS[style] },
+        );
         perPage.set(idx, list);
       }
       perPage.forEach((list, page) => app.addAnnotations(page, list));
       if (perPage.size) {
         sel.removeAllRanges();
-        toast.success("Selection highlighted");
+        toast.success(
+          style === "highlight"
+            ? "Selection highlighted"
+            : `Selection marked (${MARKUP_LABEL[style].toLowerCase()})`,
+        );
       }
     };
     window.addEventListener("pdfwb:highlight-selection", handler);
@@ -291,12 +333,18 @@ export function Viewer() {
         target.tagName === "TEXTAREA" ||
         target.isContentEditable;
       if (inField) return;
+      // A live multi-selection routes delete/nudge to every member at once.
+      const multi =
+        app.multiSelected && app.multiSelected.ids.length > 1
+          ? app.multiSelected
+          : null;
       if (
         (e.key === "Delete" || e.key === "Backspace") &&
         app.selected &&
         app.editMode
       ) {
-        app.removeAnnotation(app.selected.page, app.selected.id);
+        if (multi) app.removeAnnotations(multi.page, multi.ids);
+        else app.removeAnnotation(app.selected.page, app.selected.id);
       }
       if (
         app.selected &&
@@ -305,15 +353,38 @@ export function Viewer() {
       ) {
         e.preventDefault();
         const step = e.shiftKey ? 10 : 1;
-        const ann = (app.annotations[app.selected.page] ?? []).find(
-          (a) => a.id === app.selected!.id,
-        );
-        if (ann) {
-          app.updateAnnotation(app.selected.page, {
-            ...ann,
-            x: ann.x + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
-            y: ann.y + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0),
-          });
+        const dx = e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0;
+        const dy = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
+        if (multi) {
+          app.translateAnnotations(multi.page, multi.ids, dx, dy);
+        } else {
+          const ann = (app.annotations[app.selected.page] ?? []).find(
+            (a) => a.id === app.selected!.id,
+          );
+          if (ann) {
+            app.updateAnnotation(app.selected.page, {
+              ...ann,
+              x: ann.x + dx,
+              y: ann.y + dy,
+            });
+          }
+        }
+      }
+      // Form builder: Ctrl+A selects every field on the current page.
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key.toLowerCase() === "a" &&
+        app.formBuilder &&
+        !app.formPreview
+      ) {
+        const page = app.selected?.page ?? app.currentPage;
+        const ids = (app.annotations[page] ?? [])
+          .filter((a) => a.kind === "formfield")
+          .map((a) => a.id);
+        if (ids.length) {
+          e.preventDefault();
+          app.setSelected({ page, id: ids[0] });
+          app.setMultiSelected(ids.length > 1 ? { page, ids } : null);
         }
       }
       if (e.key === "Escape") {
@@ -330,6 +401,24 @@ export function Viewer() {
         e.preventDefault();
         if (e.shiftKey) app.redo();
         else app.undo();
+      }
+      // Annotation clipboard. Ctrl+C only steps in when an annotation is
+      // selected and no text selection exists — copying page text stays native.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        const textSel = window.getSelection();
+        if (app.editMode && app.selected && (!textSel || textSel.isCollapsed)) {
+          if (app.copySelectedAnnotation()) {
+            e.preventDefault();
+            toast.success("Annotation copied — Ctrl+V to paste");
+          }
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && app.editMode) {
+        app.pasteAnnotationClipboard();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d" && app.selected && app.editMode) {
+        e.preventDefault();
+        app.duplicateSelectedAnnotation();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -689,9 +778,33 @@ function PageView({
   const [textLayerReady, setTextLayerReady] = useState(0);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // Highlighted while a palette field is dragged over this page.
+  const [fieldDropActive, setFieldDropActive] = useState(false);
 
   const w = baseDims.width * scale;
   const h = baseDims.height * scale;
+
+  // Drop a field dragged from the sidebar palette, centered on the cursor.
+  const onFieldDrop = (e: React.DragEvent) => {
+    const type = paletteDrag.type;
+    setFieldDropActive(false);
+    if (!type) return;
+    e.preventDefault();
+    paletteDrag.type = null;
+    const rect = wrapRef.current!.getBoundingClientRect();
+    const meta = FIELD_META[type];
+    let x = (e.clientX - rect.left) / scale - meta.defaultSize.w / 2;
+    let y = (e.clientY - rect.top) / scale - meta.defaultSize.h / 2;
+    if (app.gridEnabled) {
+      x = Math.round(x / app.gridSize) * app.gridSize;
+      y = Math.round(y / app.gridSize) * app.gridSize;
+    }
+    x = Math.max(0, Math.min(baseDims.width - meta.defaultSize.w, x));
+    y = Math.max(0, Math.min(baseDims.height - meta.defaultSize.h, y));
+    const ann = buildFormField(app.annotations, type, { x, y });
+    app.addAnnotation(pageIndex, ann);
+    app.setSelected({ page: pageIndex, id: ann.id });
+  };
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -816,10 +929,11 @@ function PageView({
     // exists to copy; edittext is already gated by the modify permission).
     (app.tool === "edittext" || app.docPermissions.copy);
 
-  // "Edit existing text": clicking a text run maps the click to the real
-  // PDFium content-stream text object and opens an inline editor over it. On
-  // commit the object's string is rewritten in place (same font/size/color/
-  // position) — no whiteout patch, no overlay copy, original text truly gone.
+  // "Edit existing text": a click selects the whole visual LINE around the
+  // hit run (PDFs fragment lines into many small runs), and the inline editor
+  // shows the joined text. On commit the diff is mapped back onto the
+  // underlying content-stream objects and rewritten in place — no whiteout
+  // patch, no overlay copy, original text truly gone.
   const onTextLayerClick = async (e: React.MouseEvent) => {
     if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
     const pr = wrapRef.current.getBoundingClientRect();
@@ -861,20 +975,71 @@ function PageView({
       toast.info("Click directly on a line of text to edit it.");
       return;
     }
-    // Map the run's PDF-space box to the exact on-screen rectangle.
+
+    // Join the visual line's fragments into one editable string, remembering
+    // each run's span so the edit can be mapped back per run.
+    const lineRuns = collectLine(objs, hit);
+    let joined = "";
+    const runs: InlineEditRun[] = [];
+    for (let i = 0; i < lineRuns.length; i++) {
+      const o = lineRuns[i];
+      const next = lineRuns[i + 1];
+      // Infer a visual space where the PDF split words into separate runs.
+      const sep =
+        next &&
+        next.left - o.right > 0.15 * hit.fontSize &&
+        !o.text.endsWith(" ") &&
+        !next.text.startsWith(" ")
+          ? " "
+          : "";
+      runs.push({
+        objectIndex: o.index,
+        text: o.text,
+        start: joined.length,
+        sep,
+        originX: o.originX,
+        originY: o.originY,
+        fontName: o.fontName,
+      });
+      joined += o.text + sep;
+    }
+
+    // Map the line's PDF-space box to the exact on-screen rectangle.
     const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle([
-      hit.left,
-      hit.bottom,
-      hit.right,
-      hit.top,
+      Math.min(...lineRuns.map((o) => o.left)),
+      Math.min(...lineRuns.map((o) => o.bottom)),
+      Math.max(...lineRuns.map((o) => o.right)),
+      Math.max(...lineRuns.map((o) => o.top)),
     ]);
     const [r, g, b] = hit.color;
     const hex =
       "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
     const f = detectFontFromName(hit.fontName || "");
+
+    // Per-face proven glyphs: all page text drawn with each font. Coverage is
+    // per-subset — a 'c' in the regular face proves nothing about the bold
+    // face's subset — so the preflight checks each edited run's own font.
+    const fontChars: Record<string, string> = {};
+    for (const o of objs) {
+      fontChars[o.fontName] = (fontChars[o.fontName] ?? "") + o.text;
+    }
+
+    // Other styles of the same family embedded in the page (a real Bold or
+    // Regular face beats a synthesized one when the user toggles B/I).
+    const root = familyRoot(hit.fontName || "");
+    const siblings: Partial<Record<string, number>> = {};
+    if (root) {
+      for (const o of objs) {
+        if (o.fontName === hit.fontName || familyRoot(o.fontName) !== root) continue;
+        const st = detectFontFromName(o.fontName);
+        const key = styleKey(st.bold, st.italic);
+        if (siblings[key] == null) siblings[key] = o.index;
+      }
+    }
+
     setInlineEdit({
-      objectIndex: hit.index,
-      original: hit.text,
+      runs,
+      original: joined,
       left: Math.min(vx1, vx2),
       top: Math.min(vy1, vy2),
       width: Math.max(Math.abs(vx2 - vx1), 24),
@@ -883,30 +1048,95 @@ function PageView({
       color: `rgb(${r}, ${g}, ${b})`,
       colorHex: hex,
       fontSize: hit.fontSize,
-      fontFamily: f.family,
+      fontName: (hit.fontName || "").replace(/^[A-Z]{6}\+/, ""),
+      fallbackFamily: f.family,
       bold: f.bold,
       italic: f.italic,
+      anchor: [runs[0].originX, runs[0].originY],
+      fontChars,
+      siblings,
     });
   };
 
+  /**
+   * Recreate the line's runs with a different face. Preference order: a face
+   * of the same family the document already embeds (perfect match), then the
+   * closest bundled/standard family. Used for explicit font replacement, for
+   * un-bolding/un-italicizing (the regular face isn't synthesizable), and as
+   * the offered fallback when the embedded subset lacks a typed glyph.
+   */
+  const commitRecreate = async (
+    edit: InlineEdit,
+    runEdits: TextRunEdit[],
+    fill: [number, number, number, number] | undefined,
+    fontSize: number | undefined,
+    family: string,
+    bold: boolean,
+    italic: boolean,
+    // Glyph-fallback: replace only the edited run(s), keeping the untouched
+    // neighbors' original embedded faces. Explicit restyles cover the line.
+    changedOnly = false,
+  ) => {
+    // Every run needs explicit text on the recreate path.
+    const withText = edit.runs
+      .map((r, i) => ({
+        objectIndex: r.objectIndex,
+        text: runEdits[i].text ?? r.text,
+        changed: runEdits[i].text != null,
+      }))
+      .filter((r) => !changedOnly || r.changed)
+      .map(({ objectIndex, text }) => ({ objectIndex, text }));
+
+    let font: { standardName?: string; bytes?: Uint8Array } | null = null;
+    if (family === "original") {
+      const sib = edit.siblings[styleKey(bold, italic)];
+      if (sib != null) {
+        const info = await app.getTextFontInfo(pageIndex, sib);
+        if (info?.data) {
+          // The sibling is a subset too — only use it if it covers the text.
+          const chars = [...new Set(withText.map((r) => r.text).join(""))];
+          const missing = await missingGlyphs(info.data, chars);
+          if (missing !== null && missing.length === 0) font = { bytes: info.data };
+        }
+      }
+      if (!font) font = await resolveTextFont(edit.fallbackFamily, bold, italic);
+    } else {
+      font = await resolveTextFont(family, bold, italic);
+    }
+    await app.applyTextRuns(pageIndex, withText, { font, fontSize, fill });
+  };
+
+  /** Returns true when the edit session is finished (editor should close). */
   const commitInlineEdit = async (
     text: string,
     colorHex: string,
     fontSize: number,
-    fontFamily: string,
+    family: string,
     bold: boolean,
     italic: boolean,
-  ) => {
+  ): Promise<boolean> => {
     const edit = inlineEdit;
-    if (!edit) return;
+    if (!edit) return true;
     const textChanged = text !== edit.original && text.trim().length > 0;
     const colorChanged = colorHex.toLowerCase() !== edit.colorHex.toLowerCase();
     const sizeChanged = fontSize > 0 && fontSize !== Math.round(edit.fontSize);
-    const fontChanged =
-      fontFamily !== edit.fontFamily || bold !== edit.bold || italic !== edit.italic;
-    if (!textChanged && !colorChanged && !sizeChanged && !fontChanged) {
+    const familyReplaced = family !== "original";
+    const boldOn = bold && !edit.bold;
+    const boldOff = !bold && edit.bold;
+    const italicOn = italic && !edit.italic;
+    const italicOff = !italic && edit.italic;
+    if (
+      !textChanged &&
+      !colorChanged &&
+      !sizeChanged &&
+      !familyReplaced &&
+      !boldOn &&
+      !boldOff &&
+      !italicOn &&
+      !italicOff
+    ) {
       setInlineEdit(null);
-      return;
+      return true;
     }
     const fill: [number, number, number, number] = [
       parseInt(colorHex.slice(1, 3), 16),
@@ -914,31 +1144,105 @@ function PageView({
       parseInt(colorHex.slice(5, 7), 16),
       255,
     ];
+    const runEdits = mapLineEditToRuns(edit, textChanged ? text : edit.original);
+    const newFill = colorChanged ? fill : undefined;
+    const newSize = sizeChanged ? fontSize : undefined;
+    // Turning OFF a real bold/italic needs a different face — recreate.
+    const needsRecreate = familyReplaced || boldOff || italicOff;
+
     setSavingEdit(true);
     try {
-      if (fontChanged) {
-        // Changing the font recreates the run — pass everything absolutely.
-        const font = await resolveTextFont(fontFamily, bold, italic);
-        await app.applyTextStyle(pageIndex, edit.objectIndex, {
-          text,
-          fill,
-          fontSize,
-          font,
-        });
-      } else {
-        await app.applyTextStyle(pageIndex, edit.objectIndex, {
-          text: textChanged ? text : undefined,
-          fill: colorChanged ? fill : undefined,
-          fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
-        });
+      if (needsRecreate) {
+        await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic);
+        setInlineEdit(null);
+        return true;
       }
+
+      // Glyph preflight: embedded fonts are subsets that only carry the
+      // glyphs the document already uses — and coverage is per FACE (a 'c'
+      // in the regular face proves nothing about the bold subset), so each
+      // edited run is checked against its own font. Refuse to silently bake
+      // characters that would render as blanks or garbage.
+      if (textChanged) {
+        const bad: string[] = [];
+        let unverified = false;
+        let badFace = edit.fontName;
+        for (let i = 0; i < edit.runs.length; i++) {
+          const newText = runEdits[i].text;
+          if (!newText) continue; // unchanged or removed run
+          const run = edit.runs[i];
+          const fresh = newCharacters(
+            newText,
+            run.text,
+            edit.fontChars[run.fontName] ?? "",
+          );
+          if (!fresh.length) continue;
+          const info = await app.getTextFontInfo(pageIndex, run.objectIndex);
+          const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
+          const runBad = missing === null ? fresh : missing;
+          if (runBad.length && !bad.length) {
+            badFace = run.fontName.replace(/^[A-Z]{6}\+/, "");
+            unverified = missing === null;
+          }
+          bad.push(...runBad);
+        }
+        if (bad.length) {
+          const chars = [...new Set(bad)].map((c) => `"${c}"`).join(" ");
+          toast.warning(
+            unverified
+              ? `Couldn't verify that this PDF's font "${badFace}" contains ${chars}.`
+              : `This PDF's font "${badFace}" doesn't contain ${chars} — the edit would show blanks.`,
+            {
+              description:
+                "Replace the edited text's font with a close match, or change the text.",
+              action: {
+                label: "Replace font",
+                onClick: () => {
+                  void (async () => {
+                    setSavingEdit(true);
+                    try {
+                      await commitRecreate(
+                        edit,
+                        runEdits,
+                        newFill,
+                        newSize,
+                        family,
+                        bold,
+                        italic,
+                        true, // only the edited runs lose their face
+                      );
+                    } catch {
+                      toast.error("Couldn't replace the font on this line.");
+                    } finally {
+                      setSavingEdit(false);
+                      setInlineEdit(null);
+                    }
+                  })();
+                },
+              },
+            },
+          );
+          return false; // keep the editor open so nothing is lost
+        }
+      }
+
+      await app.applyTextRuns(pageIndex, runEdits, {
+        fill: newFill,
+        fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
+        anchor: edit.anchor,
+        synthBold: boldOn || undefined,
+        synthItalic: italicOn || undefined,
+      });
+      setInlineEdit(null);
+      return true;
     } catch {
       toast.error(
-        "Couldn't edit this text in place — its font may not be embeddable. Use the Text tool to overlay a correction instead.",
+        "Couldn't edit this text in place — use the Text tool to overlay a correction instead.",
       );
+      setInlineEdit(null);
+      return true;
     } finally {
       setSavingEdit(false);
-      setInlineEdit(null);
     }
   };
 
@@ -946,7 +1250,10 @@ function PageView({
     <div
       ref={wrapRef}
       data-page-index={pageIndex}
-      className="relative shrink-0 bg-white shadow-shell ring-1 ring-border/60"
+      className={cn(
+        "relative shrink-0 bg-white shadow-shell ring-1 ring-border/60",
+        fieldDropActive && "ring-2 ring-primary",
+      )}
       style={{ width: w, height: h, scrollMarginTop: 16 }}
       onPointerDown={() => {
         if (app.tool === "select") {
@@ -954,6 +1261,21 @@ function PageView({
           app.setSelectedField(null);
         }
       }}
+      onDragOver={(e) => {
+        // Only intercept palette-field drags (dataTransfer data is
+        // unreadable here, so the module holder is the source of truth).
+        if (!paletteDrag.type) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        if (!fieldDropActive) setFieldDropActive(true);
+      }}
+      onDragLeave={(e) => {
+        // Ignore leaves into child elements of this page.
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setFieldDropActive(false);
+        }
+      }}
+      onDrop={onFieldDrop}
     >
       {visible && (
         <canvas
@@ -996,8 +1318,25 @@ function PageView({
   );
 }
 
-interface InlineEdit {
+/** One content-stream run of the edited visual line. */
+interface InlineEditRun {
   objectIndex: number;
+  text: string;
+  /** Offset of this run's text within the joined line string. */
+  start: number;
+  /** Separator inferred after this run ("" or " ") — virtual, not run text. */
+  sep: string;
+  /** Baseline origin (text-matrix e,f) in page space. */
+  originX: number;
+  originY: number;
+  /** Base font name of THIS run — glyph coverage is per-face, per-subset. */
+  fontName: string;
+}
+
+interface InlineEdit {
+  /** All runs of the clicked visual line, left to right. */
+  runs: InlineEditRun[];
+  /** The joined line text shown in the editor. */
   original: string;
   left: number;
   top: number;
@@ -1008,12 +1347,122 @@ interface InlineEdit {
   color: string;
   /** Original ink color as hex (for the color control). */
   colorHex: string;
-  /** Original font size in PDF points. */
+  /** Original font size in PDF points (of the clicked run). */
   fontSize: number;
-  /** Detected original font, so we only recreate the run when it changes. */
-  fontFamily: string;
+  /** Real base font name of the clicked run (subset prefix stripped). */
+  fontName: string;
+  /** Closest bundled family — used only when the face must be replaced. */
+  fallbackFamily: string;
+  /** Style detected from the font name (initial state of the B/I toggles). */
   bold: boolean;
   italic: boolean;
+  /** Line baseline origin (first run) — anchor for scale/skew transforms. */
+  anchor: [number, number];
+  /** Per-font proven glyphs: all page text drawn with each face. */
+  fontChars: Record<string, string>;
+  /** Same-family runs in other styles: styleKey() -> objectIndex. */
+  siblings: Partial<Record<string, number>>;
+}
+
+/** Key for a bold/italic combination ("r", "b", "i", "bi"). */
+function styleKey(bold: boolean, italic: boolean): string {
+  return `${bold ? "b" : ""}${italic ? "i" : ""}` || "r";
+}
+
+/** Family part of a base font name — subset prefix and style tokens removed. */
+function familyRoot(name: string): string {
+  return name
+    .replace(/^[A-Z]{6}\+/, "")
+    .replace(
+      /[-,._ ]?(extra ?bold|semi ?bold|demi ?bold|bold|black|heavy|italic|oblique|regular|roman|book|light|medium)/gi,
+      "",
+    )
+    .replace(/(MT|PS|Std|Pro)$/i, "")
+    .toLowerCase();
+}
+
+/**
+ * The visual line around `hit`: runs that overlap it vertically by more than
+ * half a line-height, limited to the horizontally contiguous cluster — a wide
+ * gap is a different column or table cell, not the same sentence.
+ */
+function collectLine(objs: TextObject[], hit: TextObject): TextObject[] {
+  const height = (o: TextObject) => o.top - o.bottom;
+  const line = objs
+    .filter((o) => {
+      if (!o.text.trim()) return false;
+      const overlap = Math.min(o.top, hit.top) - Math.max(o.bottom, hit.bottom);
+      return overlap > 0.5 * Math.min(height(o), height(hit));
+    })
+    .sort((a, b) => a.left - b.left);
+  const maxGap = Math.max(hit.fontSize, 6) * 1.5;
+  let a = line.indexOf(hit);
+  let b = a;
+  while (a > 0 && line[a].left - line[a - 1].right <= maxGap) a--;
+  while (b < line.length - 1 && line[b + 1].left - line[b].right <= maxGap) b++;
+  return line.slice(a, b + 1);
+}
+
+/**
+ * Map an edit of the joined line string back onto the underlying runs via a
+ * common prefix/suffix diff. A change inside one run touches only that run;
+ * a change spanning runs collapses them into the first (the rest are removed).
+ * Untouched runs keep their exact bytes — and their exact positions.
+ */
+function mapLineEditToRuns(edit: InlineEdit, newJoined: string): TextRunEdit[] {
+  const old = edit.original;
+  if (newJoined === old) {
+    return edit.runs.map((r) => ({ objectIndex: r.objectIndex }));
+  }
+  let p = 0;
+  const pMax = Math.min(old.length, newJoined.length);
+  while (p < pMax && old[p] === newJoined[p]) p++;
+  let s = 0;
+  const sMax = pMax - p;
+  while (
+    s < sMax &&
+    old[old.length - 1 - s] === newJoined[newJoined.length - 1 - s]
+  ) {
+    s++;
+  }
+  const oldEnd = old.length - s; // changed old span is [p, oldEnd)
+
+  // Each run's span includes its inferred separator, so an edit at a word
+  // boundary belongs to the run on the left.
+  const spans = edit.runs.map((r) => ({
+    start: r.start,
+    end: r.start + r.text.length + r.sep.length,
+  }));
+  let first = -1;
+  let last = -1;
+  spans.forEach((sp, i) => {
+    if (sp.end > p && sp.start < Math.max(oldEnd, p + 1)) {
+      if (first === -1) first = i;
+      last = i;
+    }
+  });
+  if (first === -1) {
+    // Pure insertion at the very end of the line — append to the last run.
+    first = last = edit.runs.length - 1;
+  }
+
+  // New text for the merged first..last range, in new-string coordinates.
+  const newEnd = newJoined.length - (old.length - spans[last].end);
+  let merged = newJoined.slice(
+    spans[first].start,
+    Math.max(newEnd, spans[first].start),
+  );
+  // The inferred separator is not real document text — don't bake it.
+  const lastSep = edit.runs[last].sep;
+  if (lastSep && merged.endsWith(lastSep)) {
+    merged = merged.slice(0, -lastSep.length);
+  }
+
+  return edit.runs.map((r, i) => {
+    if (i < first || i > last) return { objectIndex: r.objectIndex };
+    if (i === first) return { objectIndex: r.objectIndex, text: merged };
+    return { objectIndex: r.objectIndex, text: "" };
+  });
 }
 
 // Standard-14 font names by [regular, bold, italic, bold-italic].
@@ -1093,6 +1542,7 @@ function InlineTextEditor({
 }: {
   edit: InlineEdit;
   saving: boolean;
+  /** Resolves false when the commit was rejected (editor stays open). */
   onCommit: (
     text: string,
     colorHex: string,
@@ -1100,14 +1550,15 @@ function InlineTextEditor({
     fontFamily: string,
     bold: boolean,
     italic: boolean,
-  ) => void;
+  ) => Promise<boolean>;
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [value, setValue] = useState(edit.original);
   const [colorHex, setColorHex] = useState(edit.colorHex);
   const [sizePt, setSizePt] = useState(Math.round(edit.fontSize));
-  const [family, setFamily] = useState(edit.fontFamily);
+  // "original" keeps the document's embedded face; replacement is explicit.
+  const [family, setFamily] = useState("original");
   const [bold, setBold] = useState(edit.bold);
   const [italic, setItalic] = useState(edit.italic);
   const done = useRef(false);
@@ -1127,6 +1578,7 @@ function InlineTextEditor({
     activeInlineEdit.set({
       colorHex,
       sizePt,
+      fontName: edit.fontName,
       family,
       bold,
       italic,
@@ -1137,14 +1589,21 @@ function InlineTextEditor({
       toggleBold: () => setBold((v) => !v),
       toggleItalic: () => setItalic((v) => !v),
     });
-  }, [colorHex, sizePt, family, bold, italic, saving]);
+  }, [colorHex, sizePt, family, bold, italic, saving, edit.fontName]);
   useEffect(() => () => activeInlineEdit.set(null), []);
 
-  // Commit once — guard against Enter followed by the unmount blur firing twice.
+  // Commit once — guard against Enter followed by the unmount blur firing
+  // twice. A rejected commit (e.g. glyphs missing from the embedded font)
+  // re-arms the editor instead of discarding the user's text.
   const finish = () => {
     if (done.current) return;
     done.current = true;
-    onCommit(value, colorHex, sizePt, family, bold, italic);
+    void onCommit(value, colorHex, sizePt, family, bold, italic).then((closed) => {
+      if (!closed) {
+        done.current = false;
+        requestAnimationFrame(() => ref.current?.focus());
+      }
+    });
   };
 
   // Live-preview the size change on screen (px per point from the original).
@@ -1196,7 +1655,10 @@ function InlineTextEditor({
           lineHeight: `${boxH}px`,
           color: colorHex,
           padding: "0 1px",
-          fontFamily: FONT_CSS[family] ?? "Helvetica, Arial, sans-serif",
+          fontFamily:
+            (family === "original"
+              ? FONT_CSS[edit.fallbackFamily]
+              : FONT_CSS[family]) ?? "Helvetica, Arial, sans-serif",
           fontWeight: bold ? 700 : 400,
           fontStyle: italic ? "italic" : "normal",
         }}
@@ -2012,8 +2474,9 @@ function FormLayer({
   const inputCls =
     "absolute rounded-[2px] border border-blue-400/50 bg-sky-400/10 text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white disabled:opacity-60";
 
-  // Edit mode: existing fields become selectable designer objects.
-  if (app.editMode) {
+  // Edit mode: existing fields become selectable designer objects — except
+  // in the form builder's live preview, where everything stays fillable.
+  if (app.editMode && !(app.formBuilder && app.formPreview)) {
     return (
       <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
         {fields.map((f) => (
@@ -2275,9 +2738,14 @@ function AnnotationLayer({
   const anns = app.annotations[pageIndex] ?? [];
   const drawingTool = [
     "highlight",
+    "underline",
+    "strikeout",
+    "squiggly",
     "rect",
     "ellipse",
     "line",
+    "arrow",
+    "callout",
     "whiteout",
     "redact",
     "ink",
@@ -2285,6 +2753,9 @@ function AnnotationLayer({
     "formcheckbox",
     "formdropdown",
     "formradio",
+    "formdate",
+    "formsignature",
+    "formbutton",
   ].includes(app.tool);
 
   const toLocal = (e: React.PointerEvent): { x: number; y: number } => {
@@ -2438,39 +2909,78 @@ function AnnotationLayer({
 
       // Form-field tools: click places a default-sized field, drag sizes it.
       if (app.tool.startsWith("form")) {
-        const fieldType =
-          app.tool === "formtext"
-            ? "text"
-            : app.tool === "formcheckbox"
-              ? "checkbox"
-              : app.tool === "formdropdown"
-                ? "dropdown"
-                : "radio";
-        const small = fieldType === "checkbox" || fieldType === "radio";
-        const def = small ? { w: 16, h: 16 } : { w: 150, h: 24 };
-        const count =
-          Object.values(app.annotations)
-            .flat()
-            .filter((a) => a.kind === "formfield").length + 1;
-        const ann: Annotation = {
-          id: uid(),
-          kind: "formfield",
-          fieldType,
-          x: draft.x0,
-          y: draft.y0,
-          w: w > 8 ? w : def.w,
-          h: h > 8 ? h : def.h,
-          fieldName:
-            fieldType === "radio"
-              ? "choice_1"
-              : `${fieldType === "text" ? "text" : fieldType === "checkbox" ? "check" : "select"}_${count}`,
-          options: fieldType === "dropdown" ? ["Option 1", "Option 2"] : undefined,
-          optionValue: fieldType === "radio" ? `option${count}` : undefined,
-        };
+        const fieldType = FIELD_FOR_TOOL[app.tool]!;
+        const meta = FIELD_META[fieldType];
+        let fx = draft.x0;
+        let fy = draft.y0;
+        if (app.formBuilder && app.gridEnabled) {
+          fx = Math.round(fx / app.gridSize) * app.gridSize;
+          fy = Math.round(fy / app.gridSize) * app.gridSize;
+        }
+        const ann = buildFormField(app.annotations, fieldType, {
+          x: fx,
+          y: fy,
+          w,
+          h,
+        });
         app.addAnnotation(pageIndex, ann);
         app.setSelected({ page: pageIndex, id: ann.id });
         // Radio/checkbox stay armed for placing several in a row.
-        if (!small) app.setTool("select");
+        if (!meta.small) app.setTool("select");
+        setDraft(null);
+        setInkPoints([]);
+        return;
+      }
+
+      // Arrows and callouts accept any drag direction (including pure
+      // horizontal / vertical), unlike box tools which need a real area.
+      if ((app.tool === "arrow" || app.tool === "callout") && (w > 3 || h > 3)) {
+        const bw = Math.max(1, w);
+        const bh = Math.max(1, h);
+        const frac = (v: number, min: number, span: number) =>
+          Math.max(0, Math.min(1, (v - min) / span));
+        const arrow: ShapeAnnotation = {
+          id: uid(),
+          kind: "arrow",
+          x,
+          y,
+          w: bw,
+          h: bh,
+          color: app.toolColor,
+          strokeWidth: app.strokeWidth,
+          // Tail at the drag start, head at the drag end…
+          ax: frac(draft.x0, x, bw),
+          ay: frac(draft.y0, y, bh),
+          bx: frac(draft.x1, x, bw),
+          by: frac(draft.y1, y, bh),
+        };
+        if (app.tool === "callout") {
+          // …except for callouts, where the drag STARTS on the target: the
+          // head points there and the text box sits at the drag end.
+          [arrow.ax, arrow.ay, arrow.bx, arrow.by] = [arrow.bx, arrow.by, arrow.ax, arrow.ay];
+          const groupId = uid();
+          arrow.groupId = groupId;
+          const text: TextAnnotation = {
+            id: uid(),
+            kind: "text",
+            groupId,
+            x: draft.x1,
+            y: draft.y1 - app.fontSize,
+            w: 180,
+            h: app.fontSize * 2,
+            text: "",
+            fontSize: app.fontSize,
+            color: app.toolColor,
+            fontFamily: app.fontFamily,
+            align: app.textAlign,
+          };
+          app.addAnnotations(pageIndex, [arrow, text]);
+          app.setSelected({ page: pageIndex, id: text.id });
+        } else {
+          app.addAnnotation(pageIndex, arrow);
+          app.setSelected({ page: pageIndex, id: arrow.id });
+        }
+        app.setTool("select");
         setDraft(null);
         setInkPoints([]);
         return;
@@ -2483,6 +2993,17 @@ function AnnotationLayer({
             ...base,
             kind: "highlight",
             color: app.highlightColor,
+          });
+        } else if (
+          app.tool === "underline" ||
+          app.tool === "strikeout" ||
+          app.tool === "squiggly"
+        ) {
+          app.addAnnotation(pageIndex, {
+            ...base,
+            kind: "markup",
+            style: app.tool,
+            color: MARKUP_COLORS[app.tool],
           });
         } else if (app.tool === "whiteout") {
           app.addAnnotation(pageIndex, { ...base, kind: "whiteout" });
@@ -2545,6 +3066,18 @@ function AnnotationLayer({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
+      {/* form-builder grid (design aid only — never printed or saved) */}
+      {app.formBuilder && app.gridEnabled && !app.formPreview && (
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, rgba(99,102,241,0.13) 1px, transparent 1px), linear-gradient(to bottom, rgba(99,102,241,0.13) 1px, transparent 1px)",
+            backgroundSize: `${app.gridSize * scale}px ${app.gridSize * scale}px`,
+          }}
+        />
+      )}
+
       {anns.map((ann) => (
         <AnnotationItem
           key={ann.id}
@@ -2555,8 +3088,28 @@ function AnnotationLayer({
         />
       ))}
 
+      {/* alignment guides while a field snaps to its neighbors */}
+      {app.snapGuides?.page === pageIndex && (
+        <>
+          {app.snapGuides.v.map((x, i) => (
+            <div
+              key={`v${i}`}
+              className="pointer-events-none absolute bottom-0 top-0 w-px bg-pink-500/80"
+              style={{ left: x * scale }}
+            />
+          ))}
+          {app.snapGuides.h.map((y, i) => (
+            <div
+              key={`h${i}`}
+              className="pointer-events-none absolute left-0 right-0 h-px bg-pink-500/80"
+              style={{ top: y * scale }}
+            />
+          ))}
+        </>
+      )}
+
       {/* live draft shape — matches the tool being drawn */}
-      {draft && app.tool === "line" && (
+      {draft && (app.tool === "line" || app.tool === "arrow" || app.tool === "callout") && (
         <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
           <line
             x1={draft.x0 * scale}
@@ -2570,7 +3123,7 @@ function AnnotationLayer({
           />
         </svg>
       )}
-      {draft && app.tool !== "line" && (
+      {draft && app.tool !== "line" && app.tool !== "arrow" && app.tool !== "callout" && (
         <div
           className={cn(
             "absolute border-2 border-dashed",
@@ -2584,11 +3137,13 @@ function AnnotationLayer({
             borderColor:
               app.tool === "highlight"
                 ? app.highlightColor
-                : app.tool === "whiteout"
-                  ? "#94a3b8"
-                  : app.tool === "redact"
-                    ? "#dc2626"
-                    : app.toolColor,
+                : app.tool === "underline" || app.tool === "strikeout" || app.tool === "squiggly"
+                  ? MARKUP_COLORS[app.tool]
+                  : app.tool === "whiteout"
+                    ? "#94a3b8"
+                    : app.tool === "redact"
+                      ? "#dc2626"
+                      : app.toolColor,
             background:
               app.tool === "highlight"
                 ? `${app.highlightColor}4d`
@@ -2626,6 +3181,9 @@ const FIELD_TYPE_LABEL: Record<FormFieldAnnotation["fieldType"], string> = {
   checkbox: "Checkbox",
   dropdown: "Dropdown",
   radio: "Radio",
+  date: "Date",
+  signature: "Signature",
+  button: "Button",
 };
 
 const BORDER_STYLES: Array<{ v: NonNullable<FormFieldAnnotation["borderStyle"]>; label: string }> = [
@@ -2635,6 +3193,296 @@ const BORDER_STYLES: Array<{ v: NonNullable<FormFieldAnnotation["borderStyle"]>;
   { v: "inset", label: "Inset" },
   { v: "underline", label: "Underline" },
 ];
+
+/**
+ * The widget appearance a field will have in the SAVED PDF (border color /
+ * width / style + background, defaults matching createFormFields), as CSS —
+ * so the designer box, read-mode box and live preview all show what the
+ * properties panel configures. Beveled/inset map to CSS outset/inset.
+ */
+function fieldWidgetCss(
+  ann: FormFieldAnnotation,
+  scale: number,
+): React.CSSProperties {
+  const bw = (ann.borderWidth ?? 1) * scale;
+  const color = ann.borderColor ?? "#9ca8c8";
+  const style = ann.borderStyle ?? "solid";
+  const css: React.CSSProperties = { backgroundColor: ann.backgroundColor };
+  if (bw > 0) {
+    if (style === "underline") {
+      css.borderBottom = `${bw}px solid ${color}`;
+    } else {
+      const cssStyle =
+        style === "beveled" ? "outset" : style === "inset" ? "inset" : style;
+      css.border = `${bw}px ${cssStyle} ${color}`;
+    }
+  }
+  return css;
+}
+
+/**
+ * Live-preview rendering of a NEW form field (form builder → Preview): a real
+ * input bound to the transient preview values, keyed by field name so fields
+ * sharing a name mirror each other exactly like the saved AcroForm will.
+ */
+function FieldPreviewInput({
+  ann,
+  scale,
+}: {
+  ann: FormFieldAnnotation;
+  scale: number;
+}) {
+  const app = useApp();
+  const name = ann.fieldName;
+  const stored = app.previewValues[name];
+  const fontSize = Math.min(
+    24,
+    Math.max(9, (ann.fontSize && ann.fontSize > 0 ? ann.fontSize : ann.h * 0.55) * scale),
+  );
+  // The field's OWN border/background (from the properties panel) fully own
+  // the look — including "no border" (width 0). Everything else here is
+  // neutral editor chrome that never persists to the saved PDF: a faint
+  // guide for a field that defines neither border nor fill (so it stays
+  // findable in the builder) and a focus cue below.
+  const hasOwnBorder = (ann.borderWidth ?? 1) > 0;
+  const hasOwnFill = !!ann.backgroundColor;
+  const base = cn(
+    "h-full w-full rounded-[2px] text-slate-900 outline-none disabled:opacity-60",
+    !hasOwnBorder && !hasOwnFill && "bg-white/40 ring-1 ring-inset ring-slate-300/70",
+  );
+  const stop = (e: React.PointerEvent) => e.stopPropagation();
+  // The configured widget appearance (border/background) previews too.
+  const widgetCss = fieldWidgetCss(ann, scale);
+
+  // Focus cue: PDF has no per-field focus color (the viewer that opens the
+  // finished form owns focus highlighting), so on-screen we just echo the
+  // field's OWN border color — neutral slate when it has none — instead of a
+  // fixed blue that ignores the chosen styling. Inline so it can't be
+  // overridden by the cascade.
+  const [focused, setFocused] = useState(false);
+  const focusColor = ann.borderColor ?? "#64748b";
+  const focusStyle: React.CSSProperties = focused
+    ? { boxShadow: `0 0 0 2px ${focusColor}59`, borderRadius: 2 }
+    : {};
+  const focusHandlers = {
+    onFocus: () => setFocused(true),
+    onBlur: () => setFocused(false),
+  };
+
+  switch (ann.fieldType) {
+    case "checkbox": {
+      const checked = stored !== undefined ? !!stored : ann.defaultValue === "true";
+      return (
+        <input
+          type="checkbox"
+          className={cn(base, "accent-slate-600")}
+          style={{ ...widgetCss, ...focusStyle }}
+          checked={checked}
+          disabled={ann.readOnly}
+          onChange={(e) => app.setPreviewValue(name, e.target.checked)}
+          onPointerDown={stop}
+          {...focusHandlers}
+        />
+      );
+    }
+    case "radio": {
+      const group = stored !== undefined ? stored : ann.defaultValue;
+      return (
+        <input
+          type="radio"
+          className={cn(base, "rounded-full accent-slate-600")}
+          style={{ ...widgetCss, ...focusStyle, borderRadius: focused ? "9999px" : undefined }}
+          checked={group === (ann.optionValue ?? "")}
+          disabled={ann.readOnly}
+          onChange={() => app.setPreviewValue(name, ann.optionValue ?? "")}
+          onPointerDown={stop}
+          {...focusHandlers}
+        />
+      );
+    }
+    case "dropdown": {
+      const value = String(stored ?? ann.defaultValue ?? "");
+      return (
+        <select
+          className={base}
+          style={{ fontSize, ...widgetCss, ...focusStyle }}
+          value={value}
+          disabled={ann.readOnly}
+          onChange={(e) => app.setPreviewValue(name, e.target.value)}
+          onPointerDown={stop}
+          {...focusHandlers}
+        >
+          <option value="" />
+          {(ann.options ?? []).map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    case "signature":
+      return (
+        <div
+          className={cn(
+            base,
+            "flex items-center justify-center gap-1 bg-white/70 text-[10px] text-slate-400",
+          )}
+          style={widgetCss}
+          onPointerDown={stop}
+        >
+          <PenLine className="h-3 w-3" />
+          signed after saving
+        </div>
+      );
+    case "button":
+      return (
+        <button
+          className="h-full w-full truncate rounded-[3px] border border-slate-400 bg-slate-200 px-1 text-slate-800 shadow-sm active:translate-y-px"
+          style={{ fontSize, ...widgetCss, ...focusStyle }}
+          onPointerDown={stop}
+          {...focusHandlers}
+        >
+          {ann.buttonCaption ?? ann.fieldName}
+        </button>
+      );
+    default: {
+      // text & date
+      const value = String(stored ?? ann.defaultValue ?? "");
+      const common = {
+        value,
+        disabled: ann.readOnly,
+        maxLength: ann.maxLength,
+        onPointerDown: stop,
+        ...focusHandlers,
+        style: { fontSize, textAlign: ann.align, ...widgetCss, ...focusStyle } as React.CSSProperties,
+      };
+      if (ann.fieldType === "text" && ann.multiline) {
+        return (
+          <textarea
+            {...common}
+            className={cn(base, "resize-none p-1")}
+            onChange={(e) => app.setPreviewValue(name, e.target.value)}
+          />
+        );
+      }
+      return (
+        <input
+          {...common}
+          type="text"
+          placeholder={ann.fieldType === "date" ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
+          className={cn(base, "px-1")}
+          onChange={(e) => app.setPreviewValue(name, e.target.value)}
+        />
+      );
+    }
+  }
+}
+
+/** Alignment / distribution tools shown when several fields are selected. */
+function MultiFieldTools({ page }: { page: number }) {
+  const app = useApp();
+  const ms = app.multiSelected;
+  const anns = (app.annotations[page] ?? []).filter((a) =>
+    ms?.ids.includes(a.id),
+  );
+  if (!ms || anns.length < 2) return null;
+
+  const minX = Math.min(...anns.map((a) => a.x));
+  const maxX = Math.max(...anns.map((a) => a.x + a.w));
+  const minY = Math.min(...anns.map((a) => a.y));
+  const maxY = Math.max(...anns.map((a) => a.y + a.h));
+
+  const apply = (fn: (a: Annotation) => Partial<Annotation>) =>
+    app.updateAnnotations(
+      page,
+      anns.map((a) => ({ ...a, ...fn(a) }) as Annotation),
+    );
+
+  const distribute = (axis: "x" | "y") => {
+    const sorted = [...anns].sort((a, b) =>
+      axis === "x" ? a.x - b.x : a.y - b.y,
+    );
+    const sizes = sorted.reduce((n, a) => n + (axis === "x" ? a.w : a.h), 0);
+    const span = axis === "x" ? maxX - minX : maxY - minY;
+    const gap = (span - sizes) / (sorted.length - 1);
+    let pos = axis === "x" ? minX : minY;
+    const moved = sorted.map((a) => {
+      const out = { ...a, [axis]: pos } as Annotation;
+      pos += (axis === "x" ? a.w : a.h) + gap;
+      return out;
+    });
+    app.updateAnnotations(page, moved);
+  };
+
+  const btn =
+    "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+  return (
+    <>
+      <div className="text-[11px] font-semibold">{anns.length} fields selected</div>
+      <div className="flex flex-wrap gap-0.5">
+        <button className={btn} title="Align left edges" onClick={() => apply(() => ({ x: minX }))}>
+          <AlignStartVertical className="h-4 w-4" />
+        </button>
+        <button
+          className={btn}
+          title="Align horizontal centers"
+          onClick={() => apply((a) => ({ x: (minX + maxX) / 2 - a.w / 2 }))}
+        >
+          <AlignCenterVertical className="h-4 w-4" />
+        </button>
+        <button className={btn} title="Align right edges" onClick={() => apply((a) => ({ x: maxX - a.w }))}>
+          <AlignEndVertical className="h-4 w-4" />
+        </button>
+        <button className={btn} title="Align top edges" onClick={() => apply(() => ({ y: minY }))}>
+          <AlignStartHorizontal className="h-4 w-4" />
+        </button>
+        <button
+          className={btn}
+          title="Align vertical centers"
+          onClick={() => apply((a) => ({ y: (minY + maxY) / 2 - a.h / 2 }))}
+        >
+          <AlignCenterHorizontal className="h-4 w-4" />
+        </button>
+        <button className={btn} title="Align bottom edges" onClick={() => apply((a) => ({ y: maxY - a.h }))}>
+          <AlignEndHorizontal className="h-4 w-4" />
+        </button>
+        {anns.length > 2 && (
+          <>
+            <button className={btn} title="Distribute horizontally" onClick={() => distribute("x")}>
+              <AlignHorizontalSpaceAround className="h-4 w-4" />
+            </button>
+            <button className={btn} title="Distribute vertically" onClick={() => distribute("y")}>
+              <AlignVerticalSpaceAround className="h-4 w-4" />
+            </button>
+          </>
+        )}
+      </div>
+      <div className="flex gap-1.5 border-t pt-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 flex-1 text-xs"
+          onClick={() => app.duplicateSelectedAnnotation()}
+        >
+          Duplicate
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 flex-1 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => app.removeAnnotations(page, ms.ids)}
+        >
+          Delete
+        </Button>
+      </div>
+      <p className="text-[10px] leading-snug text-muted-foreground">
+        Drag any selected field to move them together; Shift-click adds or
+        removes fields; arrow keys nudge.
+      </p>
+    </>
+  );
+}
 
 /**
  * The form-builder properties panel — anchored beside a selected form field, it
@@ -2650,8 +3498,12 @@ function FieldProperties({
   onPatch: (p: Partial<FormFieldAnnotation>) => void;
 }) {
   const isText = ann.fieldType === "text";
+  const isDate = ann.fieldType === "date";
+  const isTexty = isText || isDate;
   const isChoice = ann.fieldType === "dropdown" || ann.fieldType === "radio";
   const isCheck = ann.fieldType === "checkbox";
+  const isBtn = ann.fieldType === "button";
+  const isSig = ann.fieldType === "signature";
   const sm = "h-7 text-xs px-2";
   const lbl = "text-[10px] font-medium text-muted-foreground";
 
@@ -2681,34 +3533,50 @@ function FieldProperties({
         />
       </div>
 
-      {!isCheck && (
+      {!isCheck && !isBtn && !isSig && (
         <div className="space-y-0.5">
           <div className={lbl}>{isChoice ? "Default value" : "Default text"}</div>
           <Input
             key={`def-${ann.id}`}
             className={sm}
             defaultValue={ann.defaultValue ?? ""}
+            placeholder={isDate ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
             onBlur={(e) => onPatch({ defaultValue: e.target.value || undefined })}
           />
         </div>
       )}
 
-      <div className="flex gap-3">
-        <label className="flex items-center gap-1.5 text-[11px]">
-          <Checkbox
-            checked={!!ann.required}
-            onCheckedChange={(v: boolean) => onPatch({ required: v })}
+      {isBtn && (
+        <div className="space-y-0.5">
+          <div className={lbl}>Caption</div>
+          <Input
+            key={`cap-${ann.id}`}
+            className={sm}
+            defaultValue={ann.buttonCaption ?? ""}
+            placeholder={ann.fieldName}
+            onBlur={(e) => onPatch({ buttonCaption: e.target.value || undefined })}
           />
-          Required
-        </label>
-        <label className="flex items-center gap-1.5 text-[11px]">
-          <Checkbox
-            checked={!!ann.readOnly}
-            onCheckedChange={(v: boolean) => onPatch({ readOnly: v })}
-          />
-          Read-only
-        </label>
-      </div>
+        </div>
+      )}
+
+      {!isBtn && (
+        <div className="flex gap-3">
+          <label className="flex items-center gap-1.5 text-[11px]">
+            <Checkbox
+              checked={!!ann.required}
+              onCheckedChange={(v: boolean) => onPatch({ required: v })}
+            />
+            Required
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px]">
+            <Checkbox
+              checked={!!ann.readOnly}
+              onCheckedChange={(v: boolean) => onPatch({ readOnly: v })}
+            />
+            Read-only
+          </label>
+        </div>
+      )}
 
       {isCheck && (
         <label className="flex items-center gap-1.5 text-[11px]">
@@ -2720,7 +3588,56 @@ function FieldProperties({
         </label>
       )}
 
-      {(isText || isChoice) && (
+      {isCheck && (
+        <div className="space-y-0.5">
+          <div className={lbl}>Export value</div>
+          <Input
+            key={`exp-${ann.id}`}
+            className={sm}
+            defaultValue={ann.exportValue ?? "Yes"}
+            title="The value submitted when the box is checked"
+            onBlur={(e) => onPatch({ exportValue: e.target.value.trim() || undefined })}
+          />
+        </div>
+      )}
+
+      {isDate && (
+        <div className="space-y-0.5">
+          <div className={lbl}>Date format</div>
+          <Select
+            className={sm}
+            value={ann.dateFormat ?? DATE_FORMATS[0]}
+            onChange={(e) => onPatch({ dateFormat: e.target.value })}
+          >
+            {DATE_FORMATS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
+
+      {ann.fieldType === "dropdown" && (
+        <div className="flex gap-3">
+          <label className="flex items-center gap-1.5 text-[11px]">
+            <Checkbox
+              checked={!!ann.editable}
+              onCheckedChange={(v: boolean) => onPatch({ editable: v })}
+            />
+            Allow custom text
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px]">
+            <Checkbox
+              checked={!!ann.multiSelect}
+              onCheckedChange={(v: boolean) => onPatch({ multiSelect: v })}
+            />
+            Multi-select
+          </label>
+        </div>
+      )}
+
+      {(isTexty || isChoice || isBtn) && (
         <div className="flex items-end gap-2">
           <div className="flex-1 space-y-0.5">
             <div className={lbl}>Font size</div>
@@ -2957,6 +3874,15 @@ function AnnotationItem({
   const app = useApp();
   const isSelected =
     app.selected?.page === pageIndex && app.selected?.id === ann.id;
+  // Form-builder state for this annotation: live-preview inputs and
+  // multi-selection membership.
+  const previewing =
+    ann.kind === "formfield" && app.formBuilder && app.formPreview;
+  const isMulti =
+    ann.kind === "formfield" &&
+    app.multiSelected?.page === pageIndex &&
+    app.multiSelected.ids.includes(ann.id) &&
+    app.multiSelected.ids.length > 1;
   const [editing, setEditing] = useState(
     ann.kind === "text" && ann.text === "",
   );
@@ -3002,6 +3928,8 @@ function AnnotationItem({
   }, [app.editRequestId, ann.id, ann.kind]);
 
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // Rotation while the rotate handle is being dragged (committed on release).
+  const [liveRot, setLiveRot] = useState<number | null>(null);
   // While editing, the box auto-grows to fit the typed text (RichTextEditor
   // reports run changes via onRunsChange → measureRichText).
   const [editSize, setEditSize] = useState<{ w: number; h: number } | null>(null);
@@ -3039,7 +3967,12 @@ function AnnotationItem({
       return;
     }
     // Highlighter over an existing highlight = un-highlight (browser-style).
-    if (ann.kind === "highlight" && app.tool === "highlight") {
+    // Same for the text-markup tools over an existing markup.
+    if (
+      (ann.kind === "highlight" && app.tool === "highlight") ||
+      (ann.kind === "markup" &&
+        ["underline", "strikeout", "squiggly"].includes(app.tool))
+    ) {
       e.stopPropagation();
       e.preventDefault();
       app.removeAnnotation(pageIndex, ann.id);
@@ -3052,7 +3985,16 @@ function AnnotationItem({
       app.removeAnnotation(pageIndex, ann.id);
       return;
     }
+    // Live preview: fields act as real inputs, not draggable designer boxes.
+    if (previewing) return;
     if (app.tool !== "select") return;
+    // Shift-click builds a multi-selection of form fields.
+    if (ann.kind === "formfield" && e.shiftKey) {
+      e.stopPropagation();
+      e.preventDefault();
+      app.toggleMultiSelected(pageIndex, ann.id);
+      return;
+    }
     e.stopPropagation();
     e.preventDefault();
     app.setSelected({ page: pageIndex, id: ann.id });
@@ -3072,35 +4014,145 @@ function AnnotationItem({
       startY: e.clientY,
       orig: { x: ann.x, y: ann.y, w: ann.w, h: ann.h },
     };
+    // Form-builder aids: snap candidates on this page, and (when the pressed
+    // field is part of a multi-selection) the ids that drag along with it.
+    const isField = ann.kind === "formfield";
+    const groupIds =
+      isField &&
+      mode === "move" &&
+      app.multiSelected &&
+      app.multiSelected.page === pageIndex &&
+      app.multiSelected.ids.includes(ann.id) &&
+      app.multiSelected.ids.length > 1
+        ? app.multiSelected.ids
+        : null;
+    const snapOthers =
+      isField && app.formBuilder
+        ? (app.annotations[pageIndex] ?? []).filter(
+            (a) =>
+              a.kind === "formfield" &&
+              a.id !== ann.id &&
+              !groupIds?.includes(a.id),
+          )
+        : [];
+    const snapOpts = {
+      snap: app.formBuilder && app.snapEnabled,
+      grid: app.formBuilder && app.gridEnabled,
+      gridSize: app.gridSize,
+      threshold: 6 / scale,
+    };
+    const pageBox = { w: baseDims.width, h: baseDims.height };
+    let finalBox: { x: number; y: number; w: number; h: number } | null = null;
     const onMove = (ev: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
       const dx = (ev.clientX - d.startX) / scale;
       const dy = (ev.clientY - d.startY) / scale;
       if (d.mode === "move") {
-        setLive({ ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy });
+        let next = { ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy };
+        // Alt suspends snapping for fine positioning.
+        if (isField && app.formBuilder && !ev.altKey) {
+          const s = snapMovingRect(next, snapOthers, pageBox, snapOpts);
+          next = { ...next, x: s.x, y: s.y };
+          app.setSnapGuides(
+            s.v.length || s.h.length ? { page: pageIndex, v: s.v, h: s.h } : null,
+          );
+        }
+        finalBox = next;
+        if (groupIds) {
+          app.setGroupDrag({
+            page: pageIndex,
+            ids: groupIds,
+            dx: next.x - d.orig.x,
+            dy: next.y - d.orig.y,
+          });
+        }
       } else if (ann.kind === "image") {
         // Images keep their aspect ratio while resizing.
         const w = Math.max(8, d.orig.w + dx);
-        setLive({ ...d.orig, w, h: Math.max(8, w * (d.orig.h / d.orig.w)) });
+        finalBox = { ...d.orig, w, h: Math.max(8, w * (d.orig.h / d.orig.w)) };
       } else {
-        setLive({
+        let next = {
           ...d.orig,
           w: Math.max(8, d.orig.w + dx),
           h: Math.max(8, d.orig.h + dy),
-        });
+        };
+        if (isField && app.formBuilder && !ev.altKey) {
+          const s = snapResizingRect(next, snapOthers, pageBox, snapOpts);
+          next = { ...next, w: s.w, h: s.h };
+          app.setSnapGuides(
+            s.v.length || s.h2.length
+              ? { page: pageIndex, v: s.v, h: s.h2 }
+              : null,
+          );
+        }
+        finalBox = next;
       }
+      setLive(finalBox);
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      setLive((finalBox) => {
-        if (finalBox) {
+      // Commit outside the state updater — updating the store from within
+      // one triggers React's setState-during-render warning.
+      if (finalBox) {
+        if (groupIds) {
+          // The whole selection moves in one undo step.
+          app.translateAnnotations(
+            pageIndex,
+            groupIds,
+            finalBox.x - ann.x,
+            finalBox.y - ann.y,
+          );
+        } else {
           app.updateAnnotation(pageIndex, { ...ann, ...finalBox });
         }
-        return null;
-      });
+      }
+      if (isField) {
+        app.setGroupDrag(null);
+        app.setSnapGuides(null);
+      }
+      setLive(null);
       dragRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  // Drag the rotate handle: angle from the box center to the pointer, with
+  // soft snapping to 15° steps (Shift forces the snap).
+  const beginRotate = (e: React.PointerEvent) => {
+    if (app.tool !== "select") return;
+    e.stopPropagation();
+    e.preventDefault();
+    const el = wrapRef.current;
+    if (!el) return;
+    // getBoundingClientRect of a rotated element is its AABB — the center is
+    // still the true rotation center.
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let current: number | null = null;
+    const onMove = (ev: PointerEvent) => {
+      // Handle sits above the top edge, so straight up = 0°.
+      let a = (Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180) / Math.PI + 90;
+      const snapped = Math.round(a / 15) * 15;
+      if (ev.shiftKey || Math.abs(a - snapped) < 4) a = snapped;
+      current = ((a % 360) + 360) % 360;
+      setLiveRot(current);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      // Commit outside the state updater — updating the store from within
+      // one triggers React's setState-during-render warning.
+      if (current !== null) {
+        app.updateAnnotation(pageIndex, {
+          ...ann,
+          rotation: current === 0 ? undefined : current,
+        });
+      }
+      setLiveRot(null);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -3113,14 +4165,26 @@ function AnnotationItem({
   const selectable = app.tool === "select" && !ann.locked;
   const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
   const unhighlight =
-    ann.kind === "highlight" && app.tool === "highlight" && !ann.locked;
+    ((ann.kind === "highlight" && app.tool === "highlight") ||
+      (ann.kind === "markup" &&
+        ["underline", "strikeout", "squiggly"].includes(app.tool))) &&
+    !ann.locked;
   const erasable = app.tool === "eraser" && !ann.locked;
+  // While a multi-selection drags, the other members preview the same offset.
+  const gd = app.groupDrag;
+  const groupOffset =
+    gd && gd.page === pageIndex && gd.ids.includes(ann.id) && !live
+      ? { x: gd.dx, y: gd.dy }
+      : { x: 0, y: 0 };
+  const rotationDeg = liveRot ?? ann.rotation ?? 0;
   const style: React.CSSProperties = {
     position: "absolute",
-    left: box.x * scale,
-    top: box.y * scale,
+    left: (box.x + groupOffset.x) * scale,
+    top: (box.y + groupOffset.y) * scale,
     width: box.w * scale,
     height: box.h * scale,
+    transform: rotationDeg ? `rotate(${rotationDeg}deg)` : undefined,
+    transformOrigin: "center",
     pointerEvents: selectable || noteInRead || unhighlight || erasable ? "auto" : "none",
     cursor: selectable
       ? "move"
@@ -3156,6 +4220,38 @@ function AnnotationItem({
         />
       );
       break;
+    case "markup": {
+      const mw = Math.max(1, box.w);
+      const mh = Math.max(1, box.h);
+      const t = Math.max(0.75, mh * 0.06);
+      body = (
+        <svg
+          className="h-full w-full overflow-visible"
+          preserveAspectRatio="none"
+          viewBox={`0 0 ${mw} ${mh}`}
+        >
+          {ann.style === "squiggly" ? (
+            <path
+              d={squigglyPath(mw, mh * 0.95, Math.max(1.2, mh * 0.14), Math.max(2.4, mh * 0.22))}
+              fill="none"
+              stroke={ann.color}
+              strokeWidth={t}
+              strokeLinejoin="round"
+            />
+          ) : (
+            <line
+              x1={0}
+              x2={mw}
+              y1={ann.style === "underline" ? mh * 0.92 : mh * 0.55}
+              y2={ann.style === "underline" ? mh * 0.92 : mh * 0.55}
+              stroke={ann.color}
+              strokeWidth={ann.style === "underline" ? t : Math.max(1, mh * 0.08)}
+            />
+          )}
+        </svg>
+      );
+      break;
+    }
     case "whiteout":
       body = (
         <div
@@ -3211,6 +4307,39 @@ function AnnotationItem({
         </svg>
       );
       break;
+    case "arrow": {
+      const aw = Math.max(1, box.w);
+      const ah = Math.max(1, box.h);
+      const x1 = (ann.ax ?? 0) * aw;
+      const y1 = (ann.ay ?? 0) * ah;
+      const x2 = (ann.bx ?? 1) * aw;
+      const y2 = (ann.by ?? 1) * ah;
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const headLen = Math.max(6, ann.strokeWidth * 3.5);
+      const spread = Math.PI / 7;
+      const hx1 = x2 - headLen * Math.cos(angle - spread);
+      const hy1 = y2 - headLen * Math.sin(angle - spread);
+      const hx2 = x2 - headLen * Math.cos(angle + spread);
+      const hy2 = y2 - headLen * Math.sin(angle + spread);
+      body = (
+        <svg
+          className="h-full w-full overflow-visible"
+          preserveAspectRatio="none"
+          viewBox={`0 0 ${aw} ${ah}`}
+        >
+          <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={ann.color} strokeWidth={ann.strokeWidth} strokeLinecap="round" />
+          <polyline
+            points={`${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}`}
+            fill="none"
+            stroke={ann.color}
+            strokeWidth={ann.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+      break;
+    }
     case "ink":
       body = (
         <svg
@@ -3240,14 +4369,28 @@ function AnnotationItem({
       );
       break;
     case "formfield": {
-      if (app.editMode) {
+      if (previewing) {
+        // Live preview (form builder): a real, fillable input.
+        body = <FieldPreviewInput ann={ann} scale={scale} />;
+      } else if (app.editMode) {
         // Designer look while editing: dashed outline + field name.
         const label =
           ann.fieldType === "radio"
             ? `${ann.fieldName} · ${ann.optionValue}`
             : ann.fieldName;
         body = (
-          <div className="relative h-full w-full rounded-[3px] border-2 border-dashed border-violet-500/80 bg-violet-500/5">
+          <div
+            className="relative h-full w-full rounded-[3px]"
+            style={{
+              // Dashed violet = "designer object" marker; the box itself
+              // shows the real border/background it will have when saved.
+              outline: "2px dashed rgba(139, 92, 246, 0.7)",
+              outlineOffset: 1.5,
+              ...fieldWidgetCss(ann, scale),
+              backgroundColor:
+                ann.backgroundColor ?? "rgba(139, 92, 246, 0.05)",
+            }}
+          >
             <span className="absolute -top-[15px] left-0 whitespace-nowrap text-[9px] font-medium leading-none text-violet-600">
               {label}
             </span>
@@ -3259,6 +4402,20 @@ function AnnotationItem({
             {ann.fieldType === "radio" && (
               <span className="absolute inset-1 rounded-full border border-violet-400/60" />
             )}
+            {ann.fieldType === "date" && (
+              <Calendar className="absolute right-1 top-1/2 h-3 w-3 -translate-y-1/2 text-violet-500/80" />
+            )}
+            {ann.fieldType === "signature" && (
+              <>
+                <PenLine className="absolute left-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-violet-500/70" />
+                <span className="absolute bottom-1.5 left-6 right-2 border-b border-violet-400/60" />
+              </>
+            )}
+            {ann.fieldType === "button" && (
+              <span className="absolute inset-0 flex items-center justify-center truncate px-1 text-[10px] font-medium text-violet-600">
+                {ann.buttonCaption ?? ann.fieldName}
+              </span>
+            )}
           </div>
         );
       } else {
@@ -3266,13 +4423,32 @@ function AnnotationItem({
         body = (
           <div
             className={cn(
-              "relative h-full w-full border border-blue-400/50 bg-sky-400/10",
+              "relative h-full w-full",
               ann.fieldType === "radio" ? "rounded-full" : "rounded-[2px]",
             )}
+            style={{
+              ...fieldWidgetCss(ann, scale),
+              backgroundColor:
+                ann.backgroundColor ??
+                (ann.fieldType === "button"
+                  ? "rgba(203, 213, 225, 0.4)"
+                  : "rgba(56, 189, 248, 0.1)"),
+            }}
           >
             {ann.fieldType === "dropdown" && (
               <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] text-slate-500">
                 ▾
+              </span>
+            )}
+            {ann.fieldType === "date" && (
+              <Calendar className="absolute right-1 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-400" />
+            )}
+            {ann.fieldType === "signature" && (
+              <span className="absolute bottom-1.5 left-2 right-2 border-b border-slate-400/70" />
+            )}
+            {ann.fieldType === "button" && (
+              <span className="absolute inset-0 flex items-center justify-center truncate px-1 text-[10px] font-medium text-slate-600">
+                {ann.buttonCaption ?? ann.fieldName}
               </span>
             )}
           </div>
@@ -3343,7 +4519,9 @@ function AnnotationItem({
       className={cn(
         isTextSelected
           ? "rounded-md border-2 border-dashed border-blue-400"
-          : isSelected && "ring-2 ring-blue-500 ring-offset-1",
+          : (isSelected || isMulti) &&
+              !previewing &&
+              "ring-2 ring-blue-500 ring-offset-1",
         isEmptyText && "bg-blue-50/40",
         erasable && "hover:ring-2 hover:ring-red-400/80",
         !isSelected &&
@@ -3386,13 +4564,25 @@ function AnnotationItem({
         </div>
       )}
       {body}
-      {isSelected && ann.kind !== "note" && (
+      {isSelected && !previewing && ann.kind !== "note" && (
         <div
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
           onPointerDown={(e) => beginDrag(e, "resize")}
         />
       )}
-      {ann.kind === "formfield" && (
+      {isSelected && ROTATABLE_KINDS.has(ann.kind) && (
+        <>
+          {/* stem + grab-knob above the top edge; rotates with the element */}
+          <div className="pointer-events-none absolute -top-5 left-1/2 h-5 w-px -translate-x-1/2 bg-blue-400/80" />
+          <div
+            title="Drag to rotate (Shift snaps to 15°)"
+            className="absolute -top-6 left-1/2 h-3.5 w-3.5 -translate-x-1/2 cursor-grab rounded-full border border-white bg-blue-500 active:cursor-grabbing"
+            style={{ touchAction: "none" }}
+            onPointerDown={beginRotate}
+          />
+        </>
+      )}
+      {ann.kind === "formfield" && !previewing && (
         <Popover
           open={isSelected}
           onOpenChange={(o: boolean) => {
@@ -3407,12 +4597,16 @@ function AnnotationItem({
             className="scrollbar-soft max-h-[72vh] w-64 space-y-2 overflow-y-auto p-2.5"
             onPointerDown={(e) => e.stopPropagation()}
           >
-            <FieldProperties
-              ann={ann}
-              onPatch={(p) =>
-                app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
-              }
-            />
+            {isMulti ? (
+              <MultiFieldTools page={pageIndex} />
+            ) : (
+              <FieldProperties
+                ann={ann}
+                onPatch={(p) =>
+                  app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
+                }
+              />
+            )}
           </PopoverContent>
         </Popover>
       )}

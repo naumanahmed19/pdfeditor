@@ -9,6 +9,23 @@ export function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
+/**
+ * Annotation kinds that can be freely rotated. Excluded: notes (a fixed marker
+ * icon), highlight/markup (glued to text lines), redactions (the destructive
+ * region must stay axis-aligned) and form fields (AcroForm widgets are
+ * axis-aligned).
+ */
+export const ROTATABLE_KINDS: ReadonlySet<string> = new Set([
+  "text",
+  "image",
+  "rect",
+  "ellipse",
+  "line",
+  "arrow",
+  "ink",
+  "whiteout",
+]);
+
 export function downloadBytes(bytes: Uint8Array, filename: string) {
   const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);

@@ -31,11 +31,13 @@ import {
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
 import type {
+  FontInfo,
+  LineStyle as PdfiumLineStyle,
   Matrix as PdfiumMatrix,
   ObjectStyle as PdfiumObjectStyle,
   PageObject,
   TextObject,
-  TextStyle as PdfiumTextStyle,
+  TextRunEdit,
 } from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
@@ -199,11 +201,15 @@ interface AppStore {
     objectIndex: number,
     newText: string,
   ) => Promise<void>;
-  applyTextStyle: (
+  applyTextRuns: (
+    pageIndex: number,
+    runs: TextRunEdit[],
+    style: PdfiumLineStyle,
+  ) => Promise<void>;
+  getTextFontInfo: (
     pageIndex: number,
     objectIndex: number,
-    style: PdfiumTextStyle,
-  ) => Promise<void>;
+  ) => Promise<FontInfo | null>;
 
   /** Object editing via PDFium: move/resize/delete existing text & images. */
   getPageObjects: (pageIndex: number) => Promise<PageObject[]>;
@@ -333,6 +339,14 @@ interface AppStore {
   selected: { page: number; id: string } | null;
   setSelected: (s: { page: number; id: string } | null) => void;
 
+  /** Copy the selected annotation (and its group partners, e.g. a callout's
+   *  arrow + text) to the internal clipboard. Returns true when copied. */
+  copySelectedAnnotation: () => boolean;
+  /** Paste the internal clipboard onto the current page, slightly offset. */
+  pasteAnnotationClipboard: () => void;
+  /** Duplicate the selected annotation (and group partners) in place. */
+  duplicateSelectedAnnotation: () => void;
+
   /** Id of a text annotation that should open its editor immediately. */
   editRequestId: string | null;
   setEditRequestId: (id: string | null) => void;
@@ -357,6 +371,45 @@ interface AppStore {
   setSelectedField: (
     f: Pick<ExistingFieldOp, "key" | "fieldName" | "pageIndex" | "origRect"> | null,
   ) => void;
+
+  /** Form-builder mode: field palette + docked properties + field outline. */
+  formBuilder: boolean;
+  setFormBuilder: (v: boolean) => void;
+  /** Live preview inside the builder — new fields render as fillable inputs. */
+  formPreview: boolean;
+  setFormPreview: (v: boolean) => void;
+  /** Values typed into the live preview, keyed by field name (transient). */
+  previewValues: Record<string, unknown>;
+  setPreviewValue: (name: string, v: unknown) => void;
+
+  /** Multi-selected annotation ids (one page at a time; includes `selected`). */
+  multiSelected: { page: number; ids: string[] } | null;
+  setMultiSelected: (s: { page: number; ids: string[] } | null) => void;
+  /** Shift-click: toggle an annotation in/out of the multi-selection. */
+  toggleMultiSelected: (page: number, id: string) => void;
+  /** Move several annotations at once (one undo step). */
+  translateAnnotations: (page: number, ids: string[], dx: number, dy: number) => void;
+  /** Replace several annotations on a page at once (one undo step). */
+  updateAnnotations: (page: number, anns: Annotation[]) => void;
+  /** Remove several annotations at once (one undo step). */
+  removeAnnotations: (page: number, ids: string[]) => void;
+  /** Transient offset previewing a multi-selection drag in progress. */
+  groupDrag: { page: number; ids: string[]; dx: number; dy: number } | null;
+  setGroupDrag: (
+    g: { page: number; ids: string[]; dx: number; dy: number } | null,
+  ) => void;
+  /** Alignment guides shown while a field is dragged (form builder). */
+  snapGuides: { page: number; v: number[]; h: number[] } | null;
+  setSnapGuides: (g: { page: number; v: number[]; h: number[] } | null) => void;
+  /** Snapping & grid preferences (form builder). */
+  snapEnabled: boolean;
+  setSnapEnabled: (v: boolean) => void;
+  gridEnabled: boolean;
+  setGridEnabled: (v: boolean) => void;
+  gridSize: number;
+  setGridSize: (n: number) => void;
+  /** Move a new form field up/down within its page's tab order. */
+  reorderFormField: (page: number, id: string, dir: -1 | 1) => void;
 
   searchQuery: string;
   searchMatches: SearchMatch[];
@@ -580,6 +633,96 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ExistingFieldOp,
     "key" | "fieldName" | "pageIndex" | "origRect"
   > | null>(null);
+
+  /* ---------------- form builder ---------------- */
+
+  const [formBuilder, setFormBuilderState] = useState(false);
+  const [formPreview, setFormPreview] = useState(false);
+  const [previewValues, setPreviewValuesState] = useState<Record<string, unknown>>({});
+  const setPreviewValue = useCallback((name: string, v: unknown) => {
+    setPreviewValuesState((prev) => ({ ...prev, [name]: v }));
+  }, []);
+
+  const [multiSelected, setMultiSelected] = useState<{
+    page: number;
+    ids: string[];
+  } | null>(null);
+  const [groupDrag, setGroupDrag] = useState<{
+    page: number;
+    ids: string[];
+    dx: number;
+    dy: number;
+  } | null>(null);
+  const [snapGuides, setSnapGuides] = useState<{
+    page: number;
+    v: number[];
+    h: number[];
+  } | null>(null);
+
+  // Snap/grid preferences survive restarts (small quality-of-life memory).
+  const [snapEnabled, setSnapEnabledState] = useState(
+    () => localStorage.getItem("pdfwb.formSnap") !== "0",
+  );
+  const setSnapEnabled = useCallback((v: boolean) => {
+    setSnapEnabledState(v);
+    localStorage.setItem("pdfwb.formSnap", v ? "1" : "0");
+  }, []);
+  const [gridEnabled, setGridEnabledState] = useState(
+    () => localStorage.getItem("pdfwb.formGrid") === "1",
+  );
+  const setGridEnabled = useCallback((v: boolean) => {
+    setGridEnabledState(v);
+    localStorage.setItem("pdfwb.formGrid", v ? "1" : "0");
+  }, []);
+  const [gridSize, setGridSizeState] = useState(
+    () => Number(localStorage.getItem("pdfwb.formGridSize")) || 12,
+  );
+  const setGridSize = useCallback((n: number) => {
+    const size = Math.max(4, Math.min(72, Math.round(n)));
+    setGridSizeState(size);
+    localStorage.setItem("pdfwb.formGridSize", String(size));
+  }, []);
+
+  /** Shift-click membership toggle. The last-clicked id becomes the primary
+   *  selection so the properties panel follows the click. */
+  const toggleMultiSelected = useCallback(
+    (page: number, id: string) => {
+      let ids =
+        multiSelected && multiSelected.page === page
+          ? [...multiSelected.ids]
+          : selected && selected.page === page
+            ? [selected.id]
+            : [];
+      ids = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+      if (!ids.length) {
+        setMultiSelected(null);
+        setSelected(null);
+        return;
+      }
+      setMultiSelected({ page, ids });
+      setSelected({ page, id: ids.includes(id) ? id : ids[ids.length - 1] });
+    },
+    [multiSelected, selected],
+  );
+
+  // A multi-selection is only meaningful while its primary member is selected
+  // and its ids still exist — reconcile after deletes, undo, tab switches.
+  useEffect(() => {
+    if (!multiSelected) return;
+    if (
+      !selected ||
+      selected.page !== multiSelected.page ||
+      !multiSelected.ids.includes(selected.id)
+    ) {
+      setMultiSelected(null);
+      return;
+    }
+    const list = active?.annotations[multiSelected.page] ?? [];
+    const alive = multiSelected.ids.filter((id) => list.some((a) => a.id === id));
+    if (alive.length !== multiSelected.ids.length) {
+      setMultiSelected(alive.length > 1 ? { ...multiSelected, ids: alive } : null);
+    }
+  }, [multiSelected, selected, active]);
   const [editRequestId, setEditRequestId] = useState<string | null>(null);
   const [pendingStamp, setPendingStamp] = useState<PendingStamp | null>(null);
 
@@ -755,6 +898,178 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeTabId, updateDoc],
   );
 
+  /* --- annotation clipboard (copy / paste / duplicate) --- */
+
+  // Internal clipboard: a snapshot of one annotation plus its group partners
+  // (highlight quads, a callout's arrow + text box). Not the OS clipboard.
+  const annClipboard = useRef<Annotation[] | null>(null);
+  const pasteSeq = useRef(0);
+
+  /** The selected annotation(s) plus everything sharing their groupIds. */
+  const selectedGroup = useCallback((): Annotation[] => {
+    if (!active || !selected) return [];
+    const list = active.annotations[selected.page] ?? [];
+    // Multi-selection: every member plus group partners, in page order.
+    if (
+      multiSelected &&
+      multiSelected.page === selected.page &&
+      multiSelected.ids.length > 1
+    ) {
+      const ids = new Set(multiSelected.ids);
+      const groups = new Set<string>();
+      for (const a of list) if (ids.has(a.id) && a.groupId) groups.add(a.groupId);
+      return list.filter(
+        (a) => ids.has(a.id) || (a.groupId && groups.has(a.groupId)),
+      );
+    }
+    const target = list.find((a) => a.id === selected.id);
+    if (!target) return [];
+    return target.groupId
+      ? list.filter((a) => a.groupId === target.groupId)
+      : [target];
+  }, [active, selected, multiSelected]);
+
+  /** Fresh ids (and fresh groupIds, preserving the grouping structure —
+   *  a multi-selection can span several groups), offset so the copy is
+   *  visible. */
+  const cloneAnnotations = (anns: Annotation[], offset: number): Annotation[] => {
+    const groupMap = new Map<string, string>();
+    const freshGroup = (g: string) => {
+      let next = groupMap.get(g);
+      if (!next) {
+        next = uid();
+        groupMap.set(g, next);
+      }
+      return next;
+    };
+    return anns.map((a) => ({
+      ...structuredClone(a),
+      id: uid(),
+      groupId: a.groupId ? freshGroup(a.groupId) : undefined,
+      x: a.x + offset,
+      y: a.y + offset,
+    }));
+  };
+
+  const copySelectedAnnotation = useCallback((): boolean => {
+    const group = selectedGroup();
+    if (!group.length) return false;
+    annClipboard.current = group.map((a) => structuredClone(a));
+    pasteSeq.current = 0;
+    return true;
+  }, [selectedGroup]);
+
+  const pasteAnnotationClipboard = useCallback(() => {
+    const src = annClipboard.current;
+    if (!src?.length || !activeTabId || !active) return;
+    pasteSeq.current += 1;
+    const clones = cloneAnnotations(src, 12 * pasteSeq.current);
+    const page = active.currentPage;
+    updateDoc(activeTabId, (d) =>
+      pushHistory(d, {
+        ...d.annotations,
+        [page]: [...(d.annotations[page] ?? []), ...clones],
+      }),
+    );
+    setSelected({ page, id: clones[clones.length - 1].id });
+    setMultiSelected(
+      clones.length > 1 ? { page, ids: clones.map((c) => c.id) } : null,
+    );
+  }, [activeTabId, active, updateDoc]);
+
+  const duplicateSelectedAnnotation = useCallback(() => {
+    const group = selectedGroup();
+    if (!group.length || !activeTabId || !selected) return;
+    const clones = cloneAnnotations(group, 12);
+    const page = selected.page;
+    updateDoc(activeTabId, (d) =>
+      pushHistory(d, {
+        ...d.annotations,
+        [page]: [...(d.annotations[page] ?? []), ...clones],
+      }),
+    );
+    setSelected({ page, id: clones[clones.length - 1].id });
+    setMultiSelected(
+      clones.length > 1 ? { page, ids: clones.map((c) => c.id) } : null,
+    );
+  }, [selectedGroup, activeTabId, selected, updateDoc]);
+
+  /* --- batch operations (multi-select, form builder) --- */
+
+  const translateAnnotations = useCallback(
+    (page: number, ids: string[], dx: number, dy: number) => {
+      if (!activeTabId || !ids.length || (!dx && !dy)) return;
+      const idSet = new Set(ids);
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
+          ...d.annotations,
+          [page]: (d.annotations[page] ?? []).map((a) =>
+            idSet.has(a.id) ? { ...a, x: a.x + dx, y: a.y + dy } : a,
+          ),
+        }),
+      );
+    },
+    [activeTabId, updateDoc],
+  );
+
+  const updateAnnotationsBatch = useCallback(
+    (page: number, anns: Annotation[]) => {
+      if (!activeTabId || !anns.length) return;
+      const byId = new Map(anns.map((a) => [a.id, a]));
+      updateDoc(activeTabId, (d) =>
+        pushHistory(d, {
+          ...d.annotations,
+          [page]: (d.annotations[page] ?? []).map((a) => byId.get(a.id) ?? a),
+        }),
+      );
+    },
+    [activeTabId, updateDoc],
+  );
+
+  const removeAnnotationsBatch = useCallback(
+    (page: number, ids: string[]) => {
+      if (!activeTabId || !ids.length) return;
+      updateDoc(activeTabId, (d) => {
+        const list = d.annotations[page] ?? [];
+        const idSet = new Set(ids);
+        const groups = new Set<string>();
+        for (const a of list) if (idSet.has(a.id) && a.groupId) groups.add(a.groupId);
+        return pushHistory(d, {
+          ...d.annotations,
+          [page]: list.filter(
+            (a) => !idSet.has(a.id) && !(a.groupId && groups.has(a.groupId)),
+          ),
+        });
+      });
+      setSelected(null);
+      setMultiSelected(null);
+    },
+    [activeTabId, updateDoc],
+  );
+
+  /** Swap a form field with its neighbor among the page's form fields — the
+   *  annotation array order IS the tab order (widgets are appended to the
+   *  page's /Annots in this order on save). */
+  const reorderFormField = useCallback(
+    (page: number, id: string, dir: -1 | 1) => {
+      if (!activeTabId) return;
+      updateDoc(activeTabId, (d) => {
+        const list = [...(d.annotations[page] ?? [])];
+        const fields = list
+          .map((a, i) => ({ a, i }))
+          .filter((x) => x.a.kind === "formfield");
+        const pos = fields.findIndex((x) => x.a.id === id);
+        const swap = pos + dir;
+        if (pos < 0 || swap < 0 || swap >= fields.length) return {};
+        const i = fields[pos].i;
+        const j = fields[swap].i;
+        [list[i], list[j]] = [list[j], list[i]];
+        return pushHistory(d, { ...d.annotations, [page]: list });
+      });
+    },
+    [activeTabId, updateDoc],
+  );
+
   const clearAnnotations = useCallback(() => {
     if (!activeTabId) return;
     updateDoc(activeTabId, (d) => ({
@@ -810,6 +1125,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSearchQuery("");
     setSearchMatches([]);
     setActiveMatch(0);
+    setMultiSelected(null);
+    setGroupDrag(null);
+    setSnapGuides(null);
+    setFormBuilderState(false);
+    setFormPreview(false);
+    setPreviewValuesState({});
     // A changed/opened document starts in read mode, not carrying over the
     // previous doc's edit session. (Templates re-arm editing after opening.)
     setTool("read");
@@ -1528,13 +1849,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitInPlace],
   );
 
-  /** In-place text edit that also changes ink color and/or size. */
-  const applyTextStyle = useCallback(
-    async (pageIndex: number, objectIndex: number, style: PdfiumTextStyle) => {
-      const { styleTextObject } = await import("./lib/pdfium");
-      await commitInPlace((b) => styleTextObject(b, pageIndex, objectIndex, style));
+  /**
+   * In-place edit of a whole visual line: per-run text changes plus line-wide
+   * color / size / synthesized bold-italic / font replacement.
+   */
+  const applyTextRuns = useCallback(
+    async (pageIndex: number, runs: TextRunEdit[], style: PdfiumLineStyle) => {
+      const { styleTextRuns } = await import("./lib/pdfium");
+      await commitInPlace((b) => styleTextRuns(b, pageIndex, runs, style));
     },
     [commitInPlace],
+  );
+
+  /** The base name + decoded program of the font behind a text run. */
+  const getTextFontInfo = useCallback(
+    async (pageIndex: number, objectIndex: number) => {
+      if (!active) return null;
+      const { getFontInfo } = await import("./lib/pdfium");
+      return getFontInfo(active.bytes, pageIndex, objectIndex);
+    },
+    [active],
   );
 
   /** Move/resize an existing object (text or image) via an affine transform. */
@@ -1944,6 +2278,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!toolAllowed(tool)) setTool("read");
   }, [toolAllowed, tool]);
 
+  /** Enter/exit the form-builder mode. Entering arms Select and opens the
+   *  sidebar (the palette lives there); leaving disarms builder-only state. */
+  const setFormBuilder = useCallback(
+    (v: boolean) => {
+      if (v && !toolAllowed("formtext")) {
+        toast.error(
+          "This document's permissions don't allow adding form fields. Unlock with the permissions password (File → Document security).",
+        );
+        return;
+      }
+      setFormBuilderState(v);
+      if (v) {
+        setSidebarOpen(true);
+        setTool((t) => (t === "read" ? "select" : t));
+      } else {
+        setFormPreview(false);
+        setMultiSelected(null);
+        setGroupDrag(null);
+        setSnapGuides(null);
+        setTool((t) => (t.startsWith("form") ? "select" : t));
+      }
+    },
+    [toolAllowed],
+  );
+
   const [ocrBusy, setOcrBusy] = useState(false);
   const runOcrText = useCallback(async () => {
     if (!active || ocrBusy) return;
@@ -2155,7 +2514,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     bakeToBytes,
     getPageTextObjects,
     applyTextEdit,
-    applyTextStyle,
+    applyTextRuns,
+    getTextFontInfo,
     getPageObjects,
     applyObjectTransform,
     removeObjectAt,
@@ -2223,6 +2583,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     canRedo: active ? active.historyIndex < active.history.length - 1 : false,
     selected,
     setSelected,
+    copySelectedAnnotation,
+    pasteAnnotationClipboard,
+    duplicateSelectedAnnotation,
     editRequestId,
     setEditRequestId,
     pendingStamp,
@@ -2233,6 +2596,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     upsertFieldOp,
     selectedField,
     setSelectedField,
+    formBuilder,
+    setFormBuilder,
+    formPreview,
+    setFormPreview,
+    previewValues,
+    setPreviewValue,
+    multiSelected,
+    setMultiSelected,
+    toggleMultiSelected,
+    translateAnnotations,
+    updateAnnotations: updateAnnotationsBatch,
+    removeAnnotations: removeAnnotationsBatch,
+    groupDrag,
+    setGroupDrag,
+    snapGuides,
+    setSnapGuides,
+    snapEnabled,
+    setSnapEnabled,
+    gridEnabled,
+    setGridEnabled,
+    gridSize,
+    setGridSize,
+    reorderFormField,
     searchQuery,
     searchMatches,
     activeMatch,
@@ -2274,9 +2660,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setFormValue,
         addAnnotation,
         setSelected,
+        setFormBuilder,
+        setFormPreview,
         getPageTextObjects,
         applyTextEdit,
-        applyTextStyle,
+        applyTextRuns,
+        getTextFontInfo,
         getPageObjects,
         applyObjectTransform,
         removeObjectAt,

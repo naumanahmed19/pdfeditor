@@ -4,14 +4,18 @@ import {
   ChevronDown,
   ChevronUp,
   Combine,
+  Crop,
   Download,
   Droplets,
   FilePlus2,
   FileText,
   FolderOpen,
+  Heading,
+  Layers2,
   LayoutGrid,
   Lock,
   LockOpen,
+  Minimize2,
   PanelLeft,
   Printer,
   Save,
@@ -132,6 +136,18 @@ export function TitleBar() {
         <Droplets className="h-4 w-4 text-muted-foreground" />
         Watermark & numbers
       </MenuItem>
+      <MenuItem onClick={() => app.setScreen("headerfooter")}>
+        <Heading className="h-4 w-4 text-muted-foreground" />
+        Headers & footers…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("crop")}>
+        <Crop className="h-4 w-4 text-muted-foreground" />
+        Crop pages…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("compress")}>
+        <Minimize2 className="h-4 w-4 text-muted-foreground" />
+        Compress…
+      </MenuItem>
       <MenuSeparator />
       <MenuItem
         disabled={!app.pdf || app.ocrBusy}
@@ -139,6 +155,25 @@ export function TitleBar() {
       >
         <ScanText className="h-4 w-4 text-muted-foreground" />
         Make searchable (OCR)
+      </MenuItem>
+      <MenuItem
+        disabled={!app.pdf}
+        onClick={() => {
+          if (
+            !window.confirm(
+              "Flatten the document?\n\nAll annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
+            )
+          ) {
+            return;
+          }
+          void app.applyBytesOp(async (b) => {
+            const { flattenPdf } = await import("../../lib/pdfium");
+            return flattenPdf(b);
+          }, "Document flattened");
+        }}
+      >
+        <Layers2 className="h-4 w-4 text-muted-foreground" />
+        Flatten document
       </MenuItem>
     </>
   );

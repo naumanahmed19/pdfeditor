@@ -34,7 +34,7 @@ export const FONT_OPTIONS: Array<{ v: FontFamilyKind; label: string }> = [
   { v: "caladea", label: "Caladea (Cambria)" },
 ];
 
-const FONT_SIZES = [10, 12, 14, 16, 18, 22, 28, 36];
+export const FONT_SIZES = [10, 12, 14, 16, 18, 22, 28, 36];
 
 export interface TextStyleValue {
   color: string;
@@ -49,15 +49,17 @@ export interface TextStyleValue {
 }
 
 /** shadcn-style toggle: 32px square, primary fill when pressed. */
-function StyleToggle({
+export function StyleToggle({
   label,
   icon: Icon,
   pressed,
+  disabled,
   onPressedChange,
 }: {
   label: string;
   icon: typeof Bold;
   pressed: boolean;
+  disabled?: boolean;
   onPressedChange: (pressed: boolean) => void;
 }) {
   return (
@@ -66,6 +68,7 @@ function StyleToggle({
         value={label}
         aria-label={label}
         pressed={pressed}
+        disabled={disabled}
         onPressedChange={onPressedChange}
         className="h-8 w-8 rounded-md data-[pressed]:!bg-primary data-[pressed]:!text-primary-foreground"
       >
