@@ -60,7 +60,15 @@ Replace it with a dedicated form-builder experience:
       gated on restricted docs, unlock via `EPDF_UnlockOwnerPermissions`), and
       Remove protection requires owner rights (`EPDF_RemoveEncryption`)
 - [ ] Certificate-based digital signatures (PKI) — drawn/typed signatures exist,
-      cryptographic signing does not
+      cryptographic signing does not. Required for legal/business workflows;
+      drawn signatures don't count there. Scope:
+      - Sign with a user-supplied certificate (.p12/.pfx), embedding a
+        ByteRange + PKCS#7 (CAdES/PAdES-style) signature dictionary
+      - Signature FIELDS in the form designer (place a field others sign)
+      - Verify + display existing signatures — validity, signer, whether the
+        document changed since signing (panel in the sidebar)
+      - Tauri desktop: OS certificate store / smartcard access is feasible;
+        browser build may be sign-only with an imported cert
 - [ ] Search across text-run boundaries, case/whole-word options
 - [ ] Two-page spread view
 
@@ -71,28 +79,78 @@ plus a few differentiators. Roughly ordered by effort-to-value within each group
 
 ### Annotation quick wins (cheap — the annotation pipeline already exists)
 
-- [ ] Underline / strikethrough / squiggly markup on EXISTING document text
-      (same select-then-mark path as highlight-from-selection)
-- [ ] Arrows and callouts (arrow = the line tool + a head)
-- [ ] Predefined stamps — APPROVED / DRAFT / CONFIDENTIAL / date stamps
-      (reuse the image-stamp mechanism from signatures)
-- [ ] Copy / paste / duplicate annotations (only pages can be duplicated today)
+- [x] Underline / strikethrough / squiggly markup on EXISTING document text —
+      select text then click the tool (same path as highlight), or drag a box;
+      clicking a mark with its tool armed removes it (`MarkupAnnotation`)
+- [x] Arrows and callouts — Arrow tool (drag tail → head, resize-safe relative
+      endpoints) and Callout tool (drag from target: arrow + linked text box
+      sharing a groupId, deleted together)
+- [x] Predefined stamps — APPROVED / DRAFT / CONFIDENTIAL / VOID / date stamps
+      generated on canvas (`lib/stamps.ts`), placed via the pending-stamp flow
+- [x] Copy / paste / duplicate annotations — Ctrl+C/V/D + toolbar Duplicate;
+      group-aware (callout pairs, highlight quads travel together)
+- [x] Rotate annotations — drag the round handle above a selected object
+      (soft 15° snapping, Shift forces it) or the toolbar Rotate 90° button;
+      applies to text boxes, images/stamps, shapes, lines, arrows, ink and
+      whiteout; baked via a content-stream rotation about the box center
+      (`rotation` on `BaseAnnotation`)
+
+### Content editing (biggest gap vs Acrobat / Foxit / PDF-XChange)
+
+The pro desktop editors all offer true content editing; our inline text edit
+is a single-run patch tool. This is the largest perceived-quality gap in a
+head-to-head comparison.
+
+- [ ] Paragraph-level text editing with reflow — detect the paragraph block
+      around the edited run (text-layer geometry already gives line boxes),
+      re-wrap lines on insert/delete instead of overflowing or gapping a
+      single run, rewrite the affected content-stream text objects
+- [ ] Font matching for edited/added text — reuse the document's embedded
+      font where possible (subset it further via fontkit, already a dep);
+      fall back to the visually closest bundled font instead of a default,
+      so edits don't visibly mismatch the surrounding text
+- [ ] Edit properties of EXISTING document text — font size, color,
+      bold/italic on a selection (not just on annotations)
+- [ ] Image object editing — insert, replace, move, resize and delete images
+      that are part of the page content (PDFium `FPDFPageObj_*` /
+      `FPDFImageObj_*` APIs; the Compress tool already re-encodes image
+      objects, so the plumbing exists). Also unblocks the redaction
+      image-removal item above.
 
 ### Document tools
 
-- [ ] Compress / optimize (image downsampling, reduce file size) — a staple
-      absent from the Tools screen
-- [ ] Crop pages / resize page boxes
-- [ ] Outline / bookmark EDITING (add / rename / remove entries; reading exists)
-- [ ] Custom headers / footers — text, date, page-range; more than the two
-      bottom page-number positions available now (Bates numbering fits here)
-- [ ] Attachments panel — view / add embedded files
-- [ ] Explicit Flatten command (baking happens implicitly on save today)
+- [x] Compress / optimize — Tools → Compress: downsamples images above a
+      target dpi and re-encodes (JPEG, or PNG when transparent) via
+      `EPDFImageObj_SetJpeg/SetPng`; reports before/after sizes
+- [x] Crop pages — Tools → Crop: drag the keep-box on a page preview, apply to
+      page/range/all; sets CropBox, optional permanent MediaBox rewrite
+- [x] Outline / bookmark EDITING — sidebar Outline tab → Edit: add / rename /
+      remove / reorder / retarget entries; whole tree rewritten on save
+      (`setOutline`, pdf-lib)
+- [x] Custom headers / footers — Tools → Headers & footers: 6 slots with
+      {page} {pages} {date} {bates} tokens, page ranges, Bates numbering
+      (prefix/suffix/start/digits)
+- [x] Attachments panel — sidebar Attachments tab: view / add / save / remove
+      embedded files (PDFium `FPDFDoc_AddAttachment` & co.)
+- [x] Explicit Flatten command — Tools menu → Flatten document
+      (`FPDFPage_Flatten` on every page, after the usual annotation bake)
 
 ### Export
 
-- [ ] Export to Word / plain text / HTML (only per-page PNG export exists,
-      despite text already being extracted for the AI assistant)
+Table stakes for the category — every competitor (including the free web
+tools) has this; we only export per-page PNG. Cheapest big win: the text is
+already extracted per page for the AI assistant.
+
+- [ ] Export to plain text — dump the existing extraction, page markers
+      optional (nearly free)
+- [ ] Export to HTML — extraction + basic block detection (headings by font
+      size, paragraphs by line gaps), inline images optional
+- [ ] Export to Word (.docx) — generate client-side (a .docx is a zip of XML;
+      jszip is already a dep), mapping the same block detection to Word
+      paragraphs/headings; perfect layout fidelity is NOT the bar —
+      competitors are imperfect here too
+- [ ] Table detection → CSV/Excel export (stretch; column clustering over
+      text-run x-positions)
 
 ### AI differentiators
 
@@ -101,7 +159,10 @@ plus a few differentiators. Roughly ordered by effort-to-value within each group
 - [ ] Semantic search / RAG over the document (chat currently sends raw
       extracted text; embeddings would handle long documents)
 - [ ] Document comparison / visual diff of two PDFs (PDFium rasterization
-      makes a pixel diff feasible)
+      makes a pixel diff feasible) — Acrobat/Foxit/PDF-XChange all have this,
+      web tools don't. Two modes: pixel diff (rasterize both at matched dpi,
+      highlight changed regions) and text diff (extracted text, word-level,
+      rendered side-by-side in the existing split view)
 
 ### Viewer / print
 
@@ -113,6 +174,11 @@ plus a few differentiators. Roughly ordered by effort-to-value within each group
 - [ ] Internationalization (i18n) — English-only today
 - [ ] Autosave / backup / file versioning
 - [ ] Test infrastructure (no unit/integration tests exist)
-- [ ] PDF/A conversion or validation
-- [ ] Accessibility: tagged-PDF support, reading order
+- [ ] PDF/A conversion or validation — matters for government/legal/archival
+      buyers; start with validation (report violations: unembedded fonts,
+      encryption, transparency) before attempting conversion
+- [ ] Accessibility: tagged-PDF support, reading order — enterprise/public-
+      sector requirement (Section 508 / EN 301 549); minimum viable: preserve
+      existing tags through save (verify we don't strip them today), then a
+      reading-order checker
 - [ ] Rebrand the `landing/` page — it still says "Inkden"; the app is PickPDF

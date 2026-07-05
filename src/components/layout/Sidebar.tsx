@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
   BookOpen,
   ChevronDown,
   ChevronRight,
   Columns2,
+  Download,
   Files,
   FileText,
   Folder,
@@ -11,18 +14,26 @@ import {
   History,
   Loader2,
   MessageSquare,
+  Paperclip,
+  Pencil,
   Plus,
+  Trash2,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp, type RecentFile } from "../../store";
-import { cn } from "../../lib/utils";
+import { cn, formatBytes } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
+import type { OutlineInput } from "../../lib/pdftools";
+import type { AttachmentInfo } from "../../lib/pdfium";
 import type { FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 
 export function Sidebar() {
   const app = useApp();
-  const [tab, setTab] = useState<"pages" | "outline" | "comments" | "recent">("recent");
+  const [tab, setTab] = useState<
+    "pages" | "outline" | "comments" | "attachments" | "recent"
+  >("recent");
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
   const activeTab = app.pdf ? tab : "recent";
@@ -68,6 +79,13 @@ export function Sidebar() {
                 label="Comments"
                 iconOnly
               />
+              <TabButton
+                active={activeTab === "attachments"}
+                onClick={() => setTab("attachments")}
+                icon={<Paperclip className="h-4 w-4" />}
+                label="Attachments"
+                iconOnly
+              />
             </div>
           )}
         </div>
@@ -77,6 +95,8 @@ export function Sidebar() {
           <OutlinePanel pdf={app.pdf} />
         ) : app.pdf && activeTab === "comments" ? (
           <CommentsPanel />
+        ) : app.pdf && activeTab === "attachments" ? (
+          <AttachmentsPanel />
         ) : (
           <RecentList />
         )}
@@ -548,10 +568,12 @@ function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
 function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
   const app = useApp();
   const [outline, setOutline] = useState<OutlineNode[] | null>(null);
+  const [draft, setDraft] = useState<OutlineInput[] | null>(null); // non-null = editing
 
   useEffect(() => {
     let alive = true;
     setOutline(null);
+    setDraft(null);
     getOutline(pdf).then((o) => {
       if (alive) setOutline(o);
     });
@@ -563,23 +585,95 @@ function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
   if (outline === null) {
     return <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>;
   }
-  if (!outline.length) {
+
+  const startEdit = () =>
+    setDraft(structuredClone(outline) as unknown as OutlineInput[]);
+
+  const save = () => {
+    if (!draft) return;
+    void app
+      .applyBytesOp(async (b) => {
+        const { setOutline: writeOutline } = await import("../../lib/pdftools");
+        return writeOutline(b, draft);
+      }, "Outline updated")
+      .then(() => setDraft(null));
+  };
+
+  if (draft) {
     return (
-      <p className="px-4 py-3 text-xs text-muted-foreground">
-        This document has no outline.
-      </p>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center gap-1 px-3 pb-1 pt-2">
+          <span className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Editing outline
+          </span>
+          <button
+            onClick={() =>
+              setDraft((d) => [
+                ...(d ?? []),
+                { title: `Page ${app.currentPage + 1}`, pageIndex: app.currentPage, children: [] },
+              ])
+            }
+            title="Add an entry for the current page"
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
+          {draft.length === 0 ? (
+            <p className="px-2 py-2 text-[11px] text-muted-foreground">
+              No entries. Use + above to add one for the current page.
+            </p>
+          ) : (
+            <OutlineEditorTree nodes={draft} depth={0} onChange={(n) => setDraft(n)} />
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 border-t border-sidebar-border px-3 py-2">
+          <button
+            onClick={save}
+            className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+          >
+            Save outline
+          </button>
+          <button
+            onClick={() => setDraft(null)}
+            className="rounded-md px-2.5 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     );
   }
+
   return (
-    <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
-      <OutlineTree
-        nodes={outline}
-        depth={0}
-        onGoto={(p) => {
-          app.scrollToPage(p);
-          if (app.isMobile) app.setSidebarOpen(false);
-        }}
-      />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1 px-3 pb-1 pt-2">
+        <span className="flex-1" />
+        <button
+          onClick={startEdit}
+          title="Edit outline (add / rename / remove entries)"
+          className="flex h-5 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <Pencil className="h-3 w-3" /> Edit
+        </button>
+      </div>
+      {!outline.length ? (
+        <p className="px-4 py-1 text-xs text-muted-foreground">
+          This document has no outline. Use Edit to create one.
+        </p>
+      ) : (
+        <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
+          <OutlineTree
+            nodes={outline}
+            depth={0}
+            onGoto={(p) => {
+              app.scrollToPage(p);
+              if (app.isMobile) app.setSidebarOpen(false);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -611,6 +705,240 @@ function OutlineTree({
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Recursive outline editor: rename inline, add child, move up/down, delete. */
+function OutlineEditorTree({
+  nodes,
+  depth,
+  onChange,
+}: {
+  nodes: OutlineInput[];
+  depth: number;
+  onChange: (next: OutlineInput[]) => void;
+}) {
+  const app = useApp();
+  const patch = (i: number, node: OutlineInput | null) => {
+    const next = [...nodes];
+    if (node === null) next.splice(i, 1);
+    else next[i] = node;
+    onChange(next);
+  };
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= nodes.length) return;
+    const next = [...nodes];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+
+  const btn =
+    "flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+
+  return (
+    <div className="flex flex-col">
+      {nodes.map((n, i) => (
+        <div key={i}>
+          <div
+            className="group flex items-center gap-0.5 rounded py-0.5 pr-1 hover:bg-sidebar-accent/50"
+            style={{ paddingLeft: 4 + depth * 12 }}
+          >
+            <input
+              value={n.title}
+              onChange={(e) => patch(i, { ...n, title: e.target.value })}
+              className="h-6 min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-xs text-sidebar-foreground focus:border-input focus:bg-background focus:outline-none"
+            />
+            <button
+              className={cn(btn, "text-[9px] font-semibold tabular-nums")}
+              title={
+                n.pageIndex === null
+                  ? "No target page — click to set to the current page"
+                  : `Goes to page ${n.pageIndex + 1} — click to retarget to the current page`
+              }
+              onClick={() => patch(i, { ...n, pageIndex: app.currentPage })}
+            >
+              {n.pageIndex === null ? "—" : `p${n.pageIndex + 1}`}
+            </button>
+            <div className="hidden shrink-0 items-center group-hover:flex">
+              <button className={btn} title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+                <ArrowUp className="h-3 w-3" />
+              </button>
+              <button
+                className={btn}
+                title="Move down"
+                disabled={i === nodes.length - 1}
+                onClick={() => move(i, 1)}
+              >
+                <ArrowDown className="h-3 w-3" />
+              </button>
+              <button
+                className={btn}
+                title="Add sub-entry (targets the current page)"
+                onClick={() =>
+                  patch(i, {
+                    ...n,
+                    children: [
+                      ...n.children,
+                      {
+                        title: `Page ${app.currentPage + 1}`,
+                        pageIndex: app.currentPage,
+                        children: [],
+                      },
+                    ],
+                  })
+                }
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+              <button
+                className={btn}
+                title="Remove (children too)"
+                onClick={() => patch(i, null)}
+              >
+                <Trash2 className="h-3 w-3 text-destructive" />
+              </button>
+            </div>
+          </div>
+          {n.children.length > 0 && (
+            <OutlineEditorTree
+              nodes={n.children}
+              depth={depth + 1}
+              onChange={(kids) => patch(i, { ...n, children: kids })}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** View / add / remove / save the document's embedded files. */
+function AttachmentsPanel() {
+  const app = useApp();
+  const [list, setList] = useState<AttachmentInfo[] | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const bytes = app.docBytes;
+
+  useEffect(() => {
+    let alive = true;
+    setList(null);
+    if (!bytes) return;
+    void import("../../lib/pdfium")
+      .then((m) => m.listAttachments(bytes))
+      .then((l) => {
+        // The PickPDF-lock payload is machinery, not a user attachment.
+        if (alive) setList(l.filter((a) => a.name !== "pickpdf-protected.bin"));
+      })
+      .catch(() => {
+        if (alive) setList([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bytes, app.docVersion]);
+
+  const download = async (att: AttachmentInfo) => {
+    if (!bytes) return;
+    try {
+      const { getAttachmentData } = await import("../../lib/pdfium");
+      const data = await getAttachmentData(bytes, att.index);
+      const url = URL.createObjectURL(new Blob([data as BlobPart]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = att.name || "attachment";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      toast.error(
+        `Could not read attachment: ${err instanceof Error ? err.message : "error"}`,
+      );
+    }
+  };
+
+  const add = async (f: File) => {
+    const data = new Uint8Array(await f.arrayBuffer());
+    void app.applyBytesOp(async (b) => {
+      const { addAttachment } = await import("../../lib/pdfium");
+      return addAttachment(b, f.name, data);
+    }, `Attached ${f.name}`);
+  };
+
+  const remove = (att: AttachmentInfo) => {
+    void app.applyBytesOp(async (b) => {
+      const { removeAttachment } = await import("../../lib/pdfium");
+      return removeAttachment(b, att.index);
+    }, `Removed ${att.name}`);
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1 px-3 pb-1 pt-2">
+        <span className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Attached files
+        </span>
+        <button
+          onClick={() => fileRef.current?.click()}
+          title="Attach a file to this document"
+          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f) void add(f);
+          }}
+        />
+      </div>
+      <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
+        {list === null ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>
+        ) : list.length === 0 ? (
+          <p className="px-2 py-2 text-[11px] text-muted-foreground">
+            No embedded files. Use + above to attach one — it travels inside the
+            saved PDF.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            {list.map((att) => (
+              <div
+                key={att.index}
+                className="group flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs hover:bg-sidebar-accent"
+              >
+                <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate" title={att.name}>
+                  {att.name || "(unnamed)"}
+                </span>
+                <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden">
+                  {formatBytes(att.size)}
+                </span>
+                <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+                  <button
+                    className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    title="Save file"
+                    onClick={() => void download(att)}
+                  >
+                    <Download className="h-3 w-3" />
+                  </button>
+                  <button
+                    className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+                    title="Remove attachment"
+                    onClick={() => remove(att)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

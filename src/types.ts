@@ -5,10 +5,15 @@ export type ToolKind =
   | "edittext"
   | "note"
   | "highlight"
+  | "underline"
+  | "strikeout"
+  | "squiggly"
   | "ink"
   | "rect"
   | "ellipse"
   | "line"
+  | "arrow"
+  | "callout"
   | "whiteout"
   | "eraser"
   | "redact"
@@ -17,7 +22,10 @@ export type ToolKind =
   | "formtext"
   | "formcheckbox"
   | "formdropdown"
-  | "formradio";
+  | "formradio"
+  | "formdate"
+  | "formsignature"
+  | "formbutton";
 
 export interface BaseAnnotation {
   id: string;
@@ -30,6 +38,8 @@ export interface BaseAnnotation {
   groupId?: string;
   /** Locked annotations can't be selected or moved (clicks pass through). */
   locked?: boolean;
+  /** Rotation in degrees, clockwise on screen, about the box center. */
+  rotation?: number;
 }
 
 export type FontFamilyKind =
@@ -75,6 +85,16 @@ export interface HighlightAnnotation extends BaseAnnotation {
   color: string;
 }
 
+export type MarkupStyle = "underline" | "strikeout" | "squiggly";
+
+/** Text markup (underline / strikethrough / squiggly) over existing document
+ *  text — created from a text selection like highlight, or by dragging a box. */
+export interface MarkupAnnotation extends BaseAnnotation {
+  kind: "markup";
+  style: MarkupStyle;
+  color: string;
+}
+
 /** Sticky-note comment — a compact marker with popup text. Baked into the
  *  saved PDF as a standard /Text popup annotation (Acrobat-compatible). */
 export interface NoteAnnotation extends BaseAnnotation {
@@ -97,7 +117,7 @@ export interface RedactAnnotation extends BaseAnnotation {
 }
 
 export interface ShapeAnnotation extends BaseAnnotation {
-  kind: "rect" | "ellipse" | "line";
+  kind: "rect" | "ellipse" | "line" | "arrow";
   color: string;
   strokeWidth: number;
   /** Fill color for rect/ellipse; omitted = no fill (outline only). */
@@ -105,6 +125,12 @@ export interface ShapeAnnotation extends BaseAnnotation {
   /** Line direction within its box: true = top-left → bottom-right ("\"),
    *  false/unset = bottom-left → top-right ("/"). Lines only. */
   down?: boolean;
+  /** Arrow only: endpoints as fractions of the box (0–1), so they survive
+   *  moves and resizes. Tail at (ax, ay), head at (bx, by). */
+  ax?: number;
+  ay?: number;
+  bx?: number;
+  by?: number;
 }
 
 export interface InkAnnotation extends BaseAnnotation {
@@ -131,9 +157,18 @@ export type FieldBorderStyle =
 
 export type FieldAlign = "left" | "center" | "right";
 
+export type FormFieldType =
+  | "text"
+  | "checkbox"
+  | "dropdown"
+  | "radio"
+  | "date"
+  | "signature"
+  | "button";
+
 export interface FormFieldAnnotation extends BaseAnnotation {
   kind: "formfield";
-  fieldType: "text" | "checkbox" | "dropdown" | "radio";
+  fieldType: FormFieldType;
   fieldName: string;
   /** Dropdown choices. */
   options?: string[];
@@ -157,6 +192,17 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   backgroundColor?: string;
   borderWidth?: number;
   borderStyle?: FieldBorderStyle;
+
+  /** Checkbox export value (/AP on-state name); defaults to "Yes". */
+  exportValue?: string;
+  /** Dropdown: user can type a custom value (combo /Edit flag). */
+  editable?: boolean;
+  /** Dropdown: allow selecting multiple options (/MultiSelect flag). */
+  multiSelect?: boolean;
+  /** Date field display format (AFDate picture, e.g. "mm/dd/yyyy"). */
+  dateFormat?: string;
+  /** Push-button caption. */
+  buttonCaption?: string;
 }
 
 /** A pending edit to an EXISTING AcroForm field (move/rename/delete). */
@@ -174,6 +220,7 @@ export interface ExistingFieldOp {
 export type Annotation =
   | TextAnnotation
   | HighlightAnnotation
+  | MarkupAnnotation
   | NoteAnnotation
   | WhiteoutAnnotation
   | RedactAnnotation
@@ -244,4 +291,7 @@ export type Screen =
   | "merge"
   | "split"
   | "watermark"
+  | "compress"
+  | "crop"
+  | "headerfooter"
   | "settings";

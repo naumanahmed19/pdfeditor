@@ -253,6 +253,11 @@ export interface TextObject {
   /** Fill color 0–255. */
   color: [number, number, number, number];
   fontName: string;
+  /** Text-matrix origin (the baseline start point) — the anchor that keeps a
+      run in place when scaling or skewing it. Falls back to the bounds
+      corner when the matrix can't be read. */
+  originX: number;
+  originY: number;
 }
 
 /** Write a JS string as a NUL-terminated UTF-16LE buffer; caller frees it. */
@@ -297,6 +302,7 @@ export async function getTextObjects(
     const f4 = rt.wasmExports.malloc(16); // 4 floats (bounds)
     const c4 = rt.wasmExports.malloc(16); // 4 uints (color)
     const fs = rt.wasmExports.malloc(4); // 1 float (font size)
+    const m6 = rt.wasmExports.malloc(24); // FS_MATRIX (6 floats)
     try {
       const count = mod.FPDFPage_CountObjects(page);
       for (let i = 0; i < count; i++) {
@@ -316,6 +322,7 @@ export async function getTextObjects(
         mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12);
         mod.FPDFPageObj_GetFillColor(obj, c4, c4 + 4, c4 + 8, c4 + 12);
         mod.FPDFTextObj_GetFontSize(obj, fs);
+        const hasMatrix = mod.FPDFPageObj_GetMatrix(obj, m6);
 
         let fontName = "";
         const font = mod.FPDFTextObj_GetFont(obj);
@@ -329,13 +336,17 @@ export async function getTextObjects(
           }
         }
 
+        const left = rt.getValue(f4, "float");
+        const bottom = rt.getValue(f4 + 4, "float");
         out.push({
           index: i,
           text,
-          left: rt.getValue(f4, "float"),
-          bottom: rt.getValue(f4 + 4, "float"),
+          left,
+          bottom,
           right: rt.getValue(f4 + 8, "float"),
           top: rt.getValue(f4 + 12, "float"),
+          originX: hasMatrix ? rt.getValue(m6 + 16, "float") : left,
+          originY: hasMatrix ? rt.getValue(m6 + 20, "float") : bottom,
           color: [
             rt.getValue(c4, "i32") & 0xff,
             rt.getValue(c4 + 4, "i32") & 0xff,
@@ -351,6 +362,7 @@ export async function getTextObjects(
       rt.wasmExports.free(f4);
       rt.wasmExports.free(c4);
       rt.wasmExports.free(fs);
+      rt.wasmExports.free(m6);
       mod.FPDFText_ClosePage(textPage);
       mod.FPDF_ClosePage(page);
     }
@@ -559,104 +571,282 @@ export interface ObjectStyle {
 
 const FPDF_FONT_TRUETYPE = 2;
 
+const FPDF_FONT_TYPE1 = 1;
+// Fill + stroke render mode — used to synthesize bold on a face the document
+// doesn't embed a bold variant of (the same trick browsers use).
+const FPDF_TEXTRENDERMODE_FILL_STROKE = 2;
+// tan(12°) — the shear browsers use for synthetic italic.
+const ITALIC_SKEW = 0.21256;
+
 /** A replacement font for the recreate path (changing font family/weight). */
 export interface TextFont {
   /** One of the 14 standard PDF font names, e.g. "Helvetica-Bold". */
   standardName?: string;
-  /** Or a TrueType font to embed. */
+  /** Or a TrueType/OpenType/Type1 font program to embed. */
   bytes?: Uint8Array;
 }
 
-/** Combined in-place text edit: change the string, ink color, size and/or font. */
-export interface TextStyle {
+/** Per-run part of a line edit. */
+export interface TextRunEdit {
+  objectIndex: number;
+  /** New string for the run; omit to keep it, "" removes the run entirely. */
   text?: string;
+}
+
+/** Style applied to every run of the edited line. */
+export interface LineStyle {
   /** New ink (fill) color, RGBA 0–255. */
   fill?: [number, number, number, number];
-  /** Multiply the current font size by this factor (via a scale transform). */
+  /** Multiply the font size by this factor (scale about `anchor`). */
   fontScale?: number;
   /**
-   * Changing the font can't be done on the existing object, so it recreates the
-   * run with this font at `fontSize` and the original position/color.
+   * Shared anchor (the line's baseline origin) for scale/skew, so all runs
+   * grow coherently instead of each about its own corner. Falls back to each
+   * run's own baseline origin.
+   */
+  anchor?: [number, number];
+  /** Synthesize bold on the original face (fill+stroke render mode). */
+  synthBold?: boolean;
+  /** Synthesize italic on the original face (shear about the baseline). */
+  synthItalic?: boolean;
+  /**
+   * Replace the font — recreates each run at its original matrix with this
+   * face. Every run must then carry an explicit `text`.
    */
   font?: TextFont;
   /** Absolute size (pt) for the recreate path. */
   fontSize?: number;
 }
 
-export async function styleTextObject(
+/** 'OTTO'/'true'/'ttcf'/sfnt-v1 → TrueType loader; anything else Type1/CFF. */
+function sniffFontType(data: Uint8Array): number {
+  const tag = String.fromCharCode(data[0], data[1], data[2], data[3]);
+  if (tag === "OTTO" || tag === "true" || tag === "ttcf") return FPDF_FONT_TRUETYPE;
+  if (data[0] === 0 && data[1] === 1 && data[2] === 0 && data[3] === 0)
+    return FPDF_FONT_TRUETYPE;
+  return FPDF_FONT_TYPE1;
+}
+
+/** Read an object's fill color, defaulting to opaque black. */
+function readFillColor(
+  mod: WrappedPdfiumModule,
+  obj: number,
+): [number, number, number, number] {
+  const rt = rtx(mod);
+  const c4 = rt.wasmExports.malloc(16);
+  try {
+    return mod.FPDFPageObj_GetFillColor(obj, c4, c4 + 4, c4 + 8, c4 + 12)
+      ? [
+          rt.getValue(c4, "i32") & 0xff,
+          rt.getValue(c4 + 4, "i32") & 0xff,
+          rt.getValue(c4 + 8, "i32") & 0xff,
+          rt.getValue(c4 + 12, "i32") & 0xff || 255,
+        ]
+      : [0, 0, 0, 255];
+  } finally {
+    rt.wasmExports.free(c4);
+  }
+}
+
+/**
+ * Edit the runs of one visual line in a single pass: per-run text replacement
+ * or removal, plus line-wide restyling. Two modes:
+ *  - keep the original fonts (default): text via FPDFText_SetText, size via a
+ *    baseline-anchored scale, bold/italic synthesized on the existing face —
+ *    the embedded font is never swapped out;
+ *  - replace the font (`style.font`): each run is recreated with the new face
+ *    at its original matrix, color and (unless overridden) size.
+ */
+export async function styleTextRuns(
   bytes: Uint8Array,
   pageIndex: number,
-  objectIndex: number,
-  style: TextStyle,
+  runs: TextRunEdit[],
+  style: LineStyle = {},
 ): Promise<Uint8Array> {
   return editPage(bytes, pageIndex, (mod, page, doc) => {
     const rt = rtx(mod);
-    const obj = mod.FPDFPage_GetObject(page, objectIndex);
-    if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
-      throw new Error(`PDFium: object ${objectIndex} is not a text object`);
-    }
+    // Resolve all handles up front — removals don't disturb other handles.
+    const objs = runs.map((r) => {
+      const obj = mod.FPDFPage_GetObject(page, r.objectIndex);
+      if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        throw new Error(`PDFium: object ${r.objectIndex} is not a text object`);
+      }
+      return obj;
+    });
+    const removeObj = (obj: number) => {
+      if (mod.FPDFPage_RemoveObject(page, obj)) mod.FPDFPageObj_Destroy(obj);
+    };
 
-    // --- Font change: recreate the run with the new font ---
+    // --- Font replacement: recreate every run with the new face ---
     if (style.font) {
-      // Preserve the original placement (matrix), color and size.
-      const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
-      mod.FPDFPageObj_GetMatrix(obj, mPtr);
-      const c4 = rt.wasmExports.malloc(16);
-      const fill: [number, number, number, number] =
-        style.fill ??
-        (mod.FPDFPageObj_GetFillColor(obj, c4, c4 + 4, c4 + 8, c4 + 12)
-          ? [
-              rt.getValue(c4, "i32") & 0xff,
-              rt.getValue(c4 + 4, "i32") & 0xff,
-              rt.getValue(c4 + 8, "i32") & 0xff,
-              rt.getValue(c4 + 12, "i32") & 0xff || 255,
-            ]
-          : [0, 0, 0, 255]);
-      rt.wasmExports.free(c4);
-      const fs = rt.wasmExports.malloc(4);
-      mod.FPDFTextObj_GetFontSize(obj, fs);
-      const size = style.fontSize ?? rt.getValue(fs, "float");
-      rt.wasmExports.free(fs);
-
       let font: number;
       if (style.font.bytes) {
         const fp = toHeap(mod, style.font.bytes);
-        font = mod.FPDFText_LoadFont(doc, fp, style.font.bytes.length, FPDF_FONT_TRUETYPE, false);
+        font = mod.FPDFText_LoadFont(
+          doc,
+          fp,
+          style.font.bytes.length,
+          sniffFontType(style.font.bytes),
+          false,
+        );
         rt.wasmExports.free(fp);
       } else {
         font = mod.FPDFText_LoadStandardFont(doc, style.font.standardName ?? "Helvetica");
       }
       if (!font) throw new Error("PDFium: could not load replacement font");
 
-      const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
-      const sp = allocUtf16(mod, style.text ?? "");
-      mod.FPDFText_SetText(next, sp);
-      rt.wasmExports.free(sp);
-      mod.FPDFPageObj_SetMatrix(next, mPtr);
-      rt.wasmExports.free(mPtr);
-      mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
-      mod.FPDFPage_InsertObject(page, next);
-      if (mod.FPDFPage_RemoveObject(page, obj)) mod.FPDFPageObj_Destroy(obj);
+      const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
+      const fs = rt.wasmExports.malloc(4);
+      try {
+        runs.forEach((r, i) => {
+          if (r.text == null) {
+            throw new Error("styleTextRuns: font replacement needs explicit text per run");
+          }
+          const obj = objs[i];
+          if (r.text === "") {
+            removeObj(obj);
+            return;
+          }
+          // Preserve the original placement (matrix), color and size.
+          mod.FPDFPageObj_GetMatrix(obj, mPtr);
+          const fill = style.fill ?? readFillColor(mod, obj);
+          mod.FPDFTextObj_GetFontSize(obj, fs);
+          const size = style.fontSize ?? rt.getValue(fs, "float");
+
+          const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
+          const sp = allocUtf16(mod, r.text);
+          mod.FPDFText_SetText(next, sp);
+          rt.wasmExports.free(sp);
+          mod.FPDFPageObj_SetMatrix(next, mPtr);
+          mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
+          mod.FPDFPage_InsertObject(page, next);
+          removeObj(obj);
+        });
+      } finally {
+        rt.wasmExports.free(mPtr);
+        rt.wasmExports.free(fs);
+      }
       return;
     }
 
-    // --- In-place edits (keep the original embedded font) ---
-    if (style.text != null) {
-      const p = allocUtf16(mod, style.text);
-      const ok = mod.FPDFText_SetText(obj, p);
-      rt.wasmExports.free(p);
-      if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
+    // --- In-place edits (keep the original embedded fonts) ---
+    const mPtr = rt.wasmExports.malloc(24);
+    const fs = rt.wasmExports.malloc(4);
+    const removed = new Set<number>();
+    try {
+      runs.forEach((r, i) => {
+        if (r.text === "") {
+          removeObj(objs[i]);
+          removed.add(i);
+          return;
+        }
+        if (r.text != null) {
+          const p = allocUtf16(mod, r.text);
+          const ok = mod.FPDFText_SetText(objs[i], p);
+          rt.wasmExports.free(p);
+          if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
+        }
+      });
+
+      const s = style.fontScale && style.fontScale !== 1 ? style.fontScale : 0;
+      runs.forEach((_, i) => {
+        if (removed.has(i)) return;
+        const obj = objs[i];
+        // Anchor for scale/skew: the shared line origin, else this run's own
+        // baseline origin (text-matrix e,f) so it doesn't drift.
+        let ax = style.anchor?.[0];
+        let ay = style.anchor?.[1];
+        if (ax == null || ay == null) {
+          ax = 0;
+          ay = 0;
+          if (mod.FPDFPageObj_GetMatrix(obj, mPtr)) {
+            ax = rt.getValue(mPtr + 16, "float");
+            ay = rt.getValue(mPtr + 20, "float");
+          }
+        }
+        if (style.fill) mod.FPDFPageObj_SetFillColor(obj, ...style.fill);
+        if (s) {
+          // Scale about the anchor so the baseline stays put.
+          mod.FPDFPageObj_Transform(obj, s, 0, 0, s, ax * (1 - s), ay * (1 - s));
+        }
+        if (style.synthItalic) {
+          // Shear x by y about the baseline: x' = x + k·(y − ay).
+          mod.FPDFPageObj_Transform(obj, 1, 0, ITALIC_SKEW, 1, -ITALIC_SKEW * ay, 0);
+        }
+        if (style.synthBold) {
+          // Fill+stroke with a hairline in the ink color reads as a bold face.
+          mod.FPDFTextObj_GetFontSize(obj, fs);
+          const size = rt.getValue(fs, "float") * (s || 1);
+          const ink = style.fill ?? readFillColor(mod, obj);
+          mod.FPDFPageObj_SetStrokeColor(obj, ink[0], ink[1], ink[2], ink[3]);
+          mod.FPDFPageObj_SetStrokeWidth(obj, Math.max(0.05, size * 0.032));
+          mod.FPDFTextObj_SetTextRenderMode(obj, FPDF_TEXTRENDERMODE_FILL_STROKE);
+        }
+      });
+    } finally {
+      rt.wasmExports.free(mPtr);
+      rt.wasmExports.free(fs);
     }
-    if (style.fill) mod.FPDFPageObj_SetFillColor(obj, ...style.fill);
-    if (style.fontScale && style.fontScale !== 1) {
-      // Scale about the run's bottom-left so its position/baseline stays put.
-      const f4 = rt.wasmExports.malloc(16);
-      mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12);
-      const ax = rt.getValue(f4, "float");
-      const ay = rt.getValue(f4 + 4, "float");
-      rt.wasmExports.free(f4);
-      const s = style.fontScale;
-      mod.FPDFPageObj_Transform(obj, s, 0, 0, s, ax * (1 - s), ay * (1 - s));
+  });
+}
+
+/** The font behind a text run: its base name and decoded font program. */
+export interface FontInfo {
+  /** Base font name, possibly with a subset prefix ("ABCDEF+Lato-Bold"). */
+  name: string;
+  /**
+   * Decoded font program bytes (PDFium substitutes a system face for
+   * unembedded fonts), or null when no data is available. Used to check
+   * glyph coverage before committing an in-place text edit.
+   */
+  data: Uint8Array | null;
+}
+
+export async function getFontInfo(
+  bytes: Uint8Array,
+  pageIndex: number,
+  objectIndex: number,
+): Promise<FontInfo> {
+  return withDoc(bytes, (mod, doc) => {
+    const rt = rtx(mod);
+    const page = mod.FPDF_LoadPage(doc, pageIndex);
+    try {
+      const obj = mod.FPDFPage_GetObject(page, objectIndex);
+      if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        throw new Error(`PDFium: object ${objectIndex} is not a text object`);
+      }
+      const font = mod.FPDFTextObj_GetFont(obj);
+      if (!font) return { name: "", data: null };
+
+      let name = "";
+      const n = mod.FPDFFont_GetBaseFontName(font, 0, 0);
+      if (n > 0) {
+        const nb = rt.wasmExports.malloc(n);
+        mod.FPDFFont_GetBaseFontName(font, nb, n);
+        name = readUtf8(mod, nb, n);
+        rt.wasmExports.free(nb);
+      }
+
+      // Two-pass read of the decoded font program.
+      let data: Uint8Array | null = null;
+      const lenPtr = rt.wasmExports.malloc(4);
+      try {
+        if (mod.FPDFFont_GetFontData(font, 0, 0, lenPtr)) {
+          const size = rt.getValue(lenPtr, "i32");
+          if (size > 0) {
+            const buf = rt.wasmExports.malloc(size);
+            if (mod.FPDFFont_GetFontData(font, buf, size, lenPtr)) {
+              data = rt.HEAPU8.slice(buf, buf + size);
+            }
+            rt.wasmExports.free(buf);
+          }
+        }
+      } finally {
+        rt.wasmExports.free(lenPtr);
+      }
+      return { name, data };
+    } finally {
+      mod.FPDF_ClosePage(page);
     }
   });
 }
@@ -926,6 +1116,363 @@ export async function decryptPdf(
     mod.FPDF_CloseDocument(doc);
     rt.wasmExports.free(filePtr);
   }
+}
+
+// --- Flatten ----------------------------------------------------------------
+
+const FLAT_NORMALDISPLAY = 0;
+const FLATTEN_FAIL = 0;
+
+/**
+ * Flatten every page: existing PDF annotations and form fields are baked into
+ * the page content stream and stop being interactive objects. Returns fresh
+ * bytes (unchanged input if there was nothing to flatten anywhere).
+ */
+export async function flattenPdf(bytes: Uint8Array): Promise<Uint8Array> {
+  return withDoc(bytes, (mod, doc) => {
+    let changed = false;
+    const pages = mod.FPDF_GetPageCount(doc);
+    for (let p = 0; p < pages; p++) {
+      const page = mod.FPDF_LoadPage(doc, p);
+      if (!page) continue;
+      try {
+        const res = mod.FPDFPage_Flatten(page, FLAT_NORMALDISPLAY);
+        if (res !== FLATTEN_FAIL) changed = true;
+      } finally {
+        mod.FPDF_ClosePage(page);
+      }
+    }
+    return changed ? saveAsCopy(mod, doc) : bytes;
+  });
+}
+
+// --- Attachments (embedded files) -------------------------------------------
+
+export interface AttachmentInfo {
+  index: number;
+  name: string;
+  /** Payload size in bytes (0 when the entry has no file stream). */
+  size: number;
+}
+
+/** List the document's embedded files (name + size). */
+export async function listAttachments(bytes: Uint8Array): Promise<AttachmentInfo[]> {
+  return withDoc(bytes, (mod, doc) => {
+    const rt = rtx(mod);
+    const out: AttachmentInfo[] = [];
+    const count = mod.FPDFDoc_GetAttachmentCount(doc);
+    const lenPtr = rt.wasmExports.malloc(4);
+    try {
+      for (let i = 0; i < count; i++) {
+        const att = mod.FPDFDoc_GetAttachment(doc, i);
+        if (!att) continue;
+        // Name: two-pass UTF-16 read.
+        const need = mod.FPDFAttachment_GetName(att, 0, 0);
+        let name = "";
+        if (need > 0) {
+          const buf = rt.wasmExports.malloc(need * 2);
+          mod.FPDFAttachment_GetName(att, buf, need);
+          name = readUtf16(mod, buf, need * 2);
+          rt.wasmExports.free(buf);
+        }
+        // Size: query pass with a null buffer.
+        rt.setValue(lenPtr, 0, "i32");
+        mod.FPDFAttachment_GetFile(att, 0, 0, lenPtr);
+        out.push({ index: i, name, size: rt.getValue(lenPtr, "i32") >>> 0 });
+      }
+      return out;
+    } finally {
+      rt.wasmExports.free(lenPtr);
+    }
+  });
+}
+
+/** Read one embedded file's payload. */
+export async function getAttachmentData(
+  bytes: Uint8Array,
+  index: number,
+): Promise<Uint8Array> {
+  return withDoc(bytes, (mod, doc) => {
+    const rt = rtx(mod);
+    const att = mod.FPDFDoc_GetAttachment(doc, index);
+    if (!att) throw new Error("PDFium: attachment not found");
+    const lenPtr = rt.wasmExports.malloc(4);
+    try {
+      rt.setValue(lenPtr, 0, "i32");
+      if (!mod.FPDFAttachment_GetFile(att, 0, 0, lenPtr)) {
+        throw new Error("PDFium: attachment has no file stream");
+      }
+      const size = rt.getValue(lenPtr, "i32") >>> 0;
+      const buf = rt.wasmExports.malloc(Math.max(1, size));
+      try {
+        mod.FPDFAttachment_GetFile(att, buf, size, lenPtr);
+        return rt.HEAPU8.slice(buf, buf + size);
+      } finally {
+        rt.wasmExports.free(buf);
+      }
+    } finally {
+      rt.wasmExports.free(lenPtr);
+    }
+  });
+}
+
+/** Embed a file into the document. Returns fresh bytes. */
+export async function addAttachment(
+  bytes: Uint8Array,
+  name: string,
+  data: Uint8Array,
+): Promise<Uint8Array> {
+  return withDoc(bytes, (mod, doc) => {
+    const rt = rtx(mod);
+    const namePtr = allocUtf16(mod, name);
+    try {
+      const att = mod.FPDFDoc_AddAttachment(doc, namePtr);
+      if (!att) throw new Error("PDFium: could not add attachment");
+      const dataPtr = toHeap(mod, data);
+      try {
+        if (!mod.FPDFAttachment_SetFile(att, doc, dataPtr, data.length)) {
+          throw new Error("PDFium: could not write attachment data");
+        }
+      } finally {
+        rt.wasmExports.free(dataPtr);
+      }
+      return saveAsCopy(mod, doc);
+    } finally {
+      rt.wasmExports.free(namePtr);
+    }
+  });
+}
+
+/** Delete the embedded file at `index`. Returns fresh bytes. */
+export async function removeAttachment(
+  bytes: Uint8Array,
+  index: number,
+): Promise<Uint8Array> {
+  return withDoc(bytes, (mod, doc) => {
+    if (!mod.FPDFDoc_DeleteAttachment(doc, index)) {
+      throw new Error("PDFium: could not delete attachment");
+    }
+    return saveAsCopy(mod, doc);
+  });
+}
+
+// --- Compress / optimize (image downsampling) --------------------------------
+
+export interface CompressOptions {
+  /** JPEG quality 0–1 (canvas encoder scale). */
+  quality: number;
+  /** Downsample images above this effective resolution (dots per inch). */
+  targetDpi: number;
+}
+
+export interface CompressResult {
+  bytes: Uint8Array;
+  /** Input / output file sizes in bytes. */
+  before: number;
+  after: number;
+  imagesProcessed: number;
+}
+
+/**
+ * Shrink the document by downsampling and re-encoding its images: every image
+ * whose effective resolution exceeds `targetDpi` (or whose stored data is far
+ * larger than a re-encode) is decoded, scaled down on a canvas, and re-embedded
+ * as JPEG (opaque) or PNG (has transparency, keeps its alpha). Text and vector
+ * content are untouched.
+ */
+export async function compressImages(
+  bytes: Uint8Array,
+  opts: CompressOptions,
+): Promise<CompressResult> {
+  const mod = await getPdfium();
+  const rt = rtx(mod);
+  const filePtr = toHeap(mod, bytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, "");
+  if (!doc) {
+    rt.wasmExports.free(filePtr);
+    throw new Error(`PDFium: could not open document (err ${mod.FPDF_GetLastError()})`);
+  }
+  let imagesProcessed = 0;
+  try {
+    const i4a = rt.wasmExports.malloc(4);
+    const i4b = rt.wasmExports.malloc(4);
+    const f4 = rt.wasmExports.malloc(16);
+    const pageArr = rt.wasmExports.malloc(4); // FPDF_PAGE[1] for SetJpeg/SetPng
+    try {
+      const pageCount = mod.FPDF_GetPageCount(doc);
+      for (let p = 0; p < pageCount; p++) {
+        const page = mod.FPDF_LoadPage(doc, p);
+        if (!page) continue;
+        let pageChanged = false;
+        try {
+          rt.setValue(pageArr, page, "i32");
+          const count = mod.FPDFPage_CountObjects(page);
+          for (let i = 0; i < count; i++) {
+            const obj = mod.FPDFPage_GetObject(page, i);
+            if (mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) continue;
+            if (!mod.FPDFImageObj_GetImagePixelSize(obj, i4a, i4b)) continue;
+            const pxW = rt.getValue(i4a, "i32");
+            const pxH = rt.getValue(i4b, "i32");
+            if (pxW < 32 || pxH < 32) continue; // icons etc — not worth it
+            if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
+            const wPts = rt.getValue(f4 + 8, "float") - rt.getValue(f4, "float");
+            const hPts = rt.getValue(f4 + 12, "float") - rt.getValue(f4 + 4, "float");
+            if (wPts <= 1 || hPts <= 1) continue;
+            // Effective DPI at the size the image is actually displayed.
+            const dpi = pxW / (wPts / 72);
+            const targetW = Math.max(32, Math.round((wPts / 72) * opts.targetDpi));
+            const targetH = Math.max(32, Math.round((hPts / 72) * opts.targetDpi));
+            const downsample = dpi > opts.targetDpi * 1.15;
+            // Stored size — re-encoding tiny streams just bloats the file.
+            const storedSize = mod.FPDFImageObj_GetImageDataRaw(obj, 0, 0);
+            if (!downsample && storedSize < 50_000) continue;
+
+            // Decode at native size (raw pixels, matrix and mask ignored).
+            const bmp = mod.FPDFImageObj_GetBitmap(obj);
+            if (!bmp) continue;
+            try {
+              const encoded = encodeBitmapScaled(
+                mod,
+                bmp,
+                downsample ? Math.min(pxW, targetW) : pxW,
+                downsample ? Math.min(pxH, targetH) : pxH,
+                opts.quality,
+              );
+              if (!encoded || encoded.data.length >= storedSize * 0.9) continue;
+              const dataPtr = toHeap(mod, encoded.data);
+              const ok = encoded.png
+                ? mod.EPDFImageObj_SetPng(pageArr, 1, obj, dataPtr, encoded.data.length)
+                : mod.EPDFImageObj_SetJpeg(pageArr, 1, obj, dataPtr, encoded.data.length);
+              rt.wasmExports.free(dataPtr);
+              if (ok) {
+                imagesProcessed++;
+                pageChanged = true;
+              }
+            } finally {
+              mod.FPDFBitmap_Destroy(bmp);
+            }
+          }
+          if (pageChanged) mod.FPDFPage_GenerateContent(page);
+        } finally {
+          mod.FPDF_ClosePage(page);
+        }
+      }
+    } finally {
+      rt.wasmExports.free(i4a);
+      rt.wasmExports.free(i4b);
+      rt.wasmExports.free(f4);
+      rt.wasmExports.free(pageArr);
+    }
+    const out = imagesProcessed ? saveAsCopy(mod, doc) : bytes;
+    return {
+      bytes: out,
+      before: bytes.length,
+      after: out.length,
+      imagesProcessed,
+    };
+  } finally {
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+}
+
+// FPDFBitmap formats (fpdfview.h).
+const FPDFBitmap_Gray = 1;
+const FPDFBitmap_BGR = 2;
+const FPDFBitmap_BGRx = 3;
+const FPDFBitmap_BGRA = 4;
+
+/**
+ * Read a PDFium bitmap, scale it to `outW`×`outH` on a canvas and encode it —
+ * JPEG for opaque images, PNG when real transparency is present. Returns null
+ * when the bitmap format is unsupported or encoding fails.
+ */
+function encodeBitmapScaled(
+  mod: WrappedPdfiumModule,
+  bmp: number,
+  outW: number,
+  outH: number,
+  quality: number,
+): { data: Uint8Array; png: boolean } | null {
+  const rt = rtx(mod);
+  const w = mod.FPDFBitmap_GetWidth(bmp);
+  const h = mod.FPDFBitmap_GetHeight(bmp);
+  const format = mod.FPDFBitmap_GetFormat(bmp);
+  const stride = mod.FPDFBitmap_GetStride(bmp);
+  const bufPtr = mod.FPDFBitmap_GetBuffer(bmp);
+  if (!w || !h || !bufPtr) return null;
+
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  const heap = rt.HEAPU8;
+  let hasAlpha = false;
+  for (let y = 0; y < h; y++) {
+    let src = bufPtr + y * stride;
+    let dst = y * w * 4;
+    for (let x = 0; x < w; x++) {
+      let r = 0,
+        g = 0,
+        b = 0,
+        a = 255;
+      switch (format) {
+        case FPDFBitmap_Gray:
+          r = g = b = heap[src];
+          src += 1;
+          break;
+        case FPDFBitmap_BGR:
+          b = heap[src];
+          g = heap[src + 1];
+          r = heap[src + 2];
+          src += 3;
+          break;
+        case FPDFBitmap_BGRx:
+          b = heap[src];
+          g = heap[src + 1];
+          r = heap[src + 2];
+          src += 4;
+          break;
+        case FPDFBitmap_BGRA:
+          b = heap[src];
+          g = heap[src + 1];
+          r = heap[src + 2];
+          a = heap[src + 3];
+          if (a < 255) hasAlpha = true;
+          src += 4;
+          break;
+        default:
+          return null;
+      }
+      rgba[dst] = r;
+      rgba[dst + 1] = g;
+      rgba[dst + 2] = b;
+      rgba[dst + 3] = a;
+      dst += 4;
+    }
+  }
+
+  const full = document.createElement("canvas");
+  full.width = w;
+  full.height = h;
+  full.getContext("2d")!.putImageData(new ImageData(rgba, w, h), 0, 0);
+
+  let canvas = full;
+  if (outW < w || outH < h) {
+    canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, outW);
+    canvas.height = Math.max(1, outH);
+    const ctx = canvas.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(full, 0, 0, canvas.width, canvas.height);
+  }
+
+  const dataUrl = hasAlpha
+    ? canvas.toDataURL("image/png")
+    : canvas.toDataURL("image/jpeg", quality);
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) return null;
+  const bin = atob(dataUrl.slice(comma + 1));
+  const data = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+  return { data, png: hasAlpha };
 }
 
 /** Render a page straight onto a canvas element (creates one if omitted). */

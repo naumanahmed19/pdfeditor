@@ -37,6 +37,9 @@ import { SignatureModal } from "./components/viewer/SignatureModal";
 import { AiPanel } from "./components/ai/AiPanel";
 import { SettingsScreen } from "./components/settings/SettingsScreen";
 import {
+  CompressScreen,
+  CropScreen,
+  HeaderFooterScreen,
   MergeScreen,
   OrganizeScreen,
   SplitScreen,
@@ -51,6 +54,9 @@ const SCREEN_TITLES: Record<string, string> = {
   merge: "Merge PDFs",
   split: "Split & extract",
   watermark: "Watermark & numbers",
+  compress: "Compress",
+  crop: "Crop pages",
+  headerfooter: "Headers & footers",
   settings: "Settings",
 };
 
@@ -477,6 +483,9 @@ function Shell() {
             {app.screen === "merge" && <MergeScreen />}
             {app.screen === "split" && <SplitScreen />}
             {app.screen === "watermark" && <WatermarkScreen />}
+            {app.screen === "compress" && <CompressScreen />}
+            {app.screen === "crop" && <CropScreen />}
+            {app.screen === "headerfooter" && <HeaderFooterScreen />}
             {app.screen === "settings" && <SettingsScreen />}
           </div>
         </main>

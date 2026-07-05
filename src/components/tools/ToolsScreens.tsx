@@ -1,15 +1,17 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
   Copy,
+  Crop,
   Download,
   FileImage,
   FilePlus2,
   FolderOpen,
   Import,
+  Minimize2,
   RotateCcw,
   RotateCw,
   Trash2,
@@ -23,8 +25,10 @@ import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Thumbnail } from "../layout/Sidebar";
 import {
+  addHeadersFooters,
   addPageNumbers,
   addWatermark,
+  cropPages,
   deletePages,
   duplicatePage,
   extractPages,
@@ -616,6 +620,557 @@ export function WatermarkScreen() {
       </div>
 
       <div className="pt-5">
+        <Button variant="outline" className="gap-2" onClick={() => void app.downloadCurrent()}>
+          <Download className="h-4 w-4" /> Save PDF
+        </Button>
+      </div>
+    </ToolShell>
+  );
+}
+
+/* ---------------- Compress / optimize ---------------- */
+
+export function CompressScreen() {
+  const app = useApp();
+  const [quality, setQuality] = useState(0.75);
+  const [dpi, setDpi] = useState(150);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{
+    before: number;
+    after: number;
+    images: number;
+  } | null>(null);
+
+  if (!app.pdf || !app.docBytes) {
+    return (
+      <ToolShell title="Compress" description="Reduce file size by downsampling and re-encoding images.">
+        <NeedsDocument />
+      </ToolShell>
+    );
+  }
+
+  const run = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      // The compressor lives in the lazily-loaded PDFium module (~5 MB wasm).
+      const { compressImages } = await import("../../lib/pdfium");
+      await app.applyBytesOp(async (b) => {
+        const res = await compressImages(b, { quality, targetDpi: dpi });
+        setResult({ before: res.before, after: res.after, images: res.imagesProcessed });
+        return res.bytes;
+      }, "Document compressed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ToolShell
+      title="Compress"
+      description={`Shrink “${app.docName ?? "the document"}” by downsampling oversized images and re-encoding them. Text and vector content stay sharp.`}
+    >
+      <div className="rounded-xl border bg-card p-4 shadow-shell">
+        <div className="flex flex-wrap items-center gap-5 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2">
+            Image quality
+            <input
+              type="range"
+              min={0.4}
+              max={0.95}
+              step={0.05}
+              value={quality}
+              onChange={(e) => setQuality(Number(e.target.value))}
+            />
+            {Math.round(quality * 100)}%
+          </label>
+          <label className="flex items-center gap-2">
+            Max resolution
+            <Select
+              value={dpi}
+              onChange={(e) => setDpi(Number(e.target.value))}
+              aria-label="Target image resolution"
+              className="h-7 w-36 px-2 text-xs"
+            >
+              <option value={72}>72 dpi (screen)</option>
+              <option value={96}>96 dpi</option>
+              <option value={150}>150 dpi (ebook)</option>
+              <option value={200}>200 dpi</option>
+              <option value={300}>300 dpi (print)</option>
+            </Select>
+          </label>
+          <Button size="sm" className="gap-2" disabled={busy} onClick={() => void run()}>
+            <Minimize2 className="h-3.5 w-3.5" />
+            {busy ? "Compressing…" : "Compress document"}
+          </Button>
+        </div>
+        <p className="pt-3 text-xs text-muted-foreground">
+          Current size: {formatBytes(app.docBytes.length)}
+        </p>
+        {result && (
+          <p className="pt-1 text-xs">
+            {result.images === 0 ? (
+              <span className="text-muted-foreground">
+                No images needed recompression at these settings — the file is unchanged.
+              </span>
+            ) : (
+              <span>
+                Recompressed {result.images} image{result.images === 1 ? "" : "s"}:{" "}
+                {formatBytes(result.before)} → <b>{formatBytes(result.after)}</b>{" "}
+                ({result.after < result.before
+                  ? `−${Math.round((1 - result.after / result.before) * 100)}%`
+                  : "no gain"})
+              </span>
+            )}
+          </p>
+        )}
+      </div>
+      <div className="pt-5">
+        <Button variant="outline" className="gap-2" onClick={() => void app.downloadCurrent()}>
+          <Download className="h-4 w-4" /> Save PDF
+        </Button>
+      </div>
+    </ToolShell>
+  );
+}
+
+/* ---------------- Crop pages ---------------- */
+
+export function CropScreen() {
+  const app = useApp();
+  const [previewPage, setPreviewPage] = useState(0);
+  // Crop rectangle as fractions of the page (survives page switches / zoom).
+  const [frac, setFrac] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+  const [scope, setScope] = useState<"page" | "all" | "range">("all");
+  const [range, setRange] = useState("");
+  const [permanent, setPermanent] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{
+    mode: "move" | "nw" | "ne" | "sw" | "se";
+    startX: number;
+    startY: number;
+    orig: { x: number; y: number; w: number; h: number };
+  } | null>(null);
+
+  const pdf = app.pdf;
+  const pageCount = app.numPages;
+  const page = pdf && previewPage < pageCount ? pdf.page(previewPage) : null;
+  const previewScale = page ? Math.min(480 / page.width, 560 / page.height) : 1;
+
+  useEffect(() => {
+    if (!pdf || !canvasRef.current || !page) return;
+    void renderPageToCanvas(pdf, previewPage, canvasRef.current, previewScale);
+  }, [pdf, previewPage, previewScale, app.docVersion, page]);
+
+  if (!pdf || !app.docBytes || !page) {
+    return (
+      <ToolShell title="Crop pages" description="Trim page margins or cut a page down to a region.">
+        <NeedsDocument />
+      </ToolShell>
+    );
+  }
+
+  const previewW = page.width * previewScale;
+  const previewH = page.height * previewScale;
+
+  const beginDrag = (e: React.PointerEvent, mode: "move" | "nw" | "ne" | "sw" | "se") => {
+    e.preventDefault();
+    e.stopPropagation();
+    drag.current = { mode, startX: e.clientX, startY: e.clientY, orig: { ...frac } };
+    const onMove = (ev: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      const dx = (ev.clientX - d.startX) / previewW;
+      const dy = (ev.clientY - d.startY) / previewH;
+      const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+      setFrac(() => {
+        const o = d.orig;
+        if (d.mode === "move") {
+          return {
+            ...o,
+            x: clamp(o.x + dx, 0, 1 - o.w),
+            y: clamp(o.y + dy, 0, 1 - o.h),
+          };
+        }
+        let { x, y, w, h } = o;
+        if (d.mode === "nw" || d.mode === "sw") {
+          const nx = clamp(o.x + dx, 0, o.x + o.w - 0.05);
+          w = o.w + (o.x - nx);
+          x = nx;
+        } else {
+          w = clamp(o.w + dx, 0.05, 1 - o.x);
+        }
+        if (d.mode === "nw" || d.mode === "ne") {
+          const ny = clamp(o.y + dy, 0, o.y + o.h - 0.05);
+          h = o.h + (o.y - ny);
+          y = ny;
+        } else {
+          h = clamp(o.h + dy, 0.05, 1 - o.y);
+        }
+        return { x, y, w, h };
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      drag.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const apply = () => {
+    const pageIndexes =
+      scope === "page"
+        ? [previewPage]
+        : scope === "range"
+          ? parsePageRanges(range, pageCount)
+          : Array.from({ length: pageCount }, (_, i) => i);
+    if (!pageIndexes.length) {
+      toast.error(`Enter valid pages, e.g. "1-3, 5" (document has ${pageCount} pages)`);
+      return;
+    }
+    // Fractions → display points of the previewed page (annotation space).
+    const rect = {
+      x: frac.x * page.width,
+      y: frac.y * page.height,
+      w: frac.w * page.width,
+      h: frac.h * page.height,
+    };
+    void app.applyBytesOp(
+      (b) => cropPages(b, pageIndexes, rect, permanent),
+      `Cropped ${pageIndexes.length} page${pageIndexes.length === 1 ? "" : "s"}`,
+    );
+  };
+
+  const handle = "absolute h-3 w-3 rounded-sm border border-white bg-blue-500";
+  return (
+    <ToolShell
+      title="Crop pages"
+      description="Drag the box over the area to keep, then apply it to this page, a range, or the whole document."
+    >
+      <div className="flex flex-wrap gap-6">
+        <div className="relative select-none self-start rounded-lg border bg-card p-2 shadow-shell">
+          <div className="relative" style={{ width: previewW, height: previewH }}>
+            <canvas ref={canvasRef} className="absolute inset-0" />
+            {/* dimmed outside area */}
+            <div
+              className="absolute inset-0"
+              style={{
+                background: "rgba(15, 23, 42, 0.45)",
+                clipPath: `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 ${frac.y * 100}%, ${frac.x * 100}% ${frac.y * 100}%, ${frac.x * 100}% ${(frac.y + frac.h) * 100}%, ${(frac.x + frac.w) * 100}% ${(frac.y + frac.h) * 100}%, ${(frac.x + frac.w) * 100}% ${frac.y * 100}%, 0 ${frac.y * 100}%)`,
+              }}
+            />
+            <div
+              ref={boxRef}
+              className="absolute cursor-move border-2 border-blue-500"
+              style={{
+                left: frac.x * previewW,
+                top: frac.y * previewH,
+                width: frac.w * previewW,
+                height: frac.h * previewH,
+                touchAction: "none",
+              }}
+              onPointerDown={(e) => beginDrag(e, "move")}
+            >
+              <div className={cn(handle, "-left-1.5 -top-1.5 cursor-nwse-resize")} onPointerDown={(e) => beginDrag(e, "nw")} />
+              <div className={cn(handle, "-right-1.5 -top-1.5 cursor-nesw-resize")} onPointerDown={(e) => beginDrag(e, "ne")} />
+              <div className={cn(handle, "-bottom-1.5 -left-1.5 cursor-nesw-resize")} onPointerDown={(e) => beginDrag(e, "sw")} />
+              <div className={cn(handle, "-bottom-1.5 -right-1.5 cursor-nwse-resize")} onPointerDown={(e) => beginDrag(e, "se")} />
+            </div>
+          </div>
+          <div className="flex items-center justify-center gap-2 pt-2 text-xs text-muted-foreground">
+            <IconBtn title="Previous page" disabled={previewPage === 0} onClick={() => setPreviewPage((p) => p - 1)}>
+              <ArrowLeft className="h-3.5 w-3.5" />
+            </IconBtn>
+            Page {previewPage + 1} / {pageCount}
+            <IconBtn
+              title="Next page"
+              disabled={previewPage >= pageCount - 1}
+              onClick={() => setPreviewPage((p) => p + 1)}
+            >
+              <ArrowRight className="h-3.5 w-3.5" />
+            </IconBtn>
+          </div>
+        </div>
+
+        <div className="flex min-w-56 flex-1 flex-col gap-3">
+          <div className="rounded-xl border bg-card p-4 text-sm shadow-shell">
+            <p className="pb-2 font-medium">Apply to</p>
+            <div className="flex flex-col gap-1.5 text-xs">
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={scope === "all"} onChange={() => setScope("all")} />
+                All pages
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={scope === "page"} onChange={() => setScope("page")} />
+                This page only
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={scope === "range"} onChange={() => setScope("range")} />
+                Pages
+                <Input
+                  value={range}
+                  onChange={(e) => {
+                    setRange(e.target.value);
+                    setScope("range");
+                  }}
+                  placeholder={`e.g. 1-3, 5`}
+                  className="h-7 w-32 px-2 text-xs"
+                />
+              </label>
+            </div>
+            <label className="mt-3 flex items-start gap-2 border-t pt-3 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={permanent}
+                onChange={(e) => setPermanent(e.target.checked)}
+              />
+              <span>
+                Remove the cropped area permanently (rewrites the page boundaries; otherwise the
+                crop only hides it and can be undone by editing the page boxes later)
+              </span>
+            </label>
+            <div className="pt-3">
+              <Button className="gap-2" onClick={apply}>
+                <Crop className="h-4 w-4" /> Apply crop
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Keeping {Math.round(frac.w * page.width)} × {Math.round(frac.h * page.height)} pt of{" "}
+            {Math.round(page.width)} × {Math.round(page.height)} pt.
+          </p>
+        </div>
+      </div>
+    </ToolShell>
+  );
+}
+
+/* ---------------- Headers & footers (+ Bates) ---------------- */
+
+const HF_TOKEN_HINT = "Tokens: {page} {pages} {date} {bates}";
+
+export function HeaderFooterScreen() {
+  const app = useApp();
+  const [slots, setSlots] = useState({
+    headerLeft: "",
+    headerCenter: "",
+    headerRight: "",
+    footerLeft: "",
+    footerCenter: "{page} / {pages}",
+    footerRight: "",
+  });
+  const [fontSize, setFontSize] = useState(10);
+  const [color, setColor] = useState("#404040");
+  const [margin, setMargin] = useState(24);
+  const [sideMargin, setSideMargin] = useState(36);
+  const [range, setRange] = useState("");
+  const [batesOn, setBatesOn] = useState(false);
+  const [batesPrefix, setBatesPrefix] = useState("");
+  const [batesSuffix, setBatesSuffix] = useState("");
+  const [batesStart, setBatesStart] = useState(1);
+  const [batesDigits, setBatesDigits] = useState(6);
+
+  if (!app.pdf || !app.docBytes) {
+    return (
+      <ToolShell title="Headers & footers" description="Stamp text, dates, page numbers and Bates numbers.">
+        <NeedsDocument />
+      </ToolShell>
+    );
+  }
+  const pageCount = app.numPages;
+
+  const apply = () => {
+    const anyText = Object.values(slots).some((s) => s.trim());
+    if (!anyText) {
+      toast.error("Fill in at least one header or footer slot");
+      return;
+    }
+    let pageIndexes: number[] | null = null;
+    if (range.trim()) {
+      pageIndexes = parsePageRanges(range, pageCount);
+      if (!pageIndexes.length) {
+        toast.error(`Enter valid pages, e.g. "1-3, 5" (document has ${pageCount} pages)`);
+        return;
+      }
+    }
+    let effective = { ...slots };
+    if (batesOn && !Object.values(slots).some((s) => s.includes("{bates}"))) {
+      // Bates on but no slot uses it — default it into the emptiest footer corner.
+      const slot = !slots.footerRight.trim() ? "footerRight" : "footerLeft";
+      effective = { ...effective, [slot]: "{bates}" };
+    }
+    void app.applyBytesOp(
+      (b) =>
+        addHeadersFooters(b, {
+          slots: effective,
+          fontSize,
+          color,
+          margin,
+          sideMargin,
+          pageIndexes,
+          bates: batesOn
+            ? { prefix: batesPrefix, suffix: batesSuffix, start: batesStart, digits: batesDigits }
+            : undefined,
+        }),
+      "Headers / footers added",
+    );
+  };
+
+  const slotInput = (key: keyof typeof slots, label: string) => (
+    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+      {label}
+      <Input
+        value={slots[key]}
+        onChange={(e) => setSlots((s) => ({ ...s, [key]: e.target.value }))}
+        className="h-8 px-2 text-xs"
+        placeholder="—"
+      />
+    </label>
+  );
+
+  return (
+    <ToolShell
+      title="Headers & footers"
+      description="Stamp up to six text slots on every page — free text plus {page}, {pages}, {date} and Bates {bates} tokens."
+    >
+      <div className="rounded-xl border bg-card p-4 shadow-shell">
+        <p className="pb-2 text-sm font-medium">Header</p>
+        <div className="grid grid-cols-3 gap-3">
+          {slotInput("headerLeft", "Left")}
+          {slotInput("headerCenter", "Center")}
+          {slotInput("headerRight", "Right")}
+        </div>
+        <p className="pb-2 pt-4 text-sm font-medium">Footer</p>
+        <div className="grid grid-cols-3 gap-3">
+          {slotInput("footerLeft", "Left")}
+          {slotInput("footerCenter", "Center")}
+          {slotInput("footerRight", "Right")}
+        </div>
+        <p className="pt-2 text-[11px] text-muted-foreground">{HF_TOKEN_HINT}</p>
+
+        <div className="mt-4 flex flex-wrap items-center gap-4 border-t pt-4 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2">
+            Size
+            <Select
+              value={fontSize}
+              onChange={(e) => setFontSize(Number(e.target.value))}
+              aria-label="Font size"
+              className="h-7 w-16 px-2 text-xs"
+            >
+              {[8, 9, 10, 11, 12, 14].map((s) => (
+                <option key={s} value={s}>
+                  {s}pt
+                </option>
+              ))}
+            </Select>
+          </label>
+          <label className="flex items-center gap-2">
+            Color
+            <ColorSwatch value={color} onChange={setColor} title="Text color" />
+          </label>
+          <label className="flex items-center gap-2">
+            Top/bottom margin
+            <Input
+              type="number"
+              value={margin}
+              onChange={(e) => setMargin(Math.max(4, Number(e.target.value) || 24))}
+              className="h-7 w-16 px-2 text-xs"
+            />
+            pt
+          </label>
+          <label className="flex items-center gap-2">
+            Side margin
+            <Input
+              type="number"
+              value={sideMargin}
+              onChange={(e) => setSideMargin(Math.max(4, Number(e.target.value) || 36))}
+              className="h-7 w-16 px-2 text-xs"
+            />
+            pt
+          </label>
+          <label className="flex items-center gap-2">
+            Pages
+            <Input
+              value={range}
+              onChange={(e) => setRange(e.target.value)}
+              placeholder="all"
+              className="h-7 w-28 px-2 text-xs"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={batesOn} onChange={(e) => setBatesOn(e.target.checked)} />
+          Bates numbering
+        </label>
+        <p className="pb-3 pt-1 text-xs text-muted-foreground">
+          A sequential stamp (e.g. ACME-000001) advancing on every stamped page. Placed where a
+          slot contains {"{bates}"} — or in a free footer corner automatically.
+        </p>
+        {batesOn && (
+          <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+            <label className="flex items-center gap-2">
+              Prefix
+              <Input
+                value={batesPrefix}
+                onChange={(e) => setBatesPrefix(e.target.value)}
+                placeholder="ACME-"
+                className="h-7 w-24 px-2 text-xs"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              Start at
+              <Input
+                type="number"
+                min={0}
+                value={batesStart}
+                onChange={(e) => setBatesStart(Math.max(0, Number(e.target.value) || 0))}
+                className="h-7 w-20 px-2 text-xs"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              Digits
+              <Select
+                value={batesDigits}
+                onChange={(e) => setBatesDigits(Number(e.target.value))}
+                aria-label="Bates digits"
+                className="h-7 w-16 px-2 text-xs"
+              >
+                {[4, 5, 6, 7, 8].map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="flex items-center gap-2">
+              Suffix
+              <Input
+                value={batesSuffix}
+                onChange={(e) => setBatesSuffix(e.target.value)}
+                className="h-7 w-24 px-2 text-xs"
+              />
+            </label>
+            <span>
+              Preview:{" "}
+              <b className="text-foreground">
+                {batesPrefix}
+                {String(batesStart).padStart(batesDigits, "0")}
+                {batesSuffix}
+              </b>
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 pt-5">
+        <Button onClick={apply}>Apply to document</Button>
         <Button variant="outline" className="gap-2" onClick={() => void app.downloadCurrent()}>
           <Download className="h-4 w-4" /> Save PDF
         </Button>

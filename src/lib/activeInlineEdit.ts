@@ -8,6 +8,9 @@
 export interface InlineEditControls {
   colorHex: string;
   sizePt: number;
+  /** The run's real base font name (subset prefix stripped), for display. */
+  fontName: string;
+  /** "original" = keep the embedded face; otherwise a replacement family. */
   family: string;
   bold: boolean;
   italic: boolean;

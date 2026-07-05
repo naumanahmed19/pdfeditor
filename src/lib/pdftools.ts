@@ -12,7 +12,10 @@ import {
   PDFTextField,
   StandardFonts,
   TextAlignment,
+  concatTransformationMatrix,
   degrees,
+  popGraphicsState,
+  pushGraphicsState,
   rgb,
   type PDFFont,
 } from "pdf-lib";
@@ -181,6 +184,204 @@ export async function addWatermark(
       opacity: opts.opacity,
       rotate: opts.diagonal ? degrees(45) : degrees(0),
     });
+  }
+  return doc.save();
+}
+
+/**
+ * Crop pages: `rect` is the area to KEEP, in display points of the rotated
+ * page as shown in the viewer (top-left origin, scale 1) — the same space
+ * annotations use. Sets the CropBox (what viewers show); `permanent` also
+ * rewrites the MediaBox so the cropped area is gone for every consumer.
+ */
+export async function cropPages(
+  bytes: Uint8Array,
+  pageIndexes: number[],
+  rect: { x: number; y: number; w: number; h: number },
+  permanent: boolean,
+): Promise<Uint8Array> {
+  const doc = await load(bytes);
+  for (const idx of pageIndexes) {
+    if (idx < 0 || idx >= doc.getPageCount()) continue;
+    const page = doc.getPage(idx);
+    // Displayed geometry is the CropBox (falls back to MediaBox), so the
+    // selection maps relative to it — including its origin offset.
+    const cb = page.getCropBox();
+    const rotation = page.getRotation().angle;
+    const r = toPdfRect(rect, cb.width, cb.height, rotation);
+    const x = cb.x + r.x;
+    const y = cb.y + r.y;
+    page.setCropBox(x, y, r.w, r.h);
+    if (permanent) page.setMediaBox(x, y, r.w, r.h);
+  }
+  return doc.save();
+}
+
+export interface BatesOptions {
+  prefix: string;
+  suffix: string;
+  start: number;
+  /** Zero-padded width of the number, e.g. 6 → 000001. */
+  digits: number;
+}
+
+export interface HeaderFooterOptions {
+  /** Text per slot; empty/undefined slots are skipped. Tokens: {page},
+   *  {pages}, {date}, {bates}. */
+  slots: {
+    headerLeft?: string;
+    headerCenter?: string;
+    headerRight?: string;
+    footerLeft?: string;
+    footerCenter?: string;
+    footerRight?: string;
+  };
+  fontSize: number;
+  color: string;
+  /** Distance from the top/bottom edge (points). */
+  margin: number;
+  /** Distance from the left/right edge (points). */
+  sideMargin: number;
+  /** 0-based pages to stamp; null/undefined = every page. */
+  pageIndexes?: number[] | null;
+  /** Bates numbering config — replaces the {bates} token; the counter
+   *  advances on every stamped page. */
+  bates?: BatesOptions;
+}
+
+/** Stamp custom headers/footers (3 header + 3 footer slots) with token
+ *  substitution and optional Bates numbering. */
+export async function addHeadersFooters(
+  bytes: Uint8Array,
+  opts: HeaderFooterOptions,
+): Promise<Uint8Array> {
+  const doc = await load(bytes);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const { r, g, b } = hexToRgb01(opts.color);
+  const color = rgb(r, g, b);
+  const pages = doc.getPages();
+  const targets =
+    opts.pageIndexes && opts.pageIndexes.length
+      ? opts.pageIndexes.filter((i) => i >= 0 && i < pages.length)
+      : pages.map((_, i) => i);
+  const dateStr = new Date().toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+
+  let bates = opts.bates ? opts.bates.start : 0;
+  for (const idx of targets) {
+    const page = pages[idx];
+    const { width, height } = page.getSize();
+    const batesStr = opts.bates
+      ? `${opts.bates.prefix}${String(bates).padStart(opts.bates.digits, "0")}${opts.bates.suffix}`
+      : "";
+    // split/join instead of replaceAll — the build targets ES2020.
+    const expand = (tpl: string) =>
+      tpl
+        .split("{page}").join(String(idx + 1))
+        .split("{pages}").join(String(pages.length))
+        .split("{date}").join(dateStr)
+        .split("{bates}").join(batesStr);
+    const draw = (
+      tpl: string | undefined,
+      slot: "left" | "center" | "right",
+      top: boolean,
+    ) => {
+      const text = tpl && expand(tpl).trim();
+      if (!text) return;
+      const tw = font.widthOfTextAtSize(text, opts.fontSize);
+      const x =
+        slot === "left"
+          ? opts.sideMargin
+          : slot === "center"
+            ? width / 2 - tw / 2
+            : width - tw - opts.sideMargin;
+      const y = top ? height - opts.margin - opts.fontSize : opts.margin;
+      page.drawText(text, { x, y, size: opts.fontSize, font, color });
+    };
+    draw(opts.slots.headerLeft, "left", true);
+    draw(opts.slots.headerCenter, "center", true);
+    draw(opts.slots.headerRight, "right", true);
+    draw(opts.slots.footerLeft, "left", false);
+    draw(opts.slots.footerCenter, "center", false);
+    draw(opts.slots.footerRight, "right", false);
+    if (opts.bates) bates++;
+  }
+  return doc.save();
+}
+
+/** Editable outline node (what the sidebar's outline editor works with). */
+export interface OutlineInput {
+  title: string;
+  /** 0-based target page; null = no destination. */
+  pageIndex: number | null;
+  children: OutlineInput[];
+}
+
+/**
+ * Replace the document outline (bookmarks) with `nodes`. An empty list
+ * removes the outline entirely. Entries with a pageIndex get a /Fit
+ * destination to that page; all levels are written expanded.
+ */
+export async function setOutline(
+  bytes: Uint8Array,
+  nodes: OutlineInput[],
+): Promise<Uint8Array> {
+  const doc = await load(bytes);
+  const ctx = doc.context;
+  doc.catalog.delete(PDFName.of("Outlines"));
+  if (nodes.length) {
+    const outlinesDict = ctx.obj({ Type: "Outlines" }) as PDFDict;
+    const outlinesRef = ctx.register(outlinesDict);
+
+    const build = (
+      items: OutlineInput[],
+      parentRef: ReturnType<typeof ctx.register>,
+    ): { first: any; last: any; count: number } => {
+      let first: any = null;
+      let prevRef: any = null;
+      let prevDict: PDFDict | null = null;
+      let count = 0;
+      for (const item of items) {
+        const dict = ctx.obj({}) as PDFDict;
+        const ref = ctx.register(dict);
+        dict.set(PDFName.of("Title"), PDFHexString.fromText(item.title));
+        dict.set(PDFName.of("Parent"), parentRef);
+        if (
+          item.pageIndex != null &&
+          item.pageIndex >= 0 &&
+          item.pageIndex < doc.getPageCount()
+        ) {
+          dict.set(
+            PDFName.of("Dest"),
+            ctx.obj([doc.getPage(item.pageIndex).ref, PDFName.of("Fit")]),
+          );
+        }
+        if (prevRef && prevDict) {
+          prevDict.set(PDFName.of("Next"), ref);
+          dict.set(PDFName.of("Prev"), prevRef);
+        }
+        const kids = build(item.children ?? [], ref);
+        if (kids.count) {
+          dict.set(PDFName.of("First"), kids.first);
+          dict.set(PDFName.of("Last"), kids.last);
+          dict.set(PDFName.of("Count"), ctx.obj(kids.count)); // positive = open
+        }
+        if (!first) first = ref;
+        prevRef = ref;
+        prevDict = dict;
+        count += 1 + kids.count;
+      }
+      return { first, last: prevRef, count };
+    };
+
+    const top = build(nodes, outlinesRef);
+    outlinesDict.set(PDFName.of("First"), top.first);
+    outlinesDict.set(PDFName.of("Last"), top.last);
+    outlinesDict.set(PDFName.of("Count"), ctx.obj(top.count));
+    doc.catalog.set(PDFName.of("Outlines"), outlinesRef);
   }
   return doc.save();
 }
@@ -501,11 +702,39 @@ export async function bakeAnnotations(
       // Redaction is applied destructively above (PDFium), not drawn as an
       // overlay — the black box is already baked into the page content.
       if (ann.kind === "redact") continue;
-      if (ann.kind === "text") {
-        await drawRichText(page, ann, r, rotation, getStyledFont);
-        continue;
+
+      // Free rotation: wrap the draw in a CTM that spins the coordinate
+      // system about the box center, so every kind (text, shapes, images,
+      // ink) bakes rotated without per-kind math. Screen-clockwise degrees
+      // map to a negative (clockwise-on-page) angle in PDF space.
+      const spin = ann.rotation ?? 0;
+      if (spin) {
+        const phi = (-spin * Math.PI) / 180;
+        const cos = Math.cos(phi);
+        const sin = Math.sin(phi);
+        const cx = r.x + r.w / 2;
+        const cy = r.y + r.h / 2;
+        page.pushOperators(
+          pushGraphicsState(),
+          concatTransformationMatrix(
+            cos,
+            sin,
+            -sin,
+            cos,
+            cx - cx * cos + cy * sin,
+            cy - cx * sin - cy * cos,
+          ),
+        );
       }
-      await drawAnnotation(doc, page, ann, r, await getFont(StandardFonts.Helvetica), rotation);
+      try {
+        if (ann.kind === "text") {
+          await drawRichText(page, ann, r, rotation, getStyledFont);
+        } else {
+          await drawAnnotation(doc, page, ann, r, await getFont(StandardFonts.Helvetica), rotation);
+        }
+      } finally {
+        if (spin) page.pushOperators(popGraphicsState());
+      }
     }
   }
 
@@ -967,6 +1196,52 @@ async function drawAnnotation(
       });
       break;
     }
+    case "markup": {
+      // Underline / strikethrough / squiggly. Endpoints are computed in
+      // display space and mapped point-by-point, so rotated pages come out
+      // right without box-edge special cases.
+      const c = hexToRgb01(ann.color);
+      const color = rgb(c.r, c.g, c.b);
+      const seg = (
+        p1: { x: number; y: number },
+        p2: { x: number; y: number },
+        thickness: number,
+      ) =>
+        page.drawLine({
+          start: displayPointToPdf(p1, page, rotation),
+          end: displayPointToPdf(p2, page, rotation),
+          color,
+          thickness,
+        });
+      if (ann.style === "squiggly") {
+        const yBase = ann.y + ann.h * 0.95;
+        const amp = Math.max(1.2, ann.h * 0.14);
+        const step = Math.max(2.4, ann.h * 0.22);
+        const t = Math.max(0.75, ann.h * 0.06);
+        let up = true;
+        let prev = { x: ann.x, y: yBase };
+        for (let x = step; x <= ann.w + step / 2; x += step) {
+          const next = {
+            x: ann.x + Math.min(x, ann.w),
+            y: up ? yBase - amp : yBase,
+          };
+          seg(prev, next, t);
+          prev = next;
+          up = !up;
+        }
+      } else {
+        const yLine =
+          ann.y + ann.h * (ann.style === "underline" ? 0.92 : 0.55);
+        seg(
+          { x: ann.x, y: yLine },
+          { x: ann.x + ann.w, y: yLine },
+          ann.style === "underline"
+            ? Math.max(0.75, ann.h * 0.06)
+            : Math.max(1, ann.h * 0.08),
+        );
+      }
+      break;
+    }
     case "whiteout": {
       const c = hexToRgb01(ann.color ?? "#ffffff");
       page.drawRectangle({
@@ -1016,6 +1291,33 @@ async function drawAnnotation(
         color: rgb(c.r, c.g, c.b),
         thickness: ann.strokeWidth,
       });
+      break;
+    }
+    case "arrow": {
+      const c = hexToRgb01(ann.color);
+      const color = rgb(c.r, c.g, c.b);
+      // Endpoints in display space (same math as the on-screen SVG), then
+      // each point mapped through the page rotation.
+      const tail = { x: ann.x + (ann.ax ?? 0) * ann.w, y: ann.y + (ann.ay ?? 0) * ann.h };
+      const head = { x: ann.x + (ann.bx ?? 1) * ann.w, y: ann.y + (ann.by ?? 1) * ann.h };
+      const angle = Math.atan2(head.y - tail.y, head.x - tail.x);
+      const headLen = Math.max(6, ann.strokeWidth * 3.5);
+      const spread = Math.PI / 7;
+      const wing = (sign: 1 | -1) => ({
+        x: head.x - headLen * Math.cos(angle + sign * spread),
+        y: head.y - headLen * Math.sin(angle + sign * spread),
+      });
+      const line = (p1: { x: number; y: number }, p2: { x: number; y: number }) =>
+        page.drawLine({
+          start: displayPointToPdf(p1, page, rotation),
+          end: displayPointToPdf(p2, page, rotation),
+          color,
+          thickness: ann.strokeWidth,
+          lineCap: 1 as any,
+        });
+      line(tail, head);
+      line(wing(1), head);
+      line(wing(-1), head);
       break;
     }
     case "ink": {

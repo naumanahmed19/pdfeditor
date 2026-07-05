@@ -34,10 +34,20 @@ import {
 } from "../../lib/richtext";
 import { activeTextEditor } from "../../lib/activeTextEditor";
 import { activeInlineEdit } from "../../lib/activeInlineEdit";
+import type { TextObject, TextRunEdit } from "../../lib/pdfium";
+import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
 import { toast } from "sonner";
 import { useApp } from "../../store";
-import type { Annotation, FormFieldAnnotation, NoteAnnotation, TextAnnotation } from "../../types";
-import { cn, uid } from "../../lib/utils";
+import { MARKUP_COLORS, MARKUP_LABEL, squigglyPath } from "../../lib/markup";
+import type {
+  Annotation,
+  FormFieldAnnotation,
+  MarkupStyle,
+  NoteAnnotation,
+  ShapeAnnotation,
+  TextAnnotation,
+} from "../../types";
+import { cn, uid, ROTATABLE_KINDS } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { ColorSwatch } from "../ui/color-swatch";
@@ -217,9 +227,14 @@ export function Viewer() {
     }
   }, [dims, effectiveScale, app]);
 
-  // Convert the current text selection into highlight annotations.
+  // Convert the current text selection into highlight / text-markup
+  // annotations (detail.style: "highlight" | "underline" | "strikeout" |
+  // "squiggly"; missing = highlight).
   useEffect(() => {
-    const handler = () => {
+    const handler = (e: Event) => {
+      const style = ((e as CustomEvent).detail?.style ?? "highlight") as
+        | "highlight"
+        | MarkupStyle;
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed) return;
       const pages = Array.from(
@@ -260,22 +275,29 @@ export function Viewer() {
         const pr = pageEl.getBoundingClientRect();
         const idx = Number(pageEl.dataset.pageIndex);
         const list = perPage.get(idx) ?? [];
-        list.push({
+        const box = {
           id: uid(),
-          kind: "highlight",
           groupId,
           x: (r.left - pr.left) / effectiveScale,
           y: (r.top - pr.top) / effectiveScale,
           w: r.width / effectiveScale,
           h: r.height / effectiveScale,
-          color: app.highlightColor,
-        });
+        };
+        list.push(
+          style === "highlight"
+            ? { ...box, kind: "highlight", color: app.highlightColor }
+            : { ...box, kind: "markup", style, color: MARKUP_COLORS[style] },
+        );
         perPage.set(idx, list);
       }
       perPage.forEach((list, page) => app.addAnnotations(page, list));
       if (perPage.size) {
         sel.removeAllRanges();
-        toast.success("Selection highlighted");
+        toast.success(
+          style === "highlight"
+            ? "Selection highlighted"
+            : `Selection marked (${MARKUP_LABEL[style].toLowerCase()})`,
+        );
       }
     };
     window.addEventListener("pdfwb:highlight-selection", handler);
@@ -330,6 +352,24 @@ export function Viewer() {
         e.preventDefault();
         if (e.shiftKey) app.redo();
         else app.undo();
+      }
+      // Annotation clipboard. Ctrl+C only steps in when an annotation is
+      // selected and no text selection exists — copying page text stays native.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        const textSel = window.getSelection();
+        if (app.editMode && app.selected && (!textSel || textSel.isCollapsed)) {
+          if (app.copySelectedAnnotation()) {
+            e.preventDefault();
+            toast.success("Annotation copied — Ctrl+V to paste");
+          }
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && app.editMode) {
+        app.pasteAnnotationClipboard();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d" && app.selected && app.editMode) {
+        e.preventDefault();
+        app.duplicateSelectedAnnotation();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -816,10 +856,11 @@ function PageView({
     // exists to copy; edittext is already gated by the modify permission).
     (app.tool === "edittext" || app.docPermissions.copy);
 
-  // "Edit existing text": clicking a text run maps the click to the real
-  // PDFium content-stream text object and opens an inline editor over it. On
-  // commit the object's string is rewritten in place (same font/size/color/
-  // position) — no whiteout patch, no overlay copy, original text truly gone.
+  // "Edit existing text": a click selects the whole visual LINE around the
+  // hit run (PDFs fragment lines into many small runs), and the inline editor
+  // shows the joined text. On commit the diff is mapped back onto the
+  // underlying content-stream objects and rewritten in place — no whiteout
+  // patch, no overlay copy, original text truly gone.
   const onTextLayerClick = async (e: React.MouseEvent) => {
     if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
     const pr = wrapRef.current.getBoundingClientRect();
@@ -861,20 +902,69 @@ function PageView({
       toast.info("Click directly on a line of text to edit it.");
       return;
     }
-    // Map the run's PDF-space box to the exact on-screen rectangle.
+
+    // Join the visual line's fragments into one editable string, remembering
+    // each run's span so the edit can be mapped back per run.
+    const lineRuns = collectLine(objs, hit);
+    let joined = "";
+    const runs: InlineEditRun[] = [];
+    for (let i = 0; i < lineRuns.length; i++) {
+      const o = lineRuns[i];
+      const next = lineRuns[i + 1];
+      // Infer a visual space where the PDF split words into separate runs.
+      const sep =
+        next &&
+        next.left - o.right > 0.15 * hit.fontSize &&
+        !o.text.endsWith(" ") &&
+        !next.text.startsWith(" ")
+          ? " "
+          : "";
+      runs.push({
+        objectIndex: o.index,
+        text: o.text,
+        start: joined.length,
+        sep,
+        originX: o.originX,
+        originY: o.originY,
+      });
+      joined += o.text + sep;
+    }
+
+    // Map the line's PDF-space box to the exact on-screen rectangle.
     const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle([
-      hit.left,
-      hit.bottom,
-      hit.right,
-      hit.top,
+      Math.min(...lineRuns.map((o) => o.left)),
+      Math.min(...lineRuns.map((o) => o.bottom)),
+      Math.max(...lineRuns.map((o) => o.right)),
+      Math.max(...lineRuns.map((o) => o.top)),
     ]);
     const [r, g, b] = hit.color;
     const hex =
       "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
     const f = detectFontFromName(hit.fontName || "");
+
+    // Text drawn with the same face elsewhere on the page — those glyphs are
+    // proven present in the embedded subset, so typing them is always safe.
+    const sameFontChars = objs
+      .filter((o) => o.fontName === hit.fontName)
+      .map((o) => o.text)
+      .join("");
+
+    // Other styles of the same family embedded in the page (a real Bold or
+    // Regular face beats a synthesized one when the user toggles B/I).
+    const root = familyRoot(hit.fontName || "");
+    const siblings: Partial<Record<string, number>> = {};
+    if (root) {
+      for (const o of objs) {
+        if (o.fontName === hit.fontName || familyRoot(o.fontName) !== root) continue;
+        const st = detectFontFromName(o.fontName);
+        const key = styleKey(st.bold, st.italic);
+        if (siblings[key] == null) siblings[key] = o.index;
+      }
+    }
+
     setInlineEdit({
-      objectIndex: hit.index,
-      original: hit.text,
+      runs,
+      original: joined,
       left: Math.min(vx1, vx2),
       top: Math.min(vy1, vy2),
       width: Math.max(Math.abs(vx2 - vx1), 24),
@@ -883,30 +973,89 @@ function PageView({
       color: `rgb(${r}, ${g}, ${b})`,
       colorHex: hex,
       fontSize: hit.fontSize,
-      fontFamily: f.family,
+      fontName: (hit.fontName || "").replace(/^[A-Z]{6}\+/, ""),
+      fallbackFamily: f.family,
       bold: f.bold,
       italic: f.italic,
+      anchor: [runs[0].originX, runs[0].originY],
+      sameFontChars,
+      siblings,
+      hitIndex: hit.index,
     });
   };
 
+  /**
+   * Recreate the line's runs with a different face. Preference order: a face
+   * of the same family the document already embeds (perfect match), then the
+   * closest bundled/standard family. Used for explicit font replacement, for
+   * un-bolding/un-italicizing (the regular face isn't synthesizable), and as
+   * the offered fallback when the embedded subset lacks a typed glyph.
+   */
+  const commitRecreate = async (
+    edit: InlineEdit,
+    runEdits: TextRunEdit[],
+    fill: [number, number, number, number] | undefined,
+    fontSize: number | undefined,
+    family: string,
+    bold: boolean,
+    italic: boolean,
+  ) => {
+    // Every run needs explicit text on the recreate path.
+    const withText = edit.runs.map((r, i) => ({
+      objectIndex: r.objectIndex,
+      text: runEdits[i].text ?? r.text,
+    }));
+
+    let font: { standardName?: string; bytes?: Uint8Array } | null = null;
+    if (family === "original") {
+      const sib = edit.siblings[styleKey(bold, italic)];
+      if (sib != null) {
+        const info = await app.getTextFontInfo(pageIndex, sib);
+        if (info?.data) {
+          // The sibling is a subset too — only use it if it covers the text.
+          const chars = [...new Set(withText.map((r) => r.text).join(""))];
+          const missing = await missingGlyphs(info.data, chars);
+          if (missing !== null && missing.length === 0) font = { bytes: info.data };
+        }
+      }
+      if (!font) font = await resolveTextFont(edit.fallbackFamily, bold, italic);
+    } else {
+      font = await resolveTextFont(family, bold, italic);
+    }
+    await app.applyTextRuns(pageIndex, withText, { font, fontSize, fill });
+  };
+
+  /** Returns true when the edit session is finished (editor should close). */
   const commitInlineEdit = async (
     text: string,
     colorHex: string,
     fontSize: number,
-    fontFamily: string,
+    family: string,
     bold: boolean,
     italic: boolean,
-  ) => {
+  ): Promise<boolean> => {
     const edit = inlineEdit;
-    if (!edit) return;
+    if (!edit) return true;
     const textChanged = text !== edit.original && text.trim().length > 0;
     const colorChanged = colorHex.toLowerCase() !== edit.colorHex.toLowerCase();
     const sizeChanged = fontSize > 0 && fontSize !== Math.round(edit.fontSize);
-    const fontChanged =
-      fontFamily !== edit.fontFamily || bold !== edit.bold || italic !== edit.italic;
-    if (!textChanged && !colorChanged && !sizeChanged && !fontChanged) {
+    const familyReplaced = family !== "original";
+    const boldOn = bold && !edit.bold;
+    const boldOff = !bold && edit.bold;
+    const italicOn = italic && !edit.italic;
+    const italicOff = !italic && edit.italic;
+    if (
+      !textChanged &&
+      !colorChanged &&
+      !sizeChanged &&
+      !familyReplaced &&
+      !boldOn &&
+      !boldOff &&
+      !italicOn &&
+      !italicOff
+    ) {
       setInlineEdit(null);
-      return;
+      return true;
     }
     const fill: [number, number, number, number] = [
       parseInt(colorHex.slice(1, 3), 16),
@@ -914,31 +1063,86 @@ function PageView({
       parseInt(colorHex.slice(5, 7), 16),
       255,
     ];
+    const runEdits = mapLineEditToRuns(edit, textChanged ? text : edit.original);
+    const newFill = colorChanged ? fill : undefined;
+    const newSize = sizeChanged ? fontSize : undefined;
+    // Turning OFF a real bold/italic needs a different face — recreate.
+    const needsRecreate = familyReplaced || boldOff || italicOff;
+
     setSavingEdit(true);
     try {
-      if (fontChanged) {
-        // Changing the font recreates the run — pass everything absolutely.
-        const font = await resolveTextFont(fontFamily, bold, italic);
-        await app.applyTextStyle(pageIndex, edit.objectIndex, {
-          text,
-          fill,
-          fontSize,
-          font,
-        });
-      } else {
-        await app.applyTextStyle(pageIndex, edit.objectIndex, {
-          text: textChanged ? text : undefined,
-          fill: colorChanged ? fill : undefined,
-          fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
-        });
+      if (needsRecreate) {
+        await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic);
+        setInlineEdit(null);
+        return true;
       }
+
+      // Glyph preflight: embedded fonts are subsets that only carry the
+      // glyphs the document already uses — refuse to silently bake characters
+      // that would render as blanks.
+      if (textChanged) {
+        const fresh = newCharacters(text, edit.original, edit.sameFontChars);
+        if (fresh.length) {
+          const info = await app.getTextFontInfo(pageIndex, edit.hitIndex);
+          const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
+          const bad = missing === null ? fresh : missing;
+          if (bad.length) {
+            const chars = bad.map((c) => `"${c}"`).join(" ");
+            toast.warning(
+              missing === null
+                ? `Couldn't verify that this PDF's font "${edit.fontName}" contains ${chars}.`
+                : `This PDF's font "${edit.fontName}" doesn't contain ${chars} — the edit would show blanks.`,
+              {
+                description:
+                  "Replace the line's font with a close match, or change the text.",
+                action: {
+                  label: "Replace font",
+                  onClick: () => {
+                    void (async () => {
+                      setSavingEdit(true);
+                      try {
+                        await commitRecreate(
+                          edit,
+                          runEdits,
+                          newFill,
+                          newSize,
+                          family,
+                          bold,
+                          italic,
+                        );
+                      } catch {
+                        toast.error("Couldn't replace the font on this line.");
+                      } finally {
+                        setSavingEdit(false);
+                        setInlineEdit(null);
+                      }
+                    })();
+                  },
+                },
+              },
+            );
+            return false; // keep the editor open so nothing is lost
+          }
+        }
+      }
+
+      await app.applyTextRuns(pageIndex, runEdits, {
+        fill: newFill,
+        fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
+        anchor: edit.anchor,
+        synthBold: boldOn || undefined,
+        synthItalic: italicOn || undefined,
+      });
+      setInlineEdit(null);
+      return true;
     } catch {
       toast.error(
-        "Couldn't edit this text in place — its font may not be embeddable. Use the Text tool to overlay a correction instead.",
+        "Couldn't edit this text in place — use the Text tool to overlay a correction instead.",
       );
+      setInlineEdit(null);
+      return true;
     } finally {
       setSavingEdit(false);
-      setInlineEdit(null);
     }
   };
 
@@ -996,8 +1200,23 @@ function PageView({
   );
 }
 
-interface InlineEdit {
+/** One content-stream run of the edited visual line. */
+interface InlineEditRun {
   objectIndex: number;
+  text: string;
+  /** Offset of this run's text within the joined line string. */
+  start: number;
+  /** Separator inferred after this run ("" or " ") — virtual, not run text. */
+  sep: string;
+  /** Baseline origin (text-matrix e,f) in page space. */
+  originX: number;
+  originY: number;
+}
+
+interface InlineEdit {
+  /** All runs of the clicked visual line, left to right. */
+  runs: InlineEditRun[];
+  /** The joined line text shown in the editor. */
   original: string;
   left: number;
   top: number;
@@ -1008,12 +1227,124 @@ interface InlineEdit {
   color: string;
   /** Original ink color as hex (for the color control). */
   colorHex: string;
-  /** Original font size in PDF points. */
+  /** Original font size in PDF points (of the clicked run). */
   fontSize: number;
-  /** Detected original font, so we only recreate the run when it changes. */
-  fontFamily: string;
+  /** Real base font name of the clicked run (subset prefix stripped). */
+  fontName: string;
+  /** Closest bundled family — used only when the face must be replaced. */
+  fallbackFamily: string;
+  /** Style detected from the font name (initial state of the B/I toggles). */
   bold: boolean;
   italic: boolean;
+  /** Line baseline origin (first run) — anchor for scale/skew transforms. */
+  anchor: [number, number];
+  /** Text drawn with the same face elsewhere on the page (glyphs known-good). */
+  sameFontChars: string;
+  /** Same-family runs in other styles: styleKey() -> objectIndex. */
+  siblings: Partial<Record<string, number>>;
+  /** Object index of the clicked run (font queries use it). */
+  hitIndex: number;
+}
+
+/** Key for a bold/italic combination ("r", "b", "i", "bi"). */
+function styleKey(bold: boolean, italic: boolean): string {
+  return `${bold ? "b" : ""}${italic ? "i" : ""}` || "r";
+}
+
+/** Family part of a base font name — subset prefix and style tokens removed. */
+function familyRoot(name: string): string {
+  return name
+    .replace(/^[A-Z]{6}\+/, "")
+    .replace(
+      /[-,._ ]?(extra ?bold|semi ?bold|demi ?bold|bold|black|heavy|italic|oblique|regular|roman|book|light|medium)/gi,
+      "",
+    )
+    .replace(/(MT|PS|Std|Pro)$/i, "")
+    .toLowerCase();
+}
+
+/**
+ * The visual line around `hit`: runs that overlap it vertically by more than
+ * half a line-height, limited to the horizontally contiguous cluster — a wide
+ * gap is a different column or table cell, not the same sentence.
+ */
+function collectLine(objs: TextObject[], hit: TextObject): TextObject[] {
+  const height = (o: TextObject) => o.top - o.bottom;
+  const line = objs
+    .filter((o) => {
+      if (!o.text.trim()) return false;
+      const overlap = Math.min(o.top, hit.top) - Math.max(o.bottom, hit.bottom);
+      return overlap > 0.5 * Math.min(height(o), height(hit));
+    })
+    .sort((a, b) => a.left - b.left);
+  const maxGap = Math.max(hit.fontSize, 6) * 1.5;
+  let a = line.indexOf(hit);
+  let b = a;
+  while (a > 0 && line[a].left - line[a - 1].right <= maxGap) a--;
+  while (b < line.length - 1 && line[b + 1].left - line[b].right <= maxGap) b++;
+  return line.slice(a, b + 1);
+}
+
+/**
+ * Map an edit of the joined line string back onto the underlying runs via a
+ * common prefix/suffix diff. A change inside one run touches only that run;
+ * a change spanning runs collapses them into the first (the rest are removed).
+ * Untouched runs keep their exact bytes — and their exact positions.
+ */
+function mapLineEditToRuns(edit: InlineEdit, newJoined: string): TextRunEdit[] {
+  const old = edit.original;
+  if (newJoined === old) {
+    return edit.runs.map((r) => ({ objectIndex: r.objectIndex }));
+  }
+  let p = 0;
+  const pMax = Math.min(old.length, newJoined.length);
+  while (p < pMax && old[p] === newJoined[p]) p++;
+  let s = 0;
+  const sMax = pMax - p;
+  while (
+    s < sMax &&
+    old[old.length - 1 - s] === newJoined[newJoined.length - 1 - s]
+  ) {
+    s++;
+  }
+  const oldEnd = old.length - s; // changed old span is [p, oldEnd)
+
+  // Each run's span includes its inferred separator, so an edit at a word
+  // boundary belongs to the run on the left.
+  const spans = edit.runs.map((r) => ({
+    start: r.start,
+    end: r.start + r.text.length + r.sep.length,
+  }));
+  let first = -1;
+  let last = -1;
+  spans.forEach((sp, i) => {
+    if (sp.end > p && sp.start < Math.max(oldEnd, p + 1)) {
+      if (first === -1) first = i;
+      last = i;
+    }
+  });
+  if (first === -1) {
+    // Pure insertion at the very end of the line — append to the last run.
+    first = last = edit.runs.length - 1;
+  }
+
+  // New text for the merged first..last range, in new-string coordinates.
+  const newEnd = newJoined.length - (old.length - spans[last].end);
+  let merged = newJoined.slice(
+    spans[first].start,
+    Math.max(newEnd, spans[first].start),
+  );
+  // The inferred separator is not real document text — don't bake it.
+  const lastSep = edit.runs[last].sep;
+  if (lastSep && merged.endsWith(lastSep)) {
+    merged = merged.slice(0, -lastSep.length);
+  }
+
+  return edit.runs.map((r, i) => {
+    if (i < first || i > last) return { objectIndex: r.objectIndex };
+    if (i === first) return { objectIndex: r.objectIndex, text: merged };
+    return { objectIndex: r.objectIndex, text: "" };
+  });
 }
 
 // Standard-14 font names by [regular, bold, italic, bold-italic].
@@ -1093,6 +1424,7 @@ function InlineTextEditor({
 }: {
   edit: InlineEdit;
   saving: boolean;
+  /** Resolves false when the commit was rejected (editor stays open). */
   onCommit: (
     text: string,
     colorHex: string,
@@ -1100,14 +1432,15 @@ function InlineTextEditor({
     fontFamily: string,
     bold: boolean,
     italic: boolean,
-  ) => void;
+  ) => Promise<boolean>;
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [value, setValue] = useState(edit.original);
   const [colorHex, setColorHex] = useState(edit.colorHex);
   const [sizePt, setSizePt] = useState(Math.round(edit.fontSize));
-  const [family, setFamily] = useState(edit.fontFamily);
+  // "original" keeps the document's embedded face; replacement is explicit.
+  const [family, setFamily] = useState("original");
   const [bold, setBold] = useState(edit.bold);
   const [italic, setItalic] = useState(edit.italic);
   const done = useRef(false);
@@ -1127,6 +1460,7 @@ function InlineTextEditor({
     activeInlineEdit.set({
       colorHex,
       sizePt,
+      fontName: edit.fontName,
       family,
       bold,
       italic,
@@ -1137,14 +1471,21 @@ function InlineTextEditor({
       toggleBold: () => setBold((v) => !v),
       toggleItalic: () => setItalic((v) => !v),
     });
-  }, [colorHex, sizePt, family, bold, italic, saving]);
+  }, [colorHex, sizePt, family, bold, italic, saving, edit.fontName]);
   useEffect(() => () => activeInlineEdit.set(null), []);
 
-  // Commit once — guard against Enter followed by the unmount blur firing twice.
+  // Commit once — guard against Enter followed by the unmount blur firing
+  // twice. A rejected commit (e.g. glyphs missing from the embedded font)
+  // re-arms the editor instead of discarding the user's text.
   const finish = () => {
     if (done.current) return;
     done.current = true;
-    onCommit(value, colorHex, sizePt, family, bold, italic);
+    void onCommit(value, colorHex, sizePt, family, bold, italic).then((closed) => {
+      if (!closed) {
+        done.current = false;
+        requestAnimationFrame(() => ref.current?.focus());
+      }
+    });
   };
 
   // Live-preview the size change on screen (px per point from the original).
@@ -1196,7 +1537,10 @@ function InlineTextEditor({
           lineHeight: `${boxH}px`,
           color: colorHex,
           padding: "0 1px",
-          fontFamily: FONT_CSS[family] ?? "Helvetica, Arial, sans-serif",
+          fontFamily:
+            (family === "original"
+              ? FONT_CSS[edit.fallbackFamily]
+              : FONT_CSS[family]) ?? "Helvetica, Arial, sans-serif",
           fontWeight: bold ? 700 : 400,
           fontStyle: italic ? "italic" : "normal",
         }}
@@ -2275,9 +2619,14 @@ function AnnotationLayer({
   const anns = app.annotations[pageIndex] ?? [];
   const drawingTool = [
     "highlight",
+    "underline",
+    "strikeout",
+    "squiggly",
     "rect",
     "ellipse",
     "line",
+    "arrow",
+    "callout",
     "whiteout",
     "redact",
     "ink",
@@ -2476,6 +2825,60 @@ function AnnotationLayer({
         return;
       }
 
+      // Arrows and callouts accept any drag direction (including pure
+      // horizontal / vertical), unlike box tools which need a real area.
+      if ((app.tool === "arrow" || app.tool === "callout") && (w > 3 || h > 3)) {
+        const bw = Math.max(1, w);
+        const bh = Math.max(1, h);
+        const frac = (v: number, min: number, span: number) =>
+          Math.max(0, Math.min(1, (v - min) / span));
+        const arrow: ShapeAnnotation = {
+          id: uid(),
+          kind: "arrow",
+          x,
+          y,
+          w: bw,
+          h: bh,
+          color: app.toolColor,
+          strokeWidth: app.strokeWidth,
+          // Tail at the drag start, head at the drag end…
+          ax: frac(draft.x0, x, bw),
+          ay: frac(draft.y0, y, bh),
+          bx: frac(draft.x1, x, bw),
+          by: frac(draft.y1, y, bh),
+        };
+        if (app.tool === "callout") {
+          // …except for callouts, where the drag STARTS on the target: the
+          // head points there and the text box sits at the drag end.
+          [arrow.ax, arrow.ay, arrow.bx, arrow.by] = [arrow.bx, arrow.by, arrow.ax, arrow.ay];
+          const groupId = uid();
+          arrow.groupId = groupId;
+          const text: TextAnnotation = {
+            id: uid(),
+            kind: "text",
+            groupId,
+            x: draft.x1,
+            y: draft.y1 - app.fontSize,
+            w: 180,
+            h: app.fontSize * 2,
+            text: "",
+            fontSize: app.fontSize,
+            color: app.toolColor,
+            fontFamily: app.fontFamily,
+            align: app.textAlign,
+          };
+          app.addAnnotations(pageIndex, [arrow, text]);
+          app.setSelected({ page: pageIndex, id: text.id });
+        } else {
+          app.addAnnotation(pageIndex, arrow);
+          app.setSelected({ page: pageIndex, id: arrow.id });
+        }
+        app.setTool("select");
+        setDraft(null);
+        setInkPoints([]);
+        return;
+      }
+
       if (w > 3 && h > 3) {
         const base = { id: uid(), x, y, w, h };
         if (app.tool === "highlight") {
@@ -2483,6 +2886,17 @@ function AnnotationLayer({
             ...base,
             kind: "highlight",
             color: app.highlightColor,
+          });
+        } else if (
+          app.tool === "underline" ||
+          app.tool === "strikeout" ||
+          app.tool === "squiggly"
+        ) {
+          app.addAnnotation(pageIndex, {
+            ...base,
+            kind: "markup",
+            style: app.tool,
+            color: MARKUP_COLORS[app.tool],
           });
         } else if (app.tool === "whiteout") {
           app.addAnnotation(pageIndex, { ...base, kind: "whiteout" });
@@ -2556,7 +2970,7 @@ function AnnotationLayer({
       ))}
 
       {/* live draft shape — matches the tool being drawn */}
-      {draft && app.tool === "line" && (
+      {draft && (app.tool === "line" || app.tool === "arrow" || app.tool === "callout") && (
         <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
           <line
             x1={draft.x0 * scale}
@@ -2570,7 +2984,7 @@ function AnnotationLayer({
           />
         </svg>
       )}
-      {draft && app.tool !== "line" && (
+      {draft && app.tool !== "line" && app.tool !== "arrow" && app.tool !== "callout" && (
         <div
           className={cn(
             "absolute border-2 border-dashed",
@@ -2584,11 +2998,13 @@ function AnnotationLayer({
             borderColor:
               app.tool === "highlight"
                 ? app.highlightColor
-                : app.tool === "whiteout"
-                  ? "#94a3b8"
-                  : app.tool === "redact"
-                    ? "#dc2626"
-                    : app.toolColor,
+                : app.tool === "underline" || app.tool === "strikeout" || app.tool === "squiggly"
+                  ? MARKUP_COLORS[app.tool]
+                  : app.tool === "whiteout"
+                    ? "#94a3b8"
+                    : app.tool === "redact"
+                      ? "#dc2626"
+                      : app.toolColor,
             background:
               app.tool === "highlight"
                 ? `${app.highlightColor}4d`
@@ -2626,6 +3042,9 @@ const FIELD_TYPE_LABEL: Record<FormFieldAnnotation["fieldType"], string> = {
   checkbox: "Checkbox",
   dropdown: "Dropdown",
   radio: "Radio",
+  date: "Date",
+  signature: "Signature",
+  button: "Button",
 };
 
 const BORDER_STYLES: Array<{ v: NonNullable<FormFieldAnnotation["borderStyle"]>; label: string }> = [
@@ -3002,6 +3421,8 @@ function AnnotationItem({
   }, [app.editRequestId, ann.id, ann.kind]);
 
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // Rotation while the rotate handle is being dragged (committed on release).
+  const [liveRot, setLiveRot] = useState<number | null>(null);
   // While editing, the box auto-grows to fit the typed text (RichTextEditor
   // reports run changes via onRunsChange → measureRichText).
   const [editSize, setEditSize] = useState<{ w: number; h: number } | null>(null);
@@ -3039,7 +3460,12 @@ function AnnotationItem({
       return;
     }
     // Highlighter over an existing highlight = un-highlight (browser-style).
-    if (ann.kind === "highlight" && app.tool === "highlight") {
+    // Same for the text-markup tools over an existing markup.
+    if (
+      (ann.kind === "highlight" && app.tool === "highlight") ||
+      (ann.kind === "markup" &&
+        ["underline", "strikeout", "squiggly"].includes(app.tool))
+    ) {
       e.stopPropagation();
       e.preventDefault();
       app.removeAnnotation(pageIndex, ann.id);
@@ -3072,35 +3498,74 @@ function AnnotationItem({
       startY: e.clientY,
       orig: { x: ann.x, y: ann.y, w: ann.w, h: ann.h },
     };
+    let finalBox: { x: number; y: number; w: number; h: number } | null = null;
     const onMove = (ev: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
       const dx = (ev.clientX - d.startX) / scale;
       const dy = (ev.clientY - d.startY) / scale;
       if (d.mode === "move") {
-        setLive({ ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy });
+        finalBox = { ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy };
       } else if (ann.kind === "image") {
         // Images keep their aspect ratio while resizing.
         const w = Math.max(8, d.orig.w + dx);
-        setLive({ ...d.orig, w, h: Math.max(8, w * (d.orig.h / d.orig.w)) });
+        finalBox = { ...d.orig, w, h: Math.max(8, w * (d.orig.h / d.orig.w)) };
       } else {
-        setLive({
+        finalBox = {
           ...d.orig,
           w: Math.max(8, d.orig.w + dx),
           h: Math.max(8, d.orig.h + dy),
-        });
+        };
       }
+      setLive(finalBox);
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      setLive((finalBox) => {
-        if (finalBox) {
-          app.updateAnnotation(pageIndex, { ...ann, ...finalBox });
-        }
-        return null;
-      });
+      // Commit outside the state updater — updating the store from within
+      // one triggers React's setState-during-render warning.
+      if (finalBox) app.updateAnnotation(pageIndex, { ...ann, ...finalBox });
+      setLive(null);
       dragRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  // Drag the rotate handle: angle from the box center to the pointer, with
+  // soft snapping to 15° steps (Shift forces the snap).
+  const beginRotate = (e: React.PointerEvent) => {
+    if (app.tool !== "select") return;
+    e.stopPropagation();
+    e.preventDefault();
+    const el = wrapRef.current;
+    if (!el) return;
+    // getBoundingClientRect of a rotated element is its AABB — the center is
+    // still the true rotation center.
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let current: number | null = null;
+    const onMove = (ev: PointerEvent) => {
+      // Handle sits above the top edge, so straight up = 0°.
+      let a = (Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180) / Math.PI + 90;
+      const snapped = Math.round(a / 15) * 15;
+      if (ev.shiftKey || Math.abs(a - snapped) < 4) a = snapped;
+      current = ((a % 360) + 360) % 360;
+      setLiveRot(current);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      // Commit outside the state updater — updating the store from within
+      // one triggers React's setState-during-render warning.
+      if (current !== null) {
+        app.updateAnnotation(pageIndex, {
+          ...ann,
+          rotation: current === 0 ? undefined : current,
+        });
+      }
+      setLiveRot(null);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -3113,14 +3578,20 @@ function AnnotationItem({
   const selectable = app.tool === "select" && !ann.locked;
   const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
   const unhighlight =
-    ann.kind === "highlight" && app.tool === "highlight" && !ann.locked;
+    ((ann.kind === "highlight" && app.tool === "highlight") ||
+      (ann.kind === "markup" &&
+        ["underline", "strikeout", "squiggly"].includes(app.tool))) &&
+    !ann.locked;
   const erasable = app.tool === "eraser" && !ann.locked;
+  const rotationDeg = liveRot ?? ann.rotation ?? 0;
   const style: React.CSSProperties = {
     position: "absolute",
     left: box.x * scale,
     top: box.y * scale,
     width: box.w * scale,
     height: box.h * scale,
+    transform: rotationDeg ? `rotate(${rotationDeg}deg)` : undefined,
+    transformOrigin: "center",
     pointerEvents: selectable || noteInRead || unhighlight || erasable ? "auto" : "none",
     cursor: selectable
       ? "move"
@@ -3156,6 +3627,38 @@ function AnnotationItem({
         />
       );
       break;
+    case "markup": {
+      const mw = Math.max(1, box.w);
+      const mh = Math.max(1, box.h);
+      const t = Math.max(0.75, mh * 0.06);
+      body = (
+        <svg
+          className="h-full w-full overflow-visible"
+          preserveAspectRatio="none"
+          viewBox={`0 0 ${mw} ${mh}`}
+        >
+          {ann.style === "squiggly" ? (
+            <path
+              d={squigglyPath(mw, mh * 0.95, Math.max(1.2, mh * 0.14), Math.max(2.4, mh * 0.22))}
+              fill="none"
+              stroke={ann.color}
+              strokeWidth={t}
+              strokeLinejoin="round"
+            />
+          ) : (
+            <line
+              x1={0}
+              x2={mw}
+              y1={ann.style === "underline" ? mh * 0.92 : mh * 0.55}
+              y2={ann.style === "underline" ? mh * 0.92 : mh * 0.55}
+              stroke={ann.color}
+              strokeWidth={ann.style === "underline" ? t : Math.max(1, mh * 0.08)}
+            />
+          )}
+        </svg>
+      );
+      break;
+    }
     case "whiteout":
       body = (
         <div
@@ -3211,6 +3714,39 @@ function AnnotationItem({
         </svg>
       );
       break;
+    case "arrow": {
+      const aw = Math.max(1, box.w);
+      const ah = Math.max(1, box.h);
+      const x1 = (ann.ax ?? 0) * aw;
+      const y1 = (ann.ay ?? 0) * ah;
+      const x2 = (ann.bx ?? 1) * aw;
+      const y2 = (ann.by ?? 1) * ah;
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const headLen = Math.max(6, ann.strokeWidth * 3.5);
+      const spread = Math.PI / 7;
+      const hx1 = x2 - headLen * Math.cos(angle - spread);
+      const hy1 = y2 - headLen * Math.sin(angle - spread);
+      const hx2 = x2 - headLen * Math.cos(angle + spread);
+      const hy2 = y2 - headLen * Math.sin(angle + spread);
+      body = (
+        <svg
+          className="h-full w-full overflow-visible"
+          preserveAspectRatio="none"
+          viewBox={`0 0 ${aw} ${ah}`}
+        >
+          <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={ann.color} strokeWidth={ann.strokeWidth} strokeLinecap="round" />
+          <polyline
+            points={`${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}`}
+            fill="none"
+            stroke={ann.color}
+            strokeWidth={ann.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+      break;
+    }
     case "ink":
       body = (
         <svg
@@ -3391,6 +3927,18 @@ function AnnotationItem({
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
           onPointerDown={(e) => beginDrag(e, "resize")}
         />
+      )}
+      {isSelected && ROTATABLE_KINDS.has(ann.kind) && (
+        <>
+          {/* stem + grab-knob above the top edge; rotates with the element */}
+          <div className="pointer-events-none absolute -top-5 left-1/2 h-5 w-px -translate-x-1/2 bg-blue-400/80" />
+          <div
+            title="Drag to rotate (Shift snaps to 15°)"
+            className="absolute -top-6 left-1/2 h-3.5 w-3.5 -translate-x-1/2 cursor-grab rounded-full border border-white bg-blue-500 active:cursor-grabbing"
+            style={{ touchAction: "none" }}
+            onPointerDown={beginRotate}
+          />
+        </>
       )}
       {ann.kind === "formfield" && (
         <Popover

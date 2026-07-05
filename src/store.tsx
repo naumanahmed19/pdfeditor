@@ -31,11 +31,13 @@ import {
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
 import type {
+  FontInfo,
+  LineStyle as PdfiumLineStyle,
   Matrix as PdfiumMatrix,
   ObjectStyle as PdfiumObjectStyle,
   PageObject,
   TextObject,
-  TextStyle as PdfiumTextStyle,
+  TextRunEdit,
 } from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
 import { downloadBytes, uid } from "./lib/utils";
@@ -199,11 +201,15 @@ interface AppStore {
     objectIndex: number,
     newText: string,
   ) => Promise<void>;
-  applyTextStyle: (
+  applyTextRuns: (
+    pageIndex: number,
+    runs: TextRunEdit[],
+    style: PdfiumLineStyle,
+  ) => Promise<void>;
+  getTextFontInfo: (
     pageIndex: number,
     objectIndex: number,
-    style: PdfiumTextStyle,
-  ) => Promise<void>;
+  ) => Promise<FontInfo | null>;
 
   /** Object editing via PDFium: move/resize/delete existing text & images. */
   getPageObjects: (pageIndex: number) => Promise<PageObject[]>;
@@ -332,6 +338,14 @@ interface AppStore {
 
   selected: { page: number; id: string } | null;
   setSelected: (s: { page: number; id: string } | null) => void;
+
+  /** Copy the selected annotation (and its group partners, e.g. a callout's
+   *  arrow + text) to the internal clipboard. Returns true when copied. */
+  copySelectedAnnotation: () => boolean;
+  /** Paste the internal clipboard onto the current page, slightly offset. */
+  pasteAnnotationClipboard: () => void;
+  /** Duplicate the selected annotation (and group partners) in place. */
+  duplicateSelectedAnnotation: () => void;
 
   /** Id of a text annotation that should open its editor immediately. */
   editRequestId: string | null;
@@ -754,6 +768,73 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     [activeTabId, updateDoc],
   );
+
+  /* --- annotation clipboard (copy / paste / duplicate) --- */
+
+  // Internal clipboard: a snapshot of one annotation plus its group partners
+  // (highlight quads, a callout's arrow + text box). Not the OS clipboard.
+  const annClipboard = useRef<Annotation[] | null>(null);
+  const pasteSeq = useRef(0);
+
+  /** The selected annotation plus everything sharing its groupId. */
+  const selectedGroup = useCallback((): Annotation[] => {
+    if (!active || !selected) return [];
+    const list = active.annotations[selected.page] ?? [];
+    const target = list.find((a) => a.id === selected.id);
+    if (!target) return [];
+    return target.groupId
+      ? list.filter((a) => a.groupId === target.groupId)
+      : [target];
+  }, [active, selected]);
+
+  /** Fresh ids (and one fresh shared groupId), offset so the copy is visible. */
+  const cloneAnnotations = (anns: Annotation[], offset: number): Annotation[] => {
+    const groupId = anns.some((a) => a.groupId) ? uid() : undefined;
+    return anns.map((a) => ({
+      ...structuredClone(a),
+      id: uid(),
+      groupId,
+      x: a.x + offset,
+      y: a.y + offset,
+    }));
+  };
+
+  const copySelectedAnnotation = useCallback((): boolean => {
+    const group = selectedGroup();
+    if (!group.length) return false;
+    annClipboard.current = group.map((a) => structuredClone(a));
+    pasteSeq.current = 0;
+    return true;
+  }, [selectedGroup]);
+
+  const pasteAnnotationClipboard = useCallback(() => {
+    const src = annClipboard.current;
+    if (!src?.length || !activeTabId || !active) return;
+    pasteSeq.current += 1;
+    const clones = cloneAnnotations(src, 12 * pasteSeq.current);
+    const page = active.currentPage;
+    updateDoc(activeTabId, (d) =>
+      pushHistory(d, {
+        ...d.annotations,
+        [page]: [...(d.annotations[page] ?? []), ...clones],
+      }),
+    );
+    setSelected({ page, id: clones[clones.length - 1].id });
+  }, [activeTabId, active, updateDoc]);
+
+  const duplicateSelectedAnnotation = useCallback(() => {
+    const group = selectedGroup();
+    if (!group.length || !activeTabId || !selected) return;
+    const clones = cloneAnnotations(group, 12);
+    const page = selected.page;
+    updateDoc(activeTabId, (d) =>
+      pushHistory(d, {
+        ...d.annotations,
+        [page]: [...(d.annotations[page] ?? []), ...clones],
+      }),
+    );
+    setSelected({ page, id: clones[clones.length - 1].id });
+  }, [selectedGroup, activeTabId, selected, updateDoc]);
 
   const clearAnnotations = useCallback(() => {
     if (!activeTabId) return;
@@ -1528,13 +1609,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitInPlace],
   );
 
-  /** In-place text edit that also changes ink color and/or size. */
-  const applyTextStyle = useCallback(
-    async (pageIndex: number, objectIndex: number, style: PdfiumTextStyle) => {
-      const { styleTextObject } = await import("./lib/pdfium");
-      await commitInPlace((b) => styleTextObject(b, pageIndex, objectIndex, style));
+  /**
+   * In-place edit of a whole visual line: per-run text changes plus line-wide
+   * color / size / synthesized bold-italic / font replacement.
+   */
+  const applyTextRuns = useCallback(
+    async (pageIndex: number, runs: TextRunEdit[], style: PdfiumLineStyle) => {
+      const { styleTextRuns } = await import("./lib/pdfium");
+      await commitInPlace((b) => styleTextRuns(b, pageIndex, runs, style));
     },
     [commitInPlace],
+  );
+
+  /** The base name + decoded program of the font behind a text run. */
+  const getTextFontInfo = useCallback(
+    async (pageIndex: number, objectIndex: number) => {
+      if (!active) return null;
+      const { getFontInfo } = await import("./lib/pdfium");
+      return getFontInfo(active.bytes, pageIndex, objectIndex);
+    },
+    [active],
   );
 
   /** Move/resize an existing object (text or image) via an affine transform. */
@@ -2155,7 +2249,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     bakeToBytes,
     getPageTextObjects,
     applyTextEdit,
-    applyTextStyle,
+    applyTextRuns,
+    getTextFontInfo,
     getPageObjects,
     applyObjectTransform,
     removeObjectAt,
@@ -2223,6 +2318,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     canRedo: active ? active.historyIndex < active.history.length - 1 : false,
     selected,
     setSelected,
+    copySelectedAnnotation,
+    pasteAnnotationClipboard,
+    duplicateSelectedAnnotation,
     editRequestId,
     setEditRequestId,
     pendingStamp,
@@ -2276,7 +2374,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSelected,
         getPageTextObjects,
         applyTextEdit,
-        applyTextStyle,
+        applyTextRuns,
+        getTextFontInfo,
         getPageObjects,
         applyObjectTransform,
         removeObjectAt,
