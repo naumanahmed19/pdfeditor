@@ -1028,12 +1028,15 @@ function PageView({
     const hitSpans = spans.filter((s) =>
       s.textContent?.toLowerCase().includes(q),
     );
-    const activeIdx =
-      active && active.page === pageIndex
-        ? pageMatches.findIndex((m) => m.itemIndex === active.itemIndex)
-        : -1;
 
-    hitSpans.forEach((span, spanIdx) => {
+    hitSpans.forEach((span) => {
+      // The active match is the one whose run index matches — not a DOM
+      // position — so it stays correct even though spans render in reading
+      // order rather than extraction order.
+      const isActive =
+        !!active &&
+        active.page === pageIndex &&
+        Number(span.dataset.run) === active.itemIndex;
       const text = span.textContent ?? "";
       const lower = text.toLowerCase();
       span.dataset.searchOriginal = text;
@@ -1044,7 +1047,7 @@ function PageView({
         if (at > pos) frag.appendChild(document.createTextNode(text.slice(pos, at)));
         const mark = document.createElement("span");
         mark.className =
-          spanIdx === activeIdx ? "search-mark search-mark-active" : "search-mark";
+          isActive ? "search-mark search-mark-active" : "search-mark";
         mark.textContent = text.slice(at, at + q.length);
         frag.appendChild(mark);
         pos = at + q.length;

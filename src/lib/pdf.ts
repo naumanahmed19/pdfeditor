@@ -143,9 +143,32 @@ export function renderTextLayer(
   container.style.width = `${page.width * scale}px`;
   container.style.height = `${page.height * scale}px`;
 
-  for (const run of page.getTextRuns()) {
+  const runs = page.getTextRuns();
+
+  // Native selection walks the DOM in document order, so spans must be laid out
+  // in visual READING order (top→bottom, then left→right) — otherwise dragging
+  // over a paragraph can jump to a run that's adjacent in extraction order but
+  // far away on the page. Group runs into visual lines (tops within half a
+  // line-height), order lines top-down and each line left-to-right. Each span
+  // keeps its ORIGINAL run index in `data-run` so search (which indexes by run)
+  // stays aligned regardless of this visual reorder.
+  const ordered = runs.map((r, i) => ({ r, i }));
+  ordered.sort((a, b) => a.r.y - b.r.y || a.r.x - b.r.x);
+  const lines: { r: (typeof runs)[number]; i: number }[][] = [];
+  for (const item of ordered) {
+    const line = lines[lines.length - 1];
+    if (line && Math.abs(item.r.y - line[0].r.y) <= item.r.h * 0.5) {
+      line.push(item);
+    } else {
+      lines.push([item]);
+    }
+  }
+  for (const line of lines) line.sort((a, b) => a.r.x - b.r.x);
+
+  for (const { r: run, i } of lines.flat()) {
     const span = document.createElement("span");
     span.textContent = run.text;
+    span.dataset.run = String(i);
     const h = run.h * scale;
     const w = run.w * scale;
     const fontPx = Math.max(1, h * 0.85);
