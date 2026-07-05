@@ -2,21 +2,35 @@
 
 ## Proper form builder (priority)
 
-The current field designer (Field menu + drag placeholders) is minimal.
-Replace it with a dedicated form-builder experience:
+> **Shipped** — dedicated builder mode (toolbar **Form** button / sidebar Form
+> tab): palette + snapping/grid prefs + validation + field outline live in the
+> sidebar (`components/form/FormBuilderPanel.tsx`), snapping/validation math in
+> `lib/formbuilder.ts`.
 
-- [ ] Form-design mode with a field palette (sidebar), not a toolbar menu
-- [ ] Properties panel per field: name, tooltip, default value, required,
+- [x] Form-design mode with a field palette (sidebar), not a toolbar menu
+- [x] Properties panel per field: name, tooltip, default value, required,
       read-only, font size, text alignment, multiline toggle, max length
-- [ ] Alignment guides, snapping and optional grid while placing/moving
-- [ ] Multi-select, copy/paste, and duplicate fields
-- [ ] Tab-order management (reorder focus sequence)
-- [ ] Field list / outline view of all fields in the document
-- [ ] Radio group manager: create a group with N labeled options at once
-- [ ] Checkbox export values; dropdown editable + multi-select option lists
-- [ ] More field types: date, signature field, button
-- [ ] Live preview toggle (design ↔ fill) without leaving the builder
-- [ ] Validation: duplicate field names, empty dropdown options, overlaps
+      (+ export value, date format, dropdown flags, button caption)
+- [x] Alignment guides, snapping and optional grid while placing/moving —
+      edges/centers/page-center guides, Alt suspends, grid size configurable
+- [x] Multi-select, copy/paste, and duplicate fields — Shift-click, Ctrl+A
+      (page), group drag/nudge/delete, align + distribute tools popover
+- [x] Tab-order management (reorder focus sequence) — outline ▲▼ reorder;
+      creation order = per-page /Annots order in the saved PDF
+- [x] Field list / outline view of all fields in the document (new fields in
+      tab order + existing AcroForm widgets with delete/restore)
+- [x] Radio group manager: create a group with N labeled options at once
+      (stacked or in a row, optional text labels grouped with each radio)
+- [x] Checkbox export values; dropdown editable + multi-select option lists
+- [x] More field types: date (AFDate format actions), signature field
+      (unsigned /Sig widget — viewers offer their signing UI), push button
+- [x] Live preview toggle (design ↔ fill) without leaving the builder —
+      fields render as real inputs; values keyed by field name (mirroring)
+- [x] Validation: duplicate field names, empty dropdown options, overlaps
+      (+ empty names, mixed-type name clashes, duplicate radio exports,
+      default text longer than max length) — click an issue to jump to it
+- [ ] Form-builder polish (deferred): marquee/rubber-band selection, drag
+      reorder in the outline, field property copy between fields
 
 ## PDFium engine (@embedpdf/pdfium)
 
@@ -98,19 +112,27 @@ plus a few differentiators. Roughly ordered by effort-to-value within each group
 ### Content editing (biggest gap vs Acrobat / Foxit / PDF-XChange)
 
 The pro desktop editors all offer true content editing; our inline text edit
-is a single-run patch tool. This is the largest perceived-quality gap in a
-head-to-head comparison.
+now works at LINE level with font fidelity (see shipped items below) — the
+remaining gap to the pros is paragraph reflow and image objects.
 
 - [ ] Paragraph-level text editing with reflow — detect the paragraph block
       around the edited run (text-layer geometry already gives line boxes),
       re-wrap lines on insert/delete instead of overflowing or gapping a
       single run, rewrite the affected content-stream text objects
-- [ ] Font matching for edited/added text — reuse the document's embedded
-      font where possible (subset it further via fontkit, already a dep);
-      fall back to the visually closest bundled font instead of a default,
-      so edits don't visibly mismatch the surrounding text
-- [ ] Edit properties of EXISTING document text — font size, color,
-      bold/italic on a selection (not just on annotations)
+- [x] Font matching for edited text — in-place edits ALWAYS keep the
+      document's embedded face (`FPDFText_SetText`); toolbar shows the real
+      font name with replacement as an explicit "Replace:" choice; the
+      recreate path prefers a same-family face embedded in the doc
+      (`FPDFFont_GetFontData` + coverage check) before falling back to the
+      closest bundled family; glyph-coverage preflight (fontkit) blocks
+      edits whose characters the embedded subset can't render, offering a
+      one-click "Replace font" fallback for just the edited run(s)
+- [x] Edit properties of EXISTING document text — line-level via the Edit
+      text tool: color, size (baseline-anchored scale about the line origin),
+      bold/italic synthesized on the original face (fill+stroke render mode /
+      baseline shear); un-bold/un-italic recreates with a matched face.
+      Whole visual line is edited as one string (runs grouped by baseline,
+      diff mapped back per run). Remaining: arbitrary sub-line selections
 - [ ] Image object editing — insert, replace, move, resize and delete images
       that are part of the page content (PDFium `FPDFPageObj_*` /
       `FPDFImageObj_*` APIs; the Compress tool already re-encodes image

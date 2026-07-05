@@ -900,15 +900,97 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
     }
   };
 
+  // Date fields are text fields with Acrobat's AFDate format/keystroke
+  // actions attached (/AA), the same way Acrobat's own date fields work.
+  const addDateActions = (field: { acroField: any }, format: string) => {
+    const fmt = format.replace(/["\\]/g, "");
+    field.acroField.dict.set(
+      PDFName.of("AA"),
+      doc.context.obj({
+        F: {
+          Type: "Action",
+          S: "JavaScript",
+          JS: PDFString.of(`AFDate_FormatEx("${fmt}");`),
+        },
+        K: {
+          Type: "Action",
+          S: "JavaScript",
+          JS: PDFString.of(`AFDate_KeystrokeEx("${fmt}");`),
+        },
+      }),
+    );
+  };
+
+  // pdf-lib hardcodes /Yes as a checkbox's on-state; a custom export value
+  // means renaming that state in the appearance dicts, /AS and /V.
+  const setCheckboxExport = (field: { acroField: any }, exportValue: string) => {
+    const raw = exportValue.trim();
+    if (!raw || raw === "Yes") return;
+    const on = PDFName.of(raw);
+    const yes = PDFName.of("Yes");
+    for (const w of field.acroField.getWidgets?.() ?? []) {
+      const dict = w.dict as PDFDict;
+      const ap = dict.lookupMaybe(PDFName.of("AP"), PDFDict);
+      for (const key of ["N", "D"]) {
+        const sub = ap?.lookupMaybe(PDFName.of(key), PDFDict);
+        const state = sub?.get(yes);
+        if (sub && state) {
+          sub.delete(yes);
+          sub.set(on, state);
+        }
+      }
+      if (dict.get(PDFName.of("AS")) === yes) dict.set(PDFName.of("AS"), on);
+    }
+    const fdict = field.acroField.dict as PDFDict;
+    if (fdict.get(PDFName.of("V")) === yes) fdict.set(PDFName.of("V"), on);
+    if (fdict.get(PDFName.of("DV")) === yes) fdict.set(PDFName.of("DV"), on);
+  };
+
+  // An UNSIGNED signature field is a plain /Sig widget with no value — any
+  // conforming viewer (Acrobat, Foxit…) offers its own signing UI on click.
+  // pdf-lib can't create these, so build the merged field+widget dict by hand.
+  const addSignatureField = (
+    page: ReturnType<PDFDocument["getPage"]>,
+    name: string,
+    ann: FormFieldAnnotation,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => {
+    const flags = (ann.readOnly ? 1 : 0) | (ann.required ? 2 : 0);
+    const dict = doc.context.obj({
+      Type: "Annot",
+      Subtype: "Widget",
+      FT: "Sig",
+      T: PDFHexString.fromText(name),
+      Rect: [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height],
+      F: 4, // Print
+      Ff: flags,
+      P: page.ref,
+    }) as PDFDict;
+    const ref = doc.context.register(dict);
+
+    const fake = { acroField: { getWidgets: () => [{ dict }], dict } };
+    applyWidgetAppearance(doc, fake, appearanceOf(ann));
+    styleWidgets(fake, ann);
+
+    const existing = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+    const annots = existing ?? (doc.context.obj([]) as PDFArray);
+    if (!existing) page.node.set(PDFName.of("Annots"), annots);
+    annots.push(ref);
+    (form as any).acroForm.addField(ref);
+  };
+
   for (const { ann, r, pageIndex } of placed) {
     const page = doc.getPage(pageIndex);
     const rect = { x: r.x, y: r.y, width: r.w, height: r.h };
     const appearance = appearanceOf(ann);
     try {
       switch (ann.fieldType) {
-        case "text": {
+        case "text":
+        case "date": {
           const f = form.createTextField(uniqueName(ann.fieldName));
-          if (ann.multiline ?? ann.h >= 45) f.enableMultiline();
+          if (ann.fieldType === "text" && (ann.multiline ?? ann.h >= 45)) {
+            f.enableMultiline();
+          }
           if (ann.required) f.enableRequired();
           if (ann.readOnly) f.enableReadOnly();
           if (ann.maxLength && ann.maxLength > 0) f.setMaxLength(ann.maxLength);
@@ -928,6 +1010,9 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           // so re-apply our colors explicitly then the style.
           applyWidgetAppearance(doc, f, appearance);
           styleWidgets(f, ann);
+          if (ann.fieldType === "date") {
+            addDateActions(f, ann.dateFormat || "mm/dd/yyyy");
+          }
           break;
         }
         case "checkbox": {
@@ -938,6 +1023,7 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           applyWidgetAppearance(doc, f, appearance);
           styleWidgets(f, ann);
           if (ann.defaultValue === "true" || ann.defaultValue === "on") f.check();
+          if (ann.exportValue) setCheckboxExport(f, ann.exportValue);
           break;
         }
         case "dropdown": {
@@ -945,6 +1031,8 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           f.setOptions((ann.options ?? []).map((o) => o.trim()).filter(Boolean));
           if (ann.readOnly) f.enableReadOnly();
           if (ann.required) f.enableRequired();
+          if (ann.editable) f.enableEditing();
+          if (ann.multiSelect) f.enableMultiselect();
           if (ann.defaultValue) {
             try {
               f.select(ann.defaultValue);
@@ -953,6 +1041,21 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
             }
           }
           f.addToPage(page, rect);
+          if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
+          applyWidgetAppearance(doc, f, appearance);
+          styleWidgets(f, ann);
+          break;
+        }
+        case "signature": {
+          addSignatureField(page, uniqueName(ann.fieldName), ann, rect);
+          break;
+        }
+        case "button": {
+          const f = form.createButton(uniqueName(ann.fieldName));
+          f.addToPage(ann.buttonCaption ?? ann.fieldName, page, {
+            ...rect,
+            ...appearance,
+          });
           if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
           applyWidgetAppearance(doc, f, appearance);
           styleWidgets(f, ann);

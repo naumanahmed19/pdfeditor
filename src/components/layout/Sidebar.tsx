@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  Check,
   ChevronDown,
   ChevronRight,
   Columns2,
@@ -11,15 +12,18 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  FormInput,
   History,
   Loader2,
   MessageSquare,
+  MoreVertical,
   Paperclip,
   Pencil,
   Plus,
   Trash2,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp, type RecentFile } from "../../store";
@@ -28,12 +32,18 @@ import { renderPageToCanvas, getOutline } from "../../lib/pdf";
 import type { OutlineInput } from "../../lib/pdftools";
 import type { AttachmentInfo } from "../../lib/pdfium";
 import type { FolderNode, NoteAnnotation, OutlineNode } from "../../types";
+import { FormBuilderSidebar } from "../form/FormBuilderPanel";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 
 export function Sidebar() {
   const app = useApp();
-  const [tab, setTab] = useState<
-    "pages" | "outline" | "comments" | "attachments" | "recent"
-  >("recent");
+  const [tab, setTab] = useState<SidebarTab>("recent");
+
+  // Entering the form builder brings its palette into view; leaving it
+  // returns to the page thumbnails.
+  useEffect(() => {
+    setTab((t) => (app.formBuilder ? "form" : t === "form" ? "pages" : t));
+  }, [app.formBuilder]);
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
   const activeTab = app.pdf ? tab : "recent";
@@ -65,27 +75,7 @@ export function Sidebar() {
                 label="Pages"
                 iconOnly
               />
-              <TabButton
-                active={activeTab === "outline"}
-                onClick={() => setTab("outline")}
-                icon={<BookOpen className="h-4 w-4" />}
-                label="Outline"
-                iconOnly
-              />
-              <TabButton
-                active={activeTab === "comments"}
-                onClick={() => setTab("comments")}
-                icon={<MessageSquare className="h-4 w-4" />}
-                label="Comments"
-                iconOnly
-              />
-              <TabButton
-                active={activeTab === "attachments"}
-                onClick={() => setTab("attachments")}
-                icon={<Paperclip className="h-4 w-4" />}
-                label="Attachments"
-                iconOnly
-              />
+              <MoreTabsMenu activeTab={activeTab} setTab={setTab} />
             </div>
           )}
         </div>
@@ -97,6 +87,8 @@ export function Sidebar() {
           <CommentsPanel />
         ) : app.pdf && activeTab === "attachments" ? (
           <AttachmentsPanel />
+        ) : app.pdf && activeTab === "form" ? (
+          <FormBuilderSidebar />
         ) : (
           <RecentList />
         )}
@@ -369,6 +361,81 @@ function RecentRow({ r }: { r: RecentFile }) {
         </span>
       )}
     </div>
+  );
+}
+
+type SidebarTab =
+  | "pages"
+  | "outline"
+  | "comments"
+  | "attachments"
+  | "form"
+  | "recent";
+
+const MORE_TABS: Array<{
+  key: Exclude<SidebarTab, "pages" | "recent">;
+  label: string;
+  icon: LucideIcon;
+}> = [
+  { key: "outline", label: "Outline", icon: BookOpen },
+  { key: "comments", label: "Comments", icon: MessageSquare },
+  { key: "attachments", label: "Attachments", icon: Paperclip },
+  { key: "form", label: "Form builder", icon: FormInput },
+];
+
+/** Overflow menu collecting the less-frequent panels (Outline, Comments,
+ *  Attachments, Form) behind one trigger so the tab row stays uncluttered.
+ *  The trigger reflects the active hidden panel when one is selected. */
+function MoreTabsMenu({
+  activeTab,
+  setTab,
+}: {
+  activeTab: SidebarTab;
+  setTab: (t: SidebarTab) => void;
+}) {
+  const app = useApp();
+  const active = MORE_TABS.find((t) => t.key === activeTab);
+  const TriggerIcon = active?.icon ?? MoreVertical;
+
+  const choose = (key: (typeof MORE_TABS)[number]["key"]) => {
+    setTab(key);
+    // The Form panel IS the builder — entering/leaving it toggles the mode.
+    if (key === "form") {
+      if (!app.formBuilder) app.setFormBuilder(true);
+    } else if (app.formBuilder) {
+      app.setFormBuilder(false);
+    }
+  };
+
+  return (
+    <Menu>
+      <MenuTrigger
+        aria-label="More panels"
+        title={active ? active.label : "More panels"}
+        className={cn(
+          "flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium transition-colors",
+          active
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <TriggerIcon className="h-4 w-4" />
+        {active && <ChevronDown className="h-3 w-3 opacity-60" />}
+      </MenuTrigger>
+      <MenuContent align="end" className="min-w-40">
+        {MORE_TABS.map((t) => (
+          <MenuItem
+            key={t.key}
+            onClick={() => choose(t.key)}
+            className={cn(activeTab === t.key && "bg-accent/60")}
+          >
+            <t.icon className="h-4 w-4 text-muted-foreground" />
+            {t.label}
+            {activeTab === t.key && <Check className="ml-auto h-3.5 w-3.5" />}
+          </MenuItem>
+        ))}
+      </MenuContent>
+    </Menu>
   );
 }
 

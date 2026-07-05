@@ -1,8 +1,15 @@
-import { useEffect, useReducer, useRef, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useEffect,
+  useReducer,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+  type SelectHTMLAttributes,
+} from "react";
 import {
   Bold,
+  ChevronDown,
   Circle,
-  CircleDot,
   Copy,
   Eraser,
   FormInput,
@@ -10,7 +17,6 @@ import {
   Highlighter,
   Image as ImageIcon,
   Italic,
-  List,
   Lock,
   MessageSquare,
   MessageSquareQuote,
@@ -24,7 +30,6 @@ import {
   Signature,
   SquareSlash,
   Square,
-  SquareCheck,
   Stamp,
   Strikethrough,
   TextCursorInput,
@@ -40,10 +45,13 @@ import { ColorSwatch } from "../ui/color-swatch";
 import {
   ColorPresets,
   FillControl,
+  FONT_OPTIONS,
+  FONT_SIZES,
   HIGHLIGHT_PRESETS,
   INK_PRESETS,
   SizePresets,
   StrokeWidthSelect,
+  StyleToggle,
   TextStyleControls,
 } from "./StyleControls";
 import { activeTextEditor } from "../../lib/activeTextEditor";
@@ -175,6 +183,27 @@ function DragScroll({
     >
       {children}
     </div>
+  );
+}
+
+/**
+ * Native <select> dressed exactly like the shadcn Select trigger (ui/select).
+ * The inline text editor needs NATIVE semantics: the shared Select renders its
+ * listbox in a portal, which moves focus out of [data-inline-edit-controls]
+ * and would commit the in-place edit prematurely.
+ */
+function NativeSelect({
+  className,
+  ...props
+}: SelectHTMLAttributes<HTMLSelectElement> & { className?: string }) {
+  return (
+    <span className={cn("relative inline-flex", className)}>
+      <select
+        {...props}
+        className="h-8 w-full appearance-none truncate rounded-md border border-input bg-background pl-2 pr-7 text-xs text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    </span>
   );
 }
 
@@ -455,37 +484,23 @@ export function EditorToolbar() {
             <ImageIcon className="h-4 w-4" />
           </button>
         </Tip>
-        <Menu>
-          <MenuTrigger
+        <Tip
+          label="Form builder"
+          desc="Design fillable forms: palette, tab order, validation"
+        >
+          <button
+            onClick={() => app.setFormBuilder(!app.formBuilder)}
             className={cn(
               "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
-              app.tool.startsWith("form")
+              app.formBuilder || app.tool.startsWith("form")
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
             <FormInput className="h-4 w-4" />
-            Field
-          </MenuTrigger>
-          <MenuContent className="min-w-44">
-            <MenuItem onClick={() => app.setTool("formtext")}>
-              <FormInput className="h-4 w-4 text-muted-foreground" />
-              Text field
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formcheckbox")}>
-              <SquareCheck className="h-4 w-4 text-muted-foreground" />
-              Checkbox
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formradio")}>
-              <CircleDot className="h-4 w-4 text-muted-foreground" />
-              Radio button
-            </MenuItem>
-            <MenuItem onClick={() => app.setTool("formdropdown")}>
-              <List className="h-4 w-4 text-muted-foreground" />
-              Dropdown
-            </MenuItem>
-          </MenuContent>
-        </Menu>
+            Form
+          </button>
+        </Tip>
         <Menu>
           <Tip label="Stamp" desc="Place a predefined stamp (APPROVED, DRAFT, …)">
             <MenuTrigger className="flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
@@ -656,16 +671,16 @@ export function EditorToolbar() {
         )}
         {app.tool === "edittext" ? (
           inlineEdit ? (
-            // Editing a real text run: drive its detected style. Native <select>
-            // (not the base-ui one) so the dropdown doesn't portal focus out and
-            // commit the edit prematurely. Tagged so the inline editor keeps
-            // focus for THESE controls only — clicking Undo/Redo or a tool
-            // elsewhere in the toolbar commits the edit first.
+            // Editing a real text run: same look as TextStyleControls (family ·
+            // size | B I | color), but on NATIVE controls (see NativeSelect) so
+            // no portal steals focus. Tagged so the inline editor keeps focus
+            // for THESE controls only — clicking Undo/Redo or a tool elsewhere
+            // in the toolbar commits the edit first.
             <div data-inline-edit-controls className="flex items-center gap-1.5">
               {/* "Original" keeps the document's embedded face (bold/italic are
                   then synthesized on it); picking a family below is an explicit
                   font replacement — never triggered by accident. */}
-              <select
+              <NativeSelect
                 value={inlineEdit.family}
                 disabled={inlineEdit.saving}
                 onChange={(e) => inlineEdit.setFamily(e.target.value)}
@@ -675,41 +690,52 @@ export function EditorToolbar() {
                     ? `Document font: ${inlineEdit.fontName}`
                     : undefined
                 }
-                className="h-8 max-w-44 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                className="w-44"
               >
                 <option value="original">
                   {inlineEdit.fontName
                     ? `Original (${inlineEdit.fontName})`
                     : "Original font"}
                 </option>
-                <option value="helvetica">Replace: Helvetica</option>
-                <option value="times">Replace: Times</option>
-                <option value="courier">Replace: Courier</option>
-                <option value="carlito">Replace: Carlito</option>
-                <option value="caladea">Replace: Caladea</option>
-              </select>
-              <Tip label="Bold">
-                <Button
-                  variant={inlineEdit.bold ? "subtle" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8"
-                  disabled={inlineEdit.saving}
-                  onClick={inlineEdit.toggleBold}
-                >
-                  <Bold className="h-4 w-4" />
-                </Button>
-              </Tip>
-              <Tip label="Italic">
-                <Button
-                  variant={inlineEdit.italic ? "subtle" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8"
-                  disabled={inlineEdit.saving}
-                  onClick={inlineEdit.toggleItalic}
-                >
-                  <Italic className="h-4 w-4" />
-                </Button>
-              </Tip>
+                {FONT_OPTIONS.map((f) => (
+                  <option key={f.v} value={f.v}>
+                    Replace: {f.label}
+                  </option>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                value={String(inlineEdit.sizePt)}
+                disabled={inlineEdit.saving}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  inlineEdit.setSizePt(() => n);
+                }}
+                aria-label="Font size"
+                className="w-[4.75rem]"
+              >
+                {[...new Set([...FONT_SIZES, inlineEdit.sizePt])]
+                  .sort((a, b) => a - b)
+                  .map((s) => (
+                    <option key={s} value={s}>
+                      {s}pt
+                    </option>
+                  ))}
+              </NativeSelect>
+              <Separator orientation="vertical" className="mx-0.5 h-6" />
+              <StyleToggle
+                label="Bold"
+                icon={Bold}
+                pressed={inlineEdit.bold}
+                disabled={inlineEdit.saving}
+                onPressedChange={() => inlineEdit.toggleBold()}
+              />
+              <StyleToggle
+                label="Italic"
+                icon={Italic}
+                pressed={inlineEdit.italic}
+                disabled={inlineEdit.saving}
+                onPressedChange={() => inlineEdit.toggleItalic()}
+              />
               <Separator orientation="vertical" className="mx-0.5 h-6" />
               <ColorSwatch
                 value={inlineEdit.colorHex}
@@ -717,30 +743,6 @@ export function EditorToolbar() {
                 onChange={inlineEdit.setColorHex}
                 title="Text color"
               />
-              <Separator orientation="vertical" className="mx-0.5 h-6" />
-              <div className="flex items-center rounded-md border border-input">
-                <button
-                  type="button"
-                  aria-label="Smaller"
-                  disabled={inlineEdit.saving}
-                  onClick={() => inlineEdit.setSizePt((s) => Math.max(4, s - 1))}
-                  className="flex h-8 w-7 items-center justify-center rounded-l-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                >
-                  −
-                </button>
-                <span className="w-8 text-center text-xs tabular-nums">
-                  {inlineEdit.sizePt}
-                </span>
-                <button
-                  type="button"
-                  aria-label="Larger"
-                  disabled={inlineEdit.saving}
-                  onClick={() => inlineEdit.setSizePt((s) => Math.min(200, s + 1))}
-                  className="flex h-8 w-7 items-center justify-center rounded-r-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                >
-                  +
-                </button>
-              </div>
             </div>
           ) : (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
