@@ -70,6 +70,10 @@ export function TitleBar() {
       </MenuItem>
       <MenuItem onClick={() => app.setScreen("templates")}>
         <FilePlus2 className="h-4 w-4 text-muted-foreground" />
+        New blank PDF…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("templates")}>
+        <FileText className="h-4 w-4 text-muted-foreground" />
         New from template…
       </MenuItem>
       {app.recentFiles.length > 0 && (
