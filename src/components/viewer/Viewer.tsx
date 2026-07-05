@@ -4095,8 +4095,10 @@ function AnnotationItem({
       app.setSelected({ page: pageIndex, id: ann.id });
       return;
     }
-    // Highlighter over an existing highlight = un-highlight (browser-style).
-    // Same for the text-markup tools over an existing markup.
+    // Clicking an existing highlight / markup with its own tool armed SELECTS
+    // it (the contextual row then shows a color swatch + delete), so the mark
+    // can be recolored or removed deliberately — not deleted on a stray click.
+    // (Quick removal still lives on the eraser and the Delete key.)
     if (
       (ann.kind === "highlight" && app.tool === "highlight") ||
       (ann.kind === "markup" &&
@@ -4104,7 +4106,7 @@ function AnnotationItem({
     ) {
       e.stopPropagation();
       e.preventDefault();
-      app.removeAnnotation(pageIndex, ann.id);
+      app.setSelected({ page: pageIndex, id: ann.id });
       return;
     }
     // Eraser removes whatever element is clicked, regardless of kind.
@@ -4288,12 +4290,12 @@ function AnnotationItem({
   };
 
   // Comment markers stay clickable while reading (comments are for readers
-  // too); with the highlighter armed, clicking an existing highlight removes
-  // it (browser-style un-highlight); the eraser removes any element it
-  // touches; everything else needs the Select tool.
+  // too); with a highlight/markup tool armed, clicking an existing mark of
+  // that kind selects it so it can be recolored or deleted; the eraser removes
+  // any element it touches; everything else needs the Select tool.
   const selectable = app.tool === "select" && !ann.locked;
   const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
-  const unhighlight =
+  const editMarkArmed =
     ((ann.kind === "highlight" && app.tool === "highlight") ||
       (ann.kind === "markup" &&
         ["underline", "strikeout", "squiggly"].includes(app.tool))) &&
@@ -4314,10 +4316,10 @@ function AnnotationItem({
     height: box.h * scale,
     transform: rotationDeg ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center",
-    pointerEvents: selectable || noteInRead || unhighlight || erasable ? "auto" : "none",
+    pointerEvents: selectable || noteInRead || editMarkArmed || erasable ? "auto" : "none",
     cursor: selectable
       ? "move"
-      : noteInRead || unhighlight || erasable
+      : noteInRead || editMarkArmed || erasable
         ? "pointer"
         : "default",
     touchAction: selectable || erasable ? "none" : "auto",
