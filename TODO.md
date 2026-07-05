@@ -29,6 +29,14 @@
 - [x] Validation: duplicate field names, empty dropdown options, overlaps
       (+ empty names, mixed-type name clashes, duplicate radio exports,
       default text longer than max length) — click an issue to jump to it
+- [x] Drag-and-drop fields from the palette onto the page (drop-target ring,
+      grid snap + clamp on drop); click-to-arm still works
+- [x] On-screen fields render their configured border/width/style +
+      background (design, read and live-preview); focus cue echoes the
+      field's own border color instead of a fixed blue (PDF has no
+      per-field focus color)
+- [x] Sidebar reorg: Pages + Outline direct tabs, then a "More" overflow
+      menu (Comments, Attachments, Form) so the tab row stays uncluttered
 - [ ] Form-builder polish (deferred): marquee/rubber-band selection, drag
       reorder in the outline, field property copy between fields
 
@@ -159,20 +167,23 @@ remaining gap to the pros is paragraph reflow and image objects.
 
 ### Export
 
-Table stakes for the category — every competitor (including the free web
-tools) has this; we only export per-page PNG. Cheapest big win: the text is
-already extracted per page for the AI assistant.
+> **Mostly shipped** — Tools → Export (`ExportScreen`, `lib/export.ts`):
+> plain text, HTML and PNG in one place (PNG moved out of Split & extract).
 
-- [ ] Export to plain text — dump the existing extraction, page markers
-      optional (nearly free)
-- [ ] Export to HTML — extraction + basic block detection (headings by font
-      size, paragraphs by line gaps), inline images optional
-- [ ] Export to Word (.docx) — generate client-side (a .docx is a zip of XML;
-      jszip is already a dep), mapping the same block detection to Word
-      paragraphs/headings; perfect layout fidelity is NOT the bar —
-      competitors are imperfect here too
+- [x] Export to plain text — reconstructs reading-order lines from PDFium text
+      runs (`getTextObjects`, not the space-joined blob), pages separated by a
+      form feed. Warns and points to OCR when a page has no extractable text
+- [x] Export to HTML — same line reconstruction + block detection: median font
+      size sets the body baseline, larger lines become h1/h2, tight line gaps
+      join into paragraphs; styled, self-contained `.html`
+- [x] Export to Word (.docx) — client-side OOXML package built with jszip
+      (`toDocx` in `lib/export.ts`): shares `documentBlocks` with HTML export,
+      emits real Heading1/Heading2 styles (navigable in Word) + paragraphs,
+      source pages separated by page breaks. Minimal valid part set
+      ([Content_Types], rels, document.xml, styles.xml); verified well-formed
 - [ ] Table detection → CSV/Excel export (stretch; column clustering over
       text-run x-positions)
+- [ ] HTML/DOCX export: inline the page images (currently text-only)
 
 ### AI differentiators
 
@@ -180,16 +191,26 @@ already extracted per page for the AI assistant.
       the existing form filler make this a natural, differentiating combo)
 - [ ] Semantic search / RAG over the document (chat currently sends raw
       extracted text; embeddings would handle long documents)
-- [ ] Document comparison / visual diff of two PDFs (PDFium rasterization
-      makes a pixel diff feasible) — Acrobat/Foxit/PDF-XChange all have this,
-      web tools don't. Two modes: pixel diff (rasterize both at matched dpi,
-      highlight changed regions) and text diff (extracted text, word-level,
-      rendered side-by-side in the existing split view)
+- [x] Document comparison / visual diff of two PDFs — Tools → Compare
+      documents (`CompareScreen`, `lib/compare.ts`): pick a second PDF (stays
+      local), then per page either a **text diff** (word-level LCS, added/
+      removed highlighted inline) or a **pixel diff** (both pages rasterized
+      via PDFium at a matched scale; changed pixels tinted red over a faded
+      base, with a % changed readout). Handles differing page counts
+      ("only in A / only in B"). Remaining: OCR-tolerant alignment for
+      reflowed pages, side-by-side (not unified) text view
 
 ### Viewer / print
 
-- [ ] Hand / pan tool
-- [ ] Print options — page range, scale (currently just window.print via iframe)
+- [x] Hand / pan tool — toolbar **Pan** tool (grab cursor, drag the scroll
+      surface); a non-editing viewing mode like Read (`tool: "pan"`)
+- [x] Two-page spread — zoom menu → **Two-page spread**: pages laid out two-up
+      in rows, fit-width/fit-page account for the pair width, page tracking is
+      spread-aware. Remaining: cover-page-alone option
+- [x] Print options — **Print dialog** (`PrintModal`): page range (all /
+      current / custom ranges) and scale (fit / actual / custom %). Builds a
+      subset+scaled PDF (`buildPrintDoc`, pdf-lib `embedPages`) then prints via
+      the existing iframe path; annotations are baked first
 
 ### Housekeeping
 

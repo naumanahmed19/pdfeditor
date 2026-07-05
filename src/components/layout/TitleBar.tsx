@@ -7,9 +7,11 @@ import {
   Crop,
   Download,
   Droplets,
+  FileOutput,
   FilePlus2,
   FileText,
   FolderOpen,
+  GitCompare,
   Heading,
   Layers2,
   LayoutGrid,
@@ -45,6 +47,7 @@ import { isTauri } from "../../lib/tauri";
 import { WindowControls } from "./WindowControls";
 import { AboutModal } from "./AboutModal";
 import { PasswordModal } from "./PasswordModal";
+import { PrintModal } from "../viewer/PrintModal";
 
 export function TitleBar() {
   const app = useApp();
@@ -147,6 +150,15 @@ export function TitleBar() {
       <MenuItem onClick={() => app.setScreen("compress")}>
         <Minimize2 className="h-4 w-4 text-muted-foreground" />
         Compress…
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onClick={() => app.setScreen("export")}>
+        <FileOutput className="h-4 w-4 text-muted-foreground" />
+        Export (text / HTML / images)…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("compare")}>
+        <GitCompare className="h-4 w-4 text-muted-foreground" />
+        Compare documents…
       </MenuItem>
       <MenuSeparator />
       <MenuItem
@@ -381,6 +393,7 @@ export function TitleBar() {
         onClose={() => app.setSecurityModalOpen(false)}
       />
       <PasswordModal />
+      <PrintModal />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </header>
   );

@@ -20,6 +20,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Columns2,
   FileText,
   Maximize,
   MessageSquare,
@@ -133,6 +134,8 @@ export function Viewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState<PageDims[]>([]);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+  // Hand/pan tool: drag anywhere on the scroll surface to move the page.
+  const panRef = useRef({ active: false, x: 0, y: 0, left: 0, top: 0 });
 
   const pdf = app.pdf;
 
@@ -182,8 +185,10 @@ export function Viewer() {
   );
   const effectiveScale = useMemo(() => {
     if (maxPage.width > 0 && containerSize.w > 0) {
+      // In spread mode two pages (plus the inter-page gap) share the width.
+      const widthUnit = app.spread ? maxPage.width * 2 + PAGE_GAP : maxPage.width;
       if (app.fitMode === "width") {
-        return Math.min(2.5, Math.max(0.3, (containerSize.w - 64) / maxPage.width));
+        return Math.min(2.5, Math.max(0.3, (containerSize.w - 64) / widthUnit));
       }
       if (app.fitMode === "page") {
         return Math.min(
@@ -191,7 +196,7 @@ export function Viewer() {
           Math.max(
             0.2,
             Math.min(
-              (containerSize.w - 64) / maxPage.width,
+              (containerSize.w - 64) / widthUnit,
               (containerSize.h - 48) / maxPage.height,
             ),
           ),
@@ -199,7 +204,7 @@ export function Viewer() {
       }
     }
     return app.scale;
-  }, [app.fitMode, app.scale, maxPage, containerSize]);
+  }, [app.fitMode, app.scale, app.spread, maxPage, containerSize]);
 
   // Restore the last viewed page when returning to this tab (the Viewer is
   // remounted per tab, so this runs once after page sizes are known).
@@ -236,9 +241,15 @@ export function Viewer() {
     const el = containerRef.current;
     if (!el) return;
     const mid = el.scrollTop + el.clientHeight / 3;
+    const step = app.spread ? 2 : 1;
     let acc = 0;
-    for (let i = 0; i < dims.length; i++) {
-      const h = dims[i].height * effectiveScale + PAGE_GAP;
+    for (let i = 0; i < dims.length; i += step) {
+      // A spread row is as tall as its tallest page.
+      const rowH =
+        step === 2 && i + 1 < dims.length
+          ? Math.max(dims[i].height, dims[i + 1].height)
+          : dims[i].height;
+      const h = rowH * effectiveScale + PAGE_GAP;
       if (mid < acc + h) {
         if (app.currentPage !== i) app.setCurrentPage(i);
         return;
@@ -427,22 +438,74 @@ export function Viewer() {
 
   if (!pdf) return <EmptyState />;
 
+  // Pan tool: drag the scroll surface. Ignored on interactive descendants so
+  // it never fights the pointer with a control the user meant to click.
+  const isPan = app.tool === "pan";
+  const onPanDown = (e: React.PointerEvent) => {
+    const el = containerRef.current;
+    if (!isPan || !el || e.button !== 0) return;
+    panRef.current = {
+      active: true,
+      x: e.clientX,
+      y: e.clientY,
+      left: el.scrollLeft,
+      top: el.scrollTop,
+    };
+    el.setPointerCapture(e.pointerId);
+  };
+  const onPanMove = (e: React.PointerEvent) => {
+    const el = containerRef.current;
+    if (!panRef.current.active || !el) return;
+    el.scrollLeft = panRef.current.left - (e.clientX - panRef.current.x);
+    el.scrollTop = panRef.current.top - (e.clientY - panRef.current.y);
+  };
+  const onPanUp = (e: React.PointerEvent) => {
+    if (!panRef.current.active) return;
+    panRef.current.active = false;
+    containerRef.current?.releasePointerCapture(e.pointerId);
+  };
+
+  // Group pages into rows: single-page (continuous) or pairs (spread).
+  const rows: number[][] = [];
+  if (app.spread) {
+    for (let i = 0; i < dims.length; i += 2) {
+      rows.push(i + 1 < dims.length ? [i, i + 1] : [i]);
+    }
+  } else {
+    for (let i = 0; i < dims.length; i++) rows.push([i]);
+  }
+
   return (
     <div className="relative h-full">
       <div
         ref={containerRef}
         onScroll={onScroll}
-        className="scrollbar-soft h-full overflow-auto bg-muted/60 px-8 py-6 dark:bg-background"
+        onPointerDown={onPanDown}
+        onPointerMove={onPanMove}
+        onPointerUp={onPanUp}
+        onPointerCancel={onPanUp}
+        className={cn(
+          "scrollbar-soft h-full overflow-auto bg-muted/60 px-8 py-6 dark:bg-background",
+          isPan && (panRef.current.active ? "cursor-grabbing" : "cursor-grab"),
+        )}
       >
         <div className="mx-auto flex w-fit flex-col items-center" style={{ gap: PAGE_GAP }}>
-          {dims.map((d, i) => (
-            <PageView
-              key={`${app.docVersion}-${i}`}
-              pdf={pdf}
-              pageIndex={i}
-              baseDims={d}
-              scale={effectiveScale}
-            />
+          {rows.map((row) => (
+            <div
+              key={`${app.docVersion}-row-${row[0]}`}
+              className="flex items-start"
+              style={{ gap: PAGE_GAP }}
+            >
+              {row.map((i) => (
+                <PageView
+                  key={`${app.docVersion}-${i}`}
+                  pdf={pdf}
+                  pageIndex={i}
+                  baseDims={dims[i]}
+                  scale={effectiveScale}
+                />
+              ))}
+            </div>
           ))}
         </div>
       </div>
@@ -608,6 +671,17 @@ function FloatingNav({
                   </button>
                 ))}
                 <div className="my-1 h-px bg-border" />
+                <button
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium transition-colors hover:bg-accent"
+                  onClick={() => {
+                    setZoomMenuOpen(false);
+                    app.setSpread(!app.spread);
+                  }}
+                >
+                  <Columns2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="flex-1">Two-page spread</span>
+                  {app.spread && <Check className="h-3.5 w-3.5 text-primary" />}
+                </button>
                 <button
                   className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium transition-colors hover:bg-accent"
                   onClick={() => {

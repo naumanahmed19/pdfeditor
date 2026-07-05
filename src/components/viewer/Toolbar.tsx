@@ -22,6 +22,7 @@ import {
   MessageSquareQuote,
   Minus,
   MousePointer2,
+  Move,
   MoveUpRight,
   PaintBucket,
   Pencil,
@@ -83,7 +84,8 @@ const TOOLS: Array<{
   shortcut?: string;
 }> = [
   { key: "read", icon: MousePointer2, name: "Read", desc: "Select & copy text, follow links", group: 0, shortcut: "V" },
-  { key: "select", icon: Hand, name: "Move / edit objects", desc: "Drag existing text & images; Delete to remove", group: 0, shortcut: "M" },
+  { key: "pan", icon: Hand, name: "Pan", desc: "Drag to scroll the page", group: 0 },
+  { key: "select", icon: Move, name: "Move / edit objects", desc: "Drag existing text & images; Delete to remove", group: 0, shortcut: "M" },
   { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
   { key: "edittext", icon: TextCursorInput, name: "Edit existing text", desc: "Click a line of the document to retype it", group: 1, shortcut: "E" },
   { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Drag over text, or click an existing highlight to remove it", group: 2, shortcut: "H" },
