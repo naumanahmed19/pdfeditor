@@ -176,12 +176,14 @@ remaining gap to the pros is paragraph reflow and image objects.
 - [x] Export to HTML — same line reconstruction + block detection: median font
       size sets the body baseline, larger lines become h1/h2, tight line gaps
       join into paragraphs; styled, self-contained `.html`
-- [ ] Export to Word (.docx) — generate client-side (a .docx is a zip of XML;
-      jszip is already a dep), reuse `lib/export.ts` block detection for Word
-      paragraphs/headings; perfect layout fidelity is NOT the bar
+- [x] Export to Word (.docx) — client-side OOXML package built with jszip
+      (`toDocx` in `lib/export.ts`): shares `documentBlocks` with HTML export,
+      emits real Heading1/Heading2 styles (navigable in Word) + paragraphs,
+      source pages separated by page breaks. Minimal valid part set
+      ([Content_Types], rels, document.xml, styles.xml); verified well-formed
 - [ ] Table detection → CSV/Excel export (stretch; column clustering over
       text-run x-positions)
-- [ ] HTML export: inline the page images (currently text-only)
+- [ ] HTML/DOCX export: inline the page images (currently text-only)
 
 ### AI differentiators
 

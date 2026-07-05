@@ -42,7 +42,11 @@ export function downloadText(
   filename: string,
   mime = "text/plain",
 ) {
-  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  downloadBlob(new Blob([content], { type: `${mime};charset=utf-8` }), filename);
+}
+
+/** Download an already-built Blob (e.g. a generated .docx) as a file. */
+export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

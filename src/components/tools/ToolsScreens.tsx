@@ -11,6 +11,7 @@ import {
   FileImage,
   FilePlus2,
   FileText,
+  FileType2,
   FolderOpen,
   Import,
   Minimize2,
@@ -483,7 +484,7 @@ export function SplitScreen() {
 
 export function ExportScreen() {
   const app = useApp();
-  const [busy, setBusy] = useState<null | "text" | "html" | "png">(null);
+  const [busy, setBusy] = useState<null | "text" | "html" | "docx" | "png">(null);
 
   if (!app.pdf || !app.docBytes) {
     return (
@@ -523,6 +524,21 @@ export function ExportScreen() {
       const html = await toHtml(bytes, numPages, name);
       downloadText(html, `${name}.html`, "text/html");
       toast.success("Exported HTML");
+    } catch (err) {
+      toast.error(`Export failed: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const exportDocx = async () => {
+    setBusy("docx");
+    try {
+      const { toDocx } = await import("../../lib/export");
+      const { downloadBlob } = await import("../../lib/utils");
+      const blob = await toDocx(bytes, numPages);
+      downloadBlob(blob, `${name}.docx`);
+      toast.success("Exported Word document");
     } catch (err) {
       toast.error(`Export failed: ${err instanceof Error ? err.message : "error"}`);
     } finally {
@@ -571,7 +587,7 @@ export function ExportScreen() {
   return (
     <ToolShell
       title="Export"
-      description="Convert the document to plain text, a styled HTML page, or page images."
+      description="Convert the document to plain text, HTML, a Word document, or page images."
     >
       <div className="flex flex-col gap-4">
         {card(
@@ -589,6 +605,14 @@ export function ExportScreen() {
           "Export HTML",
           () => void exportHtml(),
           busy === "html",
+        )}
+        {card(
+          "Word (.docx)",
+          "An editable Word document with real Heading 1/2 styles and paragraphs detected from font sizes and spacing; source pages separated by page breaks. Layout is approximate.",
+          <FileType2 className="h-4 w-4" />,
+          "Export Word",
+          () => void exportDocx(),
+          busy === "docx",
         )}
         {card(
           "Page images (.png, zip)",
