@@ -288,10 +288,7 @@ export function FormLayer({
               n={f.maxLen}
               value={value}
               readOnly={f.readOnly}
-              className={cn(
-                inputCls,
-                "overflow-hidden p-0 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-400/60",
-              )}
+              className={cn(inputCls, "overflow-hidden p-0")}
               // Opaque so PDFium's baked comb appearance beneath doesn't show
               // through and double the glyphs; our grid is the only thing drawn.
               style={{ ...style, background: "#ffffff" }}
@@ -316,12 +313,15 @@ export function FormLayer({
   );
 }
 
+let combMeasureCanvas: HTMLCanvasElement | null = null;
+
 /**
- * Comb text field: one glyph per fixed cell (like Chrome's PDF viewer). A real
- * <input> underneath captures typing/IME but is fully invisible (transparent
- * text, caret and selection) so it never leaks the raw left-aligned string.
- * We draw our own blinking caret in the active cell and let a click drop the
- * caret into whichever cell was clicked.
+ * Comb text field: one glyph per fixed cell (like Chrome's PDF viewer). It's a
+ * REAL native <input> — visible monospace text spread across the cells with
+ * measured letter-spacing, and cell dividers painted as a background — so the
+ * native caret (blinking, correctly positioned) and selection just work. Only
+ * editing is customised: a keystroke OVERWRITES the active cell instead of
+ * inserting and shoving the rest of the value sideways.
  */
 function CombField({
   n,
@@ -338,84 +338,66 @@ function CombField({
   style: React.CSSProperties;
   onChange: (v: string) => void;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [caret, setCaret] = useState<number | null>(null);
-  // Caret to restore after an edit re-renders the (controlled) input.
+  // Caret to restore after an overwrite edit re-renders the controlled input.
   const pending = useRef<number | null>(null);
-  const chars = value.split("");
+  const [layout, setLayout] = useState<{ ls: number; indent: number; cellW: number } | null>(null);
 
-  const place = (p: number) => {
+  // Measure so each glyph sits centred in its own cell: cellW is the field
+  // width / n, letter-spacing pads each monospace glyph out to a full cell, and
+  // text-indent shifts the row by half a cell to centre the first glyph.
+  useLayoutEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    const np = Math.max(0, Math.min(n, p));
-    el.setSelectionRange(np, np);
-    setCaret(np);
-  };
+    const cs = getComputedStyle(el);
+    const cellW = el.clientWidth / n;
+    combMeasureCanvas ??= document.createElement("canvas");
+    const ctx = combMeasureCanvas.getContext("2d");
+    let charW = cellW * 0.6;
+    if (ctx) {
+      ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+      charW = ctx.measureText("0").width || charW;
+    }
+    setLayout({ ls: cellW - charW, indent: (cellW - charW) / 2, cellW });
+  }, [n, style.width, style.height, style.fontSize]);
 
   useLayoutEffect(() => {
-    if (pending.current == null) return;
+    if (pending.current == null || !inputRef.current) return;
     const p = pending.current;
     pending.current = null;
-    place(p);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    inputRef.current.setSelectionRange(p, p);
   });
 
-  // Reliably drop the caret when focus/interaction leaves the field — onBlur
-  // alone can miss cases (e.g. clicking empty page area).
-  useEffect(() => {
-    if (caret === null) return;
-    const leave = (e: Event) => {
-      if (!containerRef.current?.contains(e.target as Node)) setCaret(null);
-    };
-    document.addEventListener("pointerdown", leave, true);
-    document.addEventListener("focusin", leave, true);
-    return () => {
-      document.removeEventListener("pointerdown", leave, true);
-      document.removeEventListener("focusin", leave, true);
-    };
-  }, [caret]);
-
-  // A comb fills left-to-right with no gaps, so clamp the caret to the typed
-  // length: clicking a cell past the text just parks it at the end.
-  const placeFromClick = (e: React.PointerEvent) => {
-    if (readOnly) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const idx = Math.max(
-      0,
-      Math.min(value.length, Math.floor((e.clientX - rect.left) / (rect.width / n))),
-    );
-    requestAnimationFrame(() => place(idx));
-  };
-
-  // Drive editing explicitly so a fixed cell OVERWRITES on type (like a mask)
-  // instead of inserting and shoving the rest of the value sideways.
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (readOnly) return;
-    const p = inputRef.current?.selectionStart ?? value.length;
+    const el = inputRef.current;
+    if (!el) return;
+    const p = el.selectionStart ?? value.length;
+    const move = (q: number) => {
+      const c = Math.max(0, Math.min(n, q));
+      el.setSelectionRange(c, c);
+    };
     switch (e.key) {
       case "ArrowLeft":
         e.preventDefault();
-        place(p - 1);
+        move(p - 1);
         return;
       case "ArrowRight":
         e.preventDefault();
-        place(Math.min(value.length, p + 1));
+        move(Math.min(value.length, p + 1));
         return;
       case "Home":
         e.preventDefault();
-        place(0);
+        move(0);
         return;
       case "End":
         e.preventDefault();
-        place(value.length);
+        move(value.length);
         return;
       case "Backspace":
         e.preventDefault();
         if (p < value.length) {
-          // Caret is on a filled (highlighted) cell — remove THAT cell's glyph,
-          // which is the one the user sees selected. Otherwise (caret past the
-          // text) fall back to removing the previous cell.
+          // Caret on a filled cell — remove THAT glyph (what looks selected).
           onChange(value.slice(0, p) + value.slice(p + 1));
           pending.current = p;
         } else if (p > 0) {
@@ -432,51 +414,42 @@ function CombField({
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       if (p >= n) return;
-      // Overwrite the glyph in this cell (append when past the current text).
       onChange((value.slice(0, p) + e.key + value.slice(p + 1)).slice(0, n));
       pending.current = p + 1;
     }
   };
 
+  const dividers = layout
+    ? `repeating-linear-gradient(to right, transparent 0, transparent ${layout.cellW - 1}px, rgba(96,165,250,0.45) ${layout.cellW - 1}px, rgba(96,165,250,0.45) ${layout.cellW}px)`
+    : undefined;
+
   return (
-    <div ref={containerRef} className={className} style={style} onPointerDown={placeFromClick}>
-      <div className="pointer-events-none absolute inset-0 flex">
-        {Array.from({ length: n }).map((_, i) => (
-          <div
-            key={i}
-            className={cn(
-              "relative flex flex-1 items-center justify-center overflow-hidden",
-              i < n - 1 && "border-r border-blue-400/40",
-              // Tint the active cell so it's clear which one a keystroke edits.
-              caret === i && "bg-blue-400/15",
-            )}
-          >
-            {chars[i] ?? ""}
-            {/* Caret at the cell's left edge (before its glyph), so it never
-                overlaps the centered character in a filled cell. */}
-            {caret === i && (
-              <span className="pointer-events-none absolute left-[3px] top-[15%] bottom-[15%] w-px animate-pulse bg-slate-800" />
-            )}
-          </div>
-        ))}
-      </div>
-      <input
-        ref={inputRef}
-        type="text"
-        value={value}
-        maxLength={n}
-        disabled={readOnly}
-        onKeyDown={onKeyDown}
-        // Native path only for paste/IME; keystrokes are handled above.
-        onChange={(e) => {
-          onChange(e.target.value.slice(0, n));
-          pending.current = Math.min(e.target.selectionStart ?? n, n);
-        }}
-        onFocus={() => place(inputRef.current?.selectionStart ?? value.length)}
-        onBlur={() => setCaret(null)}
-        className="absolute inset-0 h-full w-full bg-transparent text-transparent caret-transparent outline-none [&::selection]:bg-transparent [&::selection]:text-transparent"
-      />
-    </div>
+    <input
+      ref={inputRef}
+      type="text"
+      value={value}
+      maxLength={n}
+      disabled={readOnly}
+      onKeyDown={onKeyDown}
+      // Native path handles paste/IME; single keystrokes are handled above.
+      onChange={(e) => {
+        onChange(e.target.value.slice(0, n));
+        pending.current = Math.min(e.target.selectionStart ?? n, n);
+      }}
+      className={className}
+      style={{
+        ...style,
+        boxSizing: "border-box",
+        padding: 0,
+        background: "#ffffff",
+        backgroundImage: dividers,
+        color: "#0f172a",
+        fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
+        letterSpacing: layout ? `${layout.ls}px` : undefined,
+        textIndent: layout ? `${layout.indent}px` : undefined,
+        textAlign: "left",
+      }}
+    />
   );
 }
 
