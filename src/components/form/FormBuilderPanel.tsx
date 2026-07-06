@@ -163,42 +163,6 @@ export function FormBuilderSidebar() {
         </div>
       </section>
 
-      {/* Edit the page's own text (labels) & objects without leaving builder. */}
-      <section>
-        <PanelHeading>Page text &amp; labels</PanelHeading>
-        <div className="grid grid-cols-2 gap-1.5">
-          <button
-            type="button"
-            onClick={() => app.setTool(app.tool === "edittext" ? "select" : "edittext")}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px] transition-colors",
-              app.tool === "edittext"
-                ? "border-primary bg-primary/10 text-foreground"
-                : "hover:bg-muted",
-            )}
-          >
-            <TextCursorInput className="h-3.5 w-3.5 shrink-0" />
-            Edit text
-          </button>
-          <button
-            type="button"
-            onClick={() => app.setTool(app.tool === "editobject" ? "select" : "editobject")}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px] transition-colors",
-              app.tool === "editobject"
-                ? "border-primary bg-primary/10 text-foreground"
-                : "hover:bg-muted",
-            )}
-          >
-            <MousePointerClick className="h-3.5 w-3.5 shrink-0" />
-            Move / delete
-          </button>
-        </div>
-        <p className="pt-1 text-[10px] text-muted-foreground">
-          Click a label on the page to retype it, or move/delete existing text &amp; images.
-        </p>
-      </section>
-
       {/* Validation */}
       <section>
         <PanelHeading>
