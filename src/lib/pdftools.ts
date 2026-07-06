@@ -1024,6 +1024,9 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           if (ann.required) f.enableRequired();
           if (ann.readOnly) f.enableReadOnly();
           if (ann.maxLength && ann.maxLength > 0) f.setMaxLength(ann.maxLength);
+          if (ann.fieldType === "text" && ann.comb && !ann.multiline && ann.maxLength) {
+            f.enableCombing();
+          }
           if (ann.align) {
             f.setAlignment(
               ann.align === "center"

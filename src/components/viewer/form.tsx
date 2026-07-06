@@ -857,6 +857,18 @@ export function FieldPreviewInput({
     default: {
       // text & date
       const value = String(stored ?? ann.defaultValue ?? "");
+      if (ann.fieldType === "text" && ann.comb && !ann.multiline && ann.maxLength && ann.maxLength > 0) {
+        return (
+          <CombField
+            n={ann.maxLength}
+            value={value}
+            readOnly={!!ann.readOnly}
+            className={cn(base, "overflow-hidden p-0")}
+            style={{ fontSize, ...widgetCss, ...focusStyle }}
+            onChange={(v) => app.setPreviewValue(name, v)}
+          />
+        );
+      }
       const common = {
         value,
         disabled: ann.readOnly,
@@ -1217,28 +1229,45 @@ export function FieldProperties({
       )}
 
       {isText && (
-        <div className="flex items-end gap-2">
-          <label className="flex items-center gap-1.5 text-[11px]">
-            <Checkbox
-              checked={!!ann.multiline}
-              onCheckedChange={(v: boolean) => onPatch({ multiline: v })}
-            />
-            Multiline
-          </label>
-          <div className="flex-1 space-y-0.5">
-            <div className={lbl}>Max length</div>
-            <Input
-              key={`max-${ann.id}`}
-              type="number"
-              min={0}
-              className={sm}
-              defaultValue={ann.maxLength ?? ""}
-              placeholder="∞"
-              onBlur={(e) =>
-                onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
-              }
-            />
+        <div className="space-y-1.5">
+          <div className="flex items-end gap-2">
+            <label className="flex items-center gap-1.5 text-[11px]">
+              <Checkbox
+                checked={!!ann.multiline}
+                onCheckedChange={(v: boolean) => onPatch({ multiline: v, comb: false })}
+              />
+              Multiline
+            </label>
+            <div className="flex-1 space-y-0.5">
+              <div className={lbl}>Max length</div>
+              <Input
+                key={`max-${ann.id}`}
+                type="number"
+                min={0}
+                className={sm}
+                defaultValue={ann.maxLength ?? ""}
+                placeholder="∞"
+                onBlur={(e) =>
+                  onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
+                }
+              />
+            </div>
           </div>
+          {!ann.multiline && (
+            <label
+              className="flex items-center gap-1.5 text-[11px]"
+              title="Fixed character cells — requires a max length"
+            >
+              <Checkbox
+                checked={!!ann.comb}
+                onCheckedChange={(v: boolean) => onPatch({ comb: v })}
+              />
+              Comb (fixed cells)
+              {ann.comb && !ann.maxLength && (
+                <span className="text-[10px] text-amber-600">needs max length</span>
+              )}
+            </label>
+          )}
         </div>
       )}
 

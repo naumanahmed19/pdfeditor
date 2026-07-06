@@ -189,6 +189,8 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   align?: FieldAlign;
   multiline?: boolean;
   maxLength?: number;
+  /** Text field laid out as fixed comb cells (needs maxLength; /Comb flag). */
+  comb?: boolean;
   /** Widget appearance. */
   borderColor?: string;
   backgroundColor?: string;
