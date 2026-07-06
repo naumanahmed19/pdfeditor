@@ -1057,12 +1057,16 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           break;
         }
         case "dropdown": {
-          const f = form.createDropdown(uniqueName(ann.fieldName));
+          // A choice field is a real list box (Ch, non-combo) when "Show as
+          // list box" is set, otherwise a combo dropdown.
+          const f = ann.listBox
+            ? form.createOptionList(uniqueName(ann.fieldName))
+            : form.createDropdown(uniqueName(ann.fieldName));
           f.setOptions((ann.options ?? []).map((o) => o.trim()).filter(Boolean));
           if (ann.readOnly) f.enableReadOnly();
           if (ann.required) f.enableRequired();
-          if (ann.editable) f.enableEditing();
-          if (ann.multiSelect) f.enableMultiselect();
+          if (f instanceof PDFDropdown && ann.editable) f.enableEditing();
+          if (ann.listBox && ann.multiSelect) f.enableMultiselect();
           if (ann.defaultValue) {
             try {
               f.select(ann.defaultValue);

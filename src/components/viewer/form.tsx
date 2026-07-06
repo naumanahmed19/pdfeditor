@@ -774,6 +774,41 @@ export function FieldPreviewInput({
       );
     }
     case "dropdown": {
+      if (ann.listBox) {
+        const sel = Array.isArray(stored)
+          ? stored.map(String)
+          : stored != null && stored !== ""
+            ? [String(stored)]
+            : ann.defaultValue
+              ? [ann.defaultValue]
+              : [];
+        return (
+          <select
+            className={cn(base, "overflow-auto")}
+            style={{ fontSize, ...widgetCss, ...focusStyle }}
+            multiple={!!ann.multiSelect}
+            size={Math.max(2, (ann.options ?? []).length)}
+            value={ann.multiSelect ? sel : sel[0] ?? ""}
+            disabled={ann.readOnly}
+            onChange={(e) =>
+              ann.multiSelect
+                ? app.setPreviewValue(
+                    name,
+                    Array.from(e.target.selectedOptions).map((o) => o.value),
+                  )
+                : app.setPreviewValue(name, e.target.value)
+            }
+            onPointerDown={stop}
+            {...focusHandlers}
+          >
+            {(ann.options ?? []).map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        );
+      }
       const value = String(stored ?? ann.defaultValue ?? "");
       return (
         <select
@@ -1122,21 +1157,31 @@ export function FieldProperties({
       )}
 
       {ann.fieldType === "dropdown" && (
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <label className="flex items-center gap-1.5 text-[11px]">
             <Checkbox
-              checked={!!ann.editable}
-              onCheckedChange={(v: boolean) => onPatch({ editable: v })}
+              checked={!!ann.listBox}
+              onCheckedChange={(v: boolean) => onPatch({ listBox: v })}
             />
-            Allow custom text
+            Show as list box
           </label>
-          <label className="flex items-center gap-1.5 text-[11px]">
-            <Checkbox
-              checked={!!ann.multiSelect}
-              onCheckedChange={(v: boolean) => onPatch({ multiSelect: v })}
-            />
-            Multi-select
-          </label>
+          {ann.listBox ? (
+            <label className="flex items-center gap-1.5 text-[11px]">
+              <Checkbox
+                checked={!!ann.multiSelect}
+                onCheckedChange={(v: boolean) => onPatch({ multiSelect: v })}
+              />
+              Multi-select
+            </label>
+          ) : (
+            <label className="flex items-center gap-1.5 text-[11px]">
+              <Checkbox
+                checked={!!ann.editable}
+                onCheckedChange={(v: boolean) => onPatch({ editable: v })}
+              />
+              Allow custom text
+            </label>
+          )}
         </div>
       )}
 

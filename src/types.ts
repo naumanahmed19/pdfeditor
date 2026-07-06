@@ -199,7 +199,9 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   exportValue?: string;
   /** Dropdown: user can type a custom value (combo /Edit flag). */
   editable?: boolean;
-  /** Dropdown: allow selecting multiple options (/MultiSelect flag). */
+  /** Choice field shown as a list box (non-combo) instead of a dropdown. */
+  listBox?: boolean;
+  /** List box: allow selecting multiple options (/MultiSelect flag). */
   multiSelect?: boolean;
   /** Date field display format (AFDate picture, e.g. "mm/dd/yyyy"). */
   dateFormat?: string;
