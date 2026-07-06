@@ -212,6 +212,35 @@ remaining gap to the pros is paragraph reflow and image objects.
       subset+scaled PDF (`buildPrintDoc`, pdf-lib `embedPages`) then prints via
       the existing iframe path; annotations are baked first
 
+### Toolbar / UX organization (come back to this)
+
+The editor toolbar's first row shows ~19 annotation tools in one flat,
+horizontally-scrolling strip plus Insert image / Form / Stamp / Sign controls —
+overwhelming at a glance. The tools already carry a `group` number (0–4) in the
+`TOOLS` array (`components/viewer/Toolbar.tsx`) that today only draws divider
+lines. Explored ways to reduce the clutter (Photoshop-style):
+
+- [ ] Flyout grouping — collapse each `group` into ONE toolbar slot showing the
+      group's last-used tool + a caret; click opens a small menu with the rest
+      (Select / Text / Markup / Shapes / Erase & redact), plus fold image /
+      form / stamp / signature into a single **Insert** flyout. 19 icons → ~6
+      slots. Prototyped and reverted (worked: type-checked, flyouts open via the
+      existing `Menu` primitive — remember `MenuLabel` must be wrapped in
+      `MenuGroup` or Base UI throws). Reverted pending the broader direction
+      below.
+- [ ] Mode tabs (ribbon-lite) — top-level tabs (View / Annotate / Draw / Insert /
+      Review) that swap the whole toolset by task; would also pull the buried
+      Tools menu (merge/split/watermark/…) into a Pages/Document tab. Biggest
+      single declutter; the flyout grouping nests under each tab. **Recommended
+      next** — needs a decision on the exact tab set before building.
+- [ ] Contextual floating bar — a small toolbar next to the current selection
+      with just that object's actions (selection state already exists via
+      `selectedAnn`); keeps the top bar calm. Good complement, not a replacement.
+- [ ] Command palette (⌘K) — searchable fast-lane for every tool/action; makes
+      all tools discoverable by name. Additive, lower priority.
+- [ ] (Skip for now) Left vertical tool rail — the literal Photoshop layout, but
+      it competes with the existing left sidebar for the same edge.
+
 ### Housekeeping
 
 - [ ] Internationalization (i18n) — English-only today

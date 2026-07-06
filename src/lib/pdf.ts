@@ -128,6 +128,87 @@ function measure(text: string, fontPx: number): number {
   return measureCtx.measureText(text).width;
 }
 
+// --- Reading-order layout (recursive XY-cut) --------------------------------
+// Native selection walks the DOM in document order, so spans must be appended
+// in visual reading order or dragging jumps between far-apart runs. Extraction
+// order isn't reliably reading order, and a naive top→bottom/left→right sort
+// interleaves columns. XY-cut recursively splits a block by its widest empty
+// band: a full-width horizontal gap peels off titles/rows, a vertical gutter
+// splits columns (read left→right). Blocks with no significant gap fall back to
+// line-by-line ordering.
+
+type LayoutItem = {
+  r: { x: number; y: number; w: number; h: number; text: string };
+  i: number;
+};
+
+/** Widest empty band between item intervals projected onto one axis. */
+function widestGap(
+  items: LayoutItem[],
+  axis: "x" | "y",
+): { gap: number; pos: number } {
+  const iv = items.map(({ r }): [number, number] =>
+    axis === "x" ? [r.x, r.x + r.w] : [r.y, r.y + r.h],
+  );
+  iv.sort((a, b) => a[0] - b[0]);
+  let maxEnd = iv[0][1];
+  const best = { gap: 0, pos: 0 };
+  for (let k = 1; k < iv.length; k++) {
+    const [s, e] = iv[k];
+    if (s > maxEnd && s - maxEnd > best.gap) {
+      best.gap = s - maxEnd;
+      best.pos = (maxEnd + s) / 2;
+    }
+    if (e > maxEnd) maxEnd = e;
+  }
+  return best;
+}
+
+/** A single block (no column structure): order line-by-line, top→bottom. */
+function orderBlock(items: LayoutItem[]): LayoutItem[] {
+  const sorted = [...items].sort((a, b) => a.r.y - b.r.y || a.r.x - b.r.x);
+  const lines: LayoutItem[][] = [];
+  for (const item of sorted) {
+    const line = lines[lines.length - 1];
+    if (line && Math.abs(item.r.y - line[0].r.y) <= item.r.h * 0.5) line.push(item);
+    else lines.push([item]);
+  }
+  for (const line of lines) line.sort((a, b) => a.r.x - b.r.x);
+  return lines.flat();
+}
+
+function readingOrder(items: LayoutItem[], mh: number, depth = 0): LayoutItem[] {
+  if (items.length <= 1 || depth >= 6) return orderBlock(items);
+  const yGap = widestGap(items, "y"); // full-width horizontal band
+  const xGap = widestGap(items, "x"); // vertical column gutter
+  const yThresh = mh * 1.2;
+  const xThresh = mh * 1.0;
+  // Peel a full-width horizontal band first when it dominates — this separates
+  // a title/header from the columns below it before columns are detected.
+  if (yGap.gap >= yThresh && yGap.gap >= xGap.gap) {
+    const top: LayoutItem[] = [];
+    const bottom: LayoutItem[] = [];
+    for (const it of items) (it.r.y + it.r.h <= yGap.pos ? top : bottom).push(it);
+    if (top.length && bottom.length)
+      return [
+        ...readingOrder(top, mh, depth + 1),
+        ...readingOrder(bottom, mh, depth + 1),
+      ];
+  }
+  // Otherwise split on a vertical gutter into columns, read left → right.
+  if (xGap.gap >= xThresh) {
+    const left: LayoutItem[] = [];
+    const right: LayoutItem[] = [];
+    for (const it of items) (it.r.x + it.r.w <= xGap.pos ? left : right).push(it);
+    if (left.length && right.length)
+      return [
+        ...readingOrder(left, mh, depth + 1),
+        ...readingOrder(right, mh, depth + 1),
+      ];
+  }
+  return orderBlock(items);
+}
+
 /**
  * Populate `container` with selectable text spans for `page` at `scale`.
  * Spans are transparent (styled by the .textLayer CSS) and horizontally
@@ -143,9 +224,22 @@ export function renderTextLayer(
   container.style.width = `${page.width * scale}px`;
   container.style.height = `${page.height * scale}px`;
 
-  for (const run of page.getTextRuns()) {
+  const runs = page.getTextRuns();
+
+  // Lay out spans in visual reading order (XY-cut, column-aware) so native
+  // selection tracks the page. Each span keeps its ORIGINAL run index in
+  // `data-run` so search (which indexes by run) stays aligned after reorder.
+  const heights = runs.map((r) => r.h).sort((a, b) => a - b);
+  const mh = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
+  const ordered = readingOrder(
+    runs.map((r, i) => ({ r, i })),
+    mh,
+  );
+
+  for (const { r: run, i } of ordered) {
     const span = document.createElement("span");
     span.textContent = run.text;
+    span.dataset.run = String(i);
     const h = run.h * scale;
     const w = run.w * scale;
     const fontPx = Math.max(1, h * 0.85);
