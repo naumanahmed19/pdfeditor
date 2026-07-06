@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import { Info } from "lucide-react";
 import { toast } from "sonner";
-import { useApp } from "../../store";
+import { useAppSelector, shallowEqual } from "../../store";
 import { Button } from "../ui/button";
 import { PropertiesModal } from "../viewer/PropertiesModal";
 import { SecurityModal } from "../viewer/SecurityModal";
@@ -50,7 +50,40 @@ import { PasswordModal } from "./PasswordModal";
 import { PrintModal } from "../viewer/PrintModal";
 
 export function TitleBar() {
-  const app = useApp();
+  // Select only what the title bar reads (no editing-tool state), so it stays
+  // calm while you draw/select/drag on the page.
+  const app = useAppSelector(
+    (s) => ({
+      activeMatch: s.activeMatch,
+      activeProtected: s.activeProtected,
+      aiOpen: s.aiOpen,
+      applyBytesOp: s.applyBytesOp,
+      clearSearch: s.clearSearch,
+      closeDocument: s.closeDocument,
+      downloadCurrent: s.downloadCurrent,
+      gotoMatch: s.gotoMatch,
+      isMobile: s.isMobile,
+      ocrBusy: s.ocrBusy,
+      openFile: s.openFile,
+      openRecent: s.openRecent,
+      pdf: s.pdf,
+      printCurrent: s.printCurrent,
+      recentFiles: s.recentFiles,
+      requestOpen: s.requestOpen,
+      runOcrText: s.runOcrText,
+      runSearch: s.runSearch,
+      saveCurrent: s.saveCurrent,
+      screen: s.screen,
+      searchMatches: s.searchMatches,
+      securityModalOpen: s.securityModalOpen,
+      setAiOpen: s.setAiOpen,
+      setScreen: s.setScreen,
+      setSecurityModalOpen: s.setSecurityModalOpen,
+      setSidebarOpen: s.setSidebarOpen,
+      sidebarOpen: s.sidebarOpen,
+    }),
+    shallowEqual,
+  );
   const fileRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [propsOpen, setPropsOpen] = useState(false);
