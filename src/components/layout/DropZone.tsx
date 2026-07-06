@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import { toast } from "sonner";
 import { useAppSelector } from "../../store";
 
@@ -12,7 +12,10 @@ const isPdf = (file: File) =>
  * window is configured with `dragDropEnabled: false`, so the OS webview no
  * longer swallows file drops.
  */
-export function DropZone() {
+// Memoized: no props; ignores parent re-renders (only subscribes to openFile).
+export const DropZone = memo(DropZoneImpl);
+
+function DropZoneImpl() {
   // Only needs the openFile action — select it so the drop target never
   // re-renders on unrelated store churn.
   const openFile = useAppSelector((s) => s.openFile);

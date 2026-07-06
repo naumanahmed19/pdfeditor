@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -8,7 +9,7 @@ import {
 } from "react";
 import { FilePlus2, FileText } from "lucide-react";
 import { toast } from "sonner";
-import { useApp } from "../../store";
+import { useAppSelector, shallowEqual } from "../../store";
 import { cn, uid } from "../../lib/utils";
 import { MARKUP_LABEL } from "../../lib/markup";
 import type { Annotation, MarkupStyle } from "../../types";
@@ -27,8 +28,49 @@ const PAGE_GAP = 24;
 
 
 
-export function Viewer() {
-  const app = useApp();
+// Memoized so a parent (PaneShell/Shell) re-render on unrelated state (sidebar,
+// search, AI panel) doesn't re-render the whole editor. The selector below then
+// limits its own re-renders to the editing/viewer fields it actually reads.
+export const Viewer = memo(ViewerImpl);
+
+function ViewerImpl() {
+  const app = useAppSelector(
+    (s) => ({
+      addAnnotations: s.addAnnotations,
+      annotations: s.annotations,
+      copySelectedAnnotation: s.copySelectedAnnotation,
+      currentPage: s.currentPage,
+      docVersion: s.docVersion,
+      duplicateSelectedAnnotation: s.duplicateSelectedAnnotation,
+      editMode: s.editMode,
+      fitMode: s.fitMode,
+      formBuilder: s.formBuilder,
+      formPreview: s.formPreview,
+      highlightColor: s.highlightColor,
+      highlightMode: s.highlightMode,
+      markupColor: s.markupColor,
+      multiSelected: s.multiSelected,
+      pasteAnnotationClipboard: s.pasteAnnotationClipboard,
+      pdf: s.pdf,
+      pendingStamp: s.pendingStamp,
+      redo: s.redo,
+      removeAnnotation: s.removeAnnotation,
+      removeAnnotations: s.removeAnnotations,
+      scale: s.scale,
+      selected: s.selected,
+      setCurrentPage: s.setCurrentPage,
+      setMultiSelected: s.setMultiSelected,
+      setPendingStamp: s.setPendingStamp,
+      setSelected: s.setSelected,
+      setTool: s.setTool,
+      spread: s.spread,
+      tool: s.tool,
+      translateAnnotations: s.translateAnnotations,
+      undo: s.undo,
+      updateAnnotation: s.updateAnnotation,
+    }),
+    shallowEqual,
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState<PageDims[]>([]);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
@@ -462,7 +504,15 @@ export function Viewer() {
 
 
 function EmptyState() {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({
+      openBytes: s.openBytes,
+      openFile: s.openFile,
+      registerFileHandle: s.registerFileHandle,
+      setScreen: s.setScreen,
+    }),
+    shallowEqual,
+  );
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 

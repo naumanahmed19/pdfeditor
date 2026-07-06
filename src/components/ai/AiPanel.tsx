@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
   CirclePlus,
@@ -84,7 +84,11 @@ const SELECTION_ACTIONS = [
   ["Translate to English", "Translate this text to English"],
 ] as const;
 
-export function AiPanel() {
+// Memoized: no props, so it ignores parent (Shell) re-renders and only reacts
+// to its own selected store fields.
+export const AiPanel = memo(AiPanelImpl);
+
+function AiPanelImpl() {
   // Select only the fields the panel uses (no editing-tool state), so it stays
   // insulated from tool/color/selection churn while you edit.
   const app = useAppSelector(
