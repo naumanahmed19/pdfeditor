@@ -737,6 +737,14 @@ export class PdfPage {
       this.mod.FPDFText_ClosePage(this.textPage);
       this.textPage = 0;
     }
+    // Pair with FORM_OnAfterLoadPage in PdfDoc.page().
+    if (this.form && typeof this.mod.FORM_OnBeforeClosePage === "function") {
+      try {
+        this.mod.FORM_OnBeforeClosePage(this.handle, this.form);
+      } catch {
+        /* best effort */
+      }
+    }
     this.mod.FPDF_ClosePage(this.handle);
   }
 }
@@ -885,6 +893,17 @@ export class PdfDoc {
     const m = this.mod;
     const handle = m.FPDF_LoadPage(this.handle, index);
     if (!handle) throw new Error(`PDFium: could not load page ${index}`);
+    // Load the page into the form environment so widget data (radio/checkbox
+    // export values, field flags) is populated before we read annotations —
+    // otherwise PDFium only fills it lazily at first render, and an early
+    // getAnnotations() sees empty export values (breaking radio groups).
+    if (this.formHandle && typeof m.FORM_OnAfterLoadPage === "function") {
+      try {
+        m.FORM_OnAfterLoadPage(handle, this.formHandle);
+      } catch {
+        /* best effort */
+      }
+    }
     const width = m.FPDF_GetPageWidthF(handle);
     const height = m.FPDF_GetPageHeightF(handle);
     const rotation = m.FPDFPage_GetRotation(handle);
