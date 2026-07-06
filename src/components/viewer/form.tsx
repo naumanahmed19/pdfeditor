@@ -1319,31 +1319,33 @@ export function FieldProperties({
       )}
 
       {(isTexty || isChoice || isBtn) && (
-        <div className="flex items-end gap-2">
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <div className={lbl}>Font size</div>
-            <Select
-              className={sm}
-              value={String(ann.fontSize ?? 0)}
-              onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
-            >
-              <option value="0">Auto</option>
-              {[8, 9, 10, 11, 12, 14, 16, 18].map((s) => (
-                <option key={s} value={s}>
-                  {s}pt
-                </option>
-              ))}
-            </Select>
-          </div>
-          {(isTexty || isChoice) && (
-            <div className="space-y-0.5">
-              <div className={lbl}>Color</div>
-              <ColorSwatch
-                value={ann.textColor ?? "#000000"}
-                onChange={(v) => onPatch({ textColor: v })}
-              />
+        <div className="space-y-1.5">
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className={lbl}>Font size</div>
+              <Select
+                className={sm}
+                value={String(ann.fontSize ?? 0)}
+                onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
+              >
+                <option value="0">Auto</option>
+                {[8, 9, 10, 11, 12, 14, 16, 18].map((s) => (
+                  <option key={s} value={s}>
+                    {s}pt
+                  </option>
+                ))}
+              </Select>
             </div>
-          )}
+            {(isTexty || isChoice) && (
+              <div className="space-y-0.5">
+                <div className={lbl}>Color</div>
+                <ColorSwatch
+                  value={ann.textColor ?? "#000000"}
+                  onChange={(v) => onPatch({ textColor: v })}
+                />
+              </div>
+            )}
+          </div>
           <div className="space-y-0.5">
             <div className={lbl}>Align</div>
             <ToggleGroup
