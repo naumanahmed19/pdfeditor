@@ -1363,7 +1363,21 @@ export function FieldProperties({
 
       {isText && (
         <div className="space-y-1.5">
-          <div className="flex items-end gap-2">
+          <div className="space-y-0.5">
+            <div className={lbl}>Max length</div>
+            <Input
+              key={`max-${ann.id}`}
+              type="number"
+              min={0}
+              className={sm}
+              defaultValue={ann.maxLength ?? ""}
+              placeholder="∞"
+              onBlur={(e) =>
+                onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
+              }
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <label className="flex items-center gap-1.5 text-[11px]">
               <Checkbox
                 checked={!!ann.multiline}
@@ -1371,45 +1385,31 @@ export function FieldProperties({
               />
               Multiline
             </label>
-            <div className="flex-1 space-y-0.5">
-              <div className={lbl}>Max length</div>
-              <Input
-                key={`max-${ann.id}`}
-                type="number"
-                min={0}
-                className={sm}
-                defaultValue={ann.maxLength ?? ""}
-                placeholder="∞"
-                onBlur={(e) =>
-                  onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
-                }
-              />
-            </div>
+            {!ann.multiline && (
+              <>
+                <label
+                  className="flex items-center gap-1.5 text-[11px]"
+                  title="Fixed character cells — requires a max length"
+                >
+                  <Checkbox
+                    checked={!!ann.comb}
+                    onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
+                  />
+                  Comb (fixed cells)
+                  {ann.comb && !ann.maxLength && (
+                    <span className="text-[10px] text-amber-600">needs max length</span>
+                  )}
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px]" title="Masks the value with dots">
+                  <Checkbox
+                    checked={!!ann.password}
+                    onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
+                  />
+                  Password
+                </label>
+              </>
+            )}
           </div>
-          {!ann.multiline && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <label
-                className="flex items-center gap-1.5 text-[11px]"
-                title="Fixed character cells — requires a max length"
-              >
-                <Checkbox
-                  checked={!!ann.comb}
-                  onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
-                />
-                Comb (fixed cells)
-                {ann.comb && !ann.maxLength && (
-                  <span className="text-[10px] text-amber-600">needs max length</span>
-                )}
-              </label>
-              <label className="flex items-center gap-1.5 text-[11px]" title="Masks the value with dots">
-                <Checkbox
-                  checked={!!ann.password}
-                  onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
-                />
-                Password
-              </label>
-            </div>
-          )}
         </div>
       )}
 
