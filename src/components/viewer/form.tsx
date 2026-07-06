@@ -540,8 +540,6 @@ function FieldDesigner({
   const op = app.fieldOps[key];
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  if (op?.deleted) return null;
-
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
@@ -600,6 +598,9 @@ function FieldDesigner({
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSelected]);
+
+  // Hidden once deleted — checked after all hooks so the hook order is stable.
+  if (op?.deleted) return null;
 
   return (
     <div

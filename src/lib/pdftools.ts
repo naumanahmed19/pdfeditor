@@ -768,6 +768,10 @@ export async function bakeAnnotations(
     }
   }
 
+  // Delete removed/promoted existing fields FIRST, so a promoted field can be
+  // recreated with the same name (createFormFields dedupes against live names).
+  if (fieldOps && Object.keys(fieldOps).length) applyFieldDeletions(doc, fieldOps);
+
   if (newFields.length) createFormFields(doc, newFields);
 
   // Fill values before renames so entered values land in their fields.
@@ -798,6 +802,25 @@ export async function bakeAnnotations(
 }
 
 /** Apply move/rename/delete edits to existing AcroForm fields. */
+/** Remove fields marked deleted — runs before createFormFields so a promoted
+ *  field can reclaim the original's name. */
+function applyFieldDeletions(doc: PDFDocument, fieldOps: Record<string, ExistingFieldOp>) {
+  let form;
+  try {
+    form = doc.getForm();
+  } catch {
+    return;
+  }
+  for (const op of Object.values(fieldOps)) {
+    if (!op.deleted) continue;
+    try {
+      form.removeField(form.getField(op.fieldName));
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 function applyFieldOps(
   doc: PDFDocument,
   fieldOps: Record<string, ExistingFieldOp>,
@@ -812,11 +835,8 @@ function applyFieldOps(
   const renamed = new Set<string>();
   for (const op of Object.values(fieldOps)) {
     try {
+      if (op.deleted) continue; // handled up front by applyFieldDeletions
       const field = form.getField(op.fieldName);
-      if (op.deleted) {
-        form.removeField(field);
-        continue;
-      }
       if (op.newRect) {
         const page = doc.getPage(op.pageIndex);
         const { width: pw, height: ph } = page.getSize();

@@ -99,6 +99,70 @@ export function buildFormField(
   };
 }
 
+/** The subset of a read AcroForm field the promote step needs. */
+export interface ExistingFieldSpec {
+  fieldType: "Tx" | "Btn" | "Ch";
+  checkBox: boolean;
+  radioButton: boolean;
+  combo: boolean;
+  multiSelect: boolean;
+  comb: boolean;
+  multiLine: boolean;
+  maxLen?: number;
+  readOnly: boolean;
+  fieldValue: unknown;
+  options: string[];
+}
+
+/**
+ * Convert an existing AcroForm field into an editable placeholder so it can be
+ * edited with the full properties panel and recreated on save. Returns null for
+ * kinds we can't round-trip yet (radio groups, signatures). Styling we can't
+ * read (font/border/color) defaults; the user re-sets it in the panel.
+ */
+export function existingFieldToFormField(
+  annotations: AnnotationMap,
+  name: string,
+  rect: { x: number; y: number; w: number; h: number },
+  spec: ExistingFieldSpec,
+): FormFieldAnnotation | null {
+  let type: FormFieldType;
+  if (spec.fieldType === "Tx") type = "text";
+  else if (spec.fieldType === "Btn" && spec.checkBox) type = "checkbox";
+  else if (spec.fieldType === "Btn" && spec.radioButton) return null;
+  else if (spec.fieldType === "Btn") type = "button";
+  else if (spec.fieldType === "Ch") type = "dropdown";
+  else return null;
+
+  const value =
+    typeof spec.fieldValue === "string"
+      ? spec.fieldValue
+      : Array.isArray(spec.fieldValue)
+        ? String(spec.fieldValue[0] ?? "")
+        : "";
+  const ann: FormFieldAnnotation = {
+    ...buildFormField(annotations, type, rect),
+    fieldName: name,
+    readOnly: spec.readOnly || undefined,
+  };
+  if (type === "text") {
+    ann.multiline = spec.multiLine || undefined;
+    ann.comb = spec.comb || undefined;
+    ann.maxLength = spec.maxLen;
+    ann.defaultValue = value || undefined;
+  } else if (type === "dropdown") {
+    ann.options = spec.options.length ? spec.options : ["Option 1"];
+    ann.listBox = !spec.combo || undefined;
+    ann.multiSelect = (!spec.combo && spec.multiSelect) || undefined;
+    ann.defaultValue = value || undefined;
+  } else if (type === "checkbox") {
+    ann.defaultValue = value && value !== "Off" ? "true" : undefined;
+  } else if (type === "button") {
+    ann.buttonCaption = name;
+  }
+  return ann;
+}
+
 /** Every placed (not-yet-saved) form field, in page + tab order. */
 export function allFormFields(
   annotations: AnnotationMap,
