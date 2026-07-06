@@ -287,13 +287,19 @@ export function FormLayer({
           const n = f.maxLen;
           const chars = value.split("");
           return (
-            <div key={f.key} className={cn(inputCls, "overflow-hidden p-0")} style={style}>
+            <div
+              key={f.key}
+              className={cn(inputCls, "overflow-hidden p-0")}
+              // Opaque so PDFium's baked comb appearance beneath doesn't show
+              // through and double the glyphs; our grid is the only thing drawn.
+              style={{ ...style, background: "#ffffff" }}
+            >
               <div className="pointer-events-none absolute inset-0 flex">
                 {Array.from({ length: n }).map((_, i) => (
                   <div
                     key={i}
                     className={cn(
-                      "flex flex-1 items-center justify-center",
+                      "flex flex-1 items-center justify-center overflow-hidden",
                       i < n - 1 && "border-r border-blue-400/40",
                     )}
                   >
