@@ -14,6 +14,7 @@ import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 import { DATE_FORMATS } from "../../lib/formbuilder";
+import { FormFieldSkinToggle, useFormFieldTheme } from "./formFieldTheme";
 import type { Annotation, FormFieldAnnotation } from "../../types";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -56,6 +57,7 @@ export function FormLayer({
   visible: boolean;
 }) {
   const app = useApp();
+  const theme = useFormFieldTheme();
   const [fields, setFields] = useState<FormFieldSpec[]>([]);
 
   useEffect(() => {
@@ -158,8 +160,7 @@ export function FormLayer({
     }
   };
 
-  const inputCls =
-    "absolute rounded-[2px] border border-blue-400/50 bg-sky-400/10 text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white disabled:opacity-60";
+  const inputCls = theme.input;
 
   // Edit mode: existing fields become selectable designer objects — except
   // in the form builder's live preview, where everything stays fillable.
@@ -175,6 +176,7 @@ export function FormLayer({
 
   return (
     <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
+      {pageIndex === 0 && <FormFieldSkinToggle />}
       {fields.map((f) => {
         const opKey = fieldOpKey(f, pageIndex);
         const op = app.fieldOps[opKey];
@@ -226,7 +228,7 @@ export function FormLayer({
               checked={checked}
               disabled={f.readOnly}
               onChange={(e) => app.setFormValue(f.name, e.target.checked)}
-              className={cn(inputCls, "accent-blue-600")}
+              className={cn(inputCls, theme.accent)}
               style={style}
             />
           );
@@ -241,7 +243,7 @@ export function FormLayer({
               checked={groupValue === f.buttonValue}
               disabled={f.readOnly}
               onChange={() => app.setFormValue(f.name, f.buttonValue)}
-              className={cn(inputCls, "accent-blue-600")}
+              className={cn(inputCls, theme.accent)}
               style={style}
             />
           );
@@ -297,7 +299,7 @@ export function FormLayer({
                 fontSize: Math.min(14, Math.max(9, 11 * scale)),
                 // Opaque so the baked list-box appearance on the canvas beneath
                 // doesn't show through and double the option labels.
-                background: "#ffffff",
+                background: theme.fill,
               }}
             >
               {(f.options ?? []).map((o) => (
@@ -334,7 +336,7 @@ export function FormLayer({
               className={cn(inputCls, "overflow-hidden p-0")}
               // Opaque so PDFium's baked comb appearance beneath doesn't show
               // through and double the glyphs; our grid is the only thing drawn.
-              style={{ ...style, background: "#ffffff" }}
+              style={{ ...style, background: theme.fill }}
               onChange={(v) => app.setFormValue(f.name, v)}
             />
           );
@@ -381,6 +383,7 @@ function CombField({
   style: React.CSSProperties;
   onChange: (v: string) => void;
 }) {
+  const theme = useFormFieldTheme();
   const inputRef = useRef<HTMLInputElement>(null);
   // Caret to restore after an overwrite edit re-renders the controlled input.
   const pending = useRef<number | null>(null);
@@ -463,7 +466,7 @@ function CombField({
   };
 
   const dividers = layout
-    ? `repeating-linear-gradient(to right, transparent 0, transparent ${layout.cellW - 1}px, rgba(96,165,250,0.45) ${layout.cellW - 1}px, rgba(96,165,250,0.45) ${layout.cellW}px)`
+    ? `repeating-linear-gradient(to right, transparent 0, transparent ${layout.cellW - 1}px, ${theme.divider} ${layout.cellW - 1}px, ${theme.divider} ${layout.cellW}px)`
     : undefined;
 
   return (
@@ -484,9 +487,9 @@ function CombField({
         ...style,
         boxSizing: "border-box",
         padding: 0,
-        background: "#ffffff",
+        background: theme.fill,
         backgroundImage: dividers,
-        color: "#0f172a",
+        color: theme.text,
         fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
         letterSpacing: layout ? `${layout.ls}px` : undefined,
         textIndent: layout ? `${layout.indent}px` : undefined,
