@@ -20,7 +20,7 @@ import {
   existingFieldToFormField,
 } from "../../lib/formbuilder";
 import { useFormFieldTheme } from "./formFieldTheme";
-import { fieldValueError, formatFieldValue } from "../../lib/fieldFormat";
+import { type FieldFormat, fieldValueError, formatFieldValue } from "../../lib/fieldFormat";
 import type { Annotation, FormFieldAnnotation } from "../../types";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -48,6 +48,8 @@ interface FormFieldSpec {
   comb?: boolean;
   /** List box (choice field, non-combo) allowing more than one selection. */
   multiSelect?: boolean;
+  /** Text field format preset (from /AA AF actions). */
+  format?: FieldFormat;
 }
 
 /** Renders the PDF's AcroForm fields as fillable inputs. */
@@ -94,6 +96,7 @@ export function FormLayer({
               initial: a.fieldValue ?? "",
               maxLen: a.maxLen || undefined,
               comb: !a.multiLine && !!a.comb && !!a.maxLen,
+              format: a.format as FieldFormat | undefined,
             });
           } else if (a.fieldType === "Btn" && a.checkBox) {
             out.push({
@@ -346,6 +349,20 @@ export function FormLayer({
             />
           );
         }
+        if (f.format && f.format !== "none") {
+          return (
+            <FormatTextField
+              key={f.key}
+              value={value}
+              format={f.format}
+              readOnly={f.readOnly}
+              maxLength={f.maxLen}
+              className={cn(inputCls, "px-1")}
+              style={style}
+              onChange={(v) => app.setFormValue(f.name, v)}
+            />
+          );
+        }
         return (
           <input
             key={f.key}
@@ -360,6 +377,48 @@ export function FormLayer({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Text fill-input for a field with a format preset. Shows the raw value while
+ * focused (so editing is unfiltered) and the Acrobat-style formatted value once
+ * blurred, mirroring what the baked /AA actions produce in Acrobat/Chrome.
+ * A failing validation (e.g. a malformed email) gets a red ring + message.
+ */
+function FormatTextField({
+  value,
+  format,
+  readOnly,
+  maxLength,
+  className,
+  style,
+  onChange,
+}: {
+  value: string;
+  format: FieldFormat;
+  readOnly?: boolean;
+  maxLength?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  onChange: (v: string) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const error = fieldValueError(format, value);
+  const display = focused ? value : formatFieldValue(format, value);
+  return (
+    <input
+      type="text"
+      value={display}
+      disabled={readOnly}
+      maxLength={maxLength}
+      title={error ?? undefined}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onChange={(e) => onChange(e.target.value)}
+      className={cn(className, error && "ring-1 ring-red-500")}
+      style={style}
+    />
   );
 }
 
