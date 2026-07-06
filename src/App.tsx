@@ -532,13 +532,13 @@ function Shell() {
         {/* Mobile drawer backdrops */}
         {app.sidebarOpen && (
           <div
-            className="fixed inset-0 top-[42px] z-30 bg-black/40 lg:hidden"
+            className="fixed inset-0 top-[42px] z-40 bg-black/40 lg:hidden"
             onClick={() => app.setSidebarOpen(false)}
           />
         )}
         {app.aiOpen && app.isMobile && (
           <div
-            className="fixed inset-0 top-[42px] z-30 bg-black/40 lg:hidden"
+            className="fixed inset-0 top-[42px] z-40 bg-black/40 lg:hidden"
             onClick={() => app.setAiOpen(false)}
           />
         )}
