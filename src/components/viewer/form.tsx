@@ -266,9 +266,12 @@ function FieldDesigner({
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
+  // Mirror AnnotationItem's `selectable`: an existing field is only movable with
+  // the select tool, and a read-only widget acts as "locked" (clicks pass through).
+  const canEdit = app.tool === "select" && !field.readOnly;
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
-    if (app.tool !== "select") return;
+    if (!canEdit) return;
     e.stopPropagation();
     e.preventDefault();
     app.setSelectedField(base);
@@ -321,14 +324,14 @@ function FieldDesigner({
         top: rect.y * scale,
         width: rect.w * scale,
         height: rect.h * scale,
-        pointerEvents: app.tool === "select" ? "auto" : "none",
-        cursor: app.tool === "select" ? "move" : "default",
-        touchAction: app.tool === "select" ? "none" : "auto",
+        pointerEvents: canEdit ? "auto" : "none",
+        cursor: canEdit ? "move" : "default",
+        touchAction: canEdit ? "none" : "auto",
       }}
       className={cn(
         "group",
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
-        !isSelected && app.tool === "select" && "hover:ring-1 hover:ring-blue-400/60",
+        !isSelected && canEdit && "hover:ring-1 hover:ring-blue-400/60",
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
     >
