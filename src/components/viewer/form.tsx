@@ -14,7 +14,7 @@ import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 import { DATE_FORMATS } from "../../lib/formbuilder";
-import { FormFieldSkinToggle, useFormFieldTheme } from "./formFieldTheme";
+import { useFormFieldTheme } from "./formFieldTheme";
 import type { Annotation, FormFieldAnnotation } from "../../types";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -176,7 +176,6 @@ export function FormLayer({
 
   return (
     <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
-      {pageIndex === 0 && <FormFieldSkinToggle />}
       {fields.map((f) => {
         const opKey = fieldOpKey(f, pageIndex);
         const op = app.fieldOps[opKey];

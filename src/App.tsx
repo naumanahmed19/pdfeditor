@@ -35,6 +35,7 @@ import { DropZone } from "./components/layout/DropZone";
 import { Viewer } from "./components/viewer/Viewer";
 import { ReaderPane } from "./components/viewer/ReaderPane";
 import { EditorToolbar } from "./components/viewer/Toolbar";
+import { FormFieldSkinToggle } from "./components/viewer/formFieldTheme";
 import { SignatureModal } from "./components/viewer/SignatureModal";
 import { AiPanel } from "./components/ai/AiPanel";
 import { SettingsScreen } from "./components/settings/SettingsScreen";
@@ -484,6 +485,7 @@ function Shell() {
         <Sidebar />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background lg:rounded-tl-lg lg:border-l lg:border-t lg:shadow-shell">
           <ContentHeader />
+          {app.screen === "viewer" && app.pdf && <FormFieldSkinToggle />}
           {app.screen === "viewer" && <EditorToolbar />}
           <div className="min-h-0 flex-1">
             {app.screen === "viewer" &&
