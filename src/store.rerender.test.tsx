@@ -7,7 +7,7 @@
 // pins that guarantee so a future change can't silently regress it.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, cleanup } from "@testing-library/react";
-import { AppProvider, useApp, useUI } from "./store";
+import { AppProvider, useApp, useUI, useAppSelector } from "./store";
 
 // Keep the provider hermetic: stub the browser-only / heavy modules it imports
 // so mounting it in jsdom doesn't touch IndexedDB, the File System Access API,
@@ -27,7 +27,7 @@ vi.mock("./lib/pdftools", () => ({
   bakeAnnotations: vi.fn(),
 }));
 
-const counts = { capture: 0, tool: 0, sidebar: 0 };
+const counts = { capture: 0, tool: 0, sidebar: 0, selSidebar: 0, selAction: 0 };
 let store: ReturnType<typeof useApp>;
 
 function Capture() {
@@ -47,9 +47,21 @@ function SidebarProbe() {
   counts.sidebar++;
   return null;
 }
+/** Selects a single field via useAppSelector — the new subscription path. */
+function SelectorSidebarProbe() {
+  useAppSelector((s) => s.sidebarOpen);
+  counts.selSidebar++;
+  return null;
+}
+/** Selects a stable action — should never re-render after mount. */
+function SelectorActionProbe() {
+  useAppSelector((s) => s.openFile);
+  counts.selAction++;
+  return null;
+}
 
 beforeEach(() => {
-  counts.capture = counts.tool = counts.sidebar = 0;
+  counts.capture = counts.tool = counts.sidebar = counts.selSidebar = counts.selAction = 0;
 });
 afterEach(() => cleanup());
 
@@ -87,5 +99,32 @@ describe("store re-render isolation", () => {
       store.setSidebarOpen(!store.sidebarOpen);
     });
     expect(counts.sidebar).toBe(before + 1);
+  });
+
+  it("useAppSelector re-renders only when the selected field changes", () => {
+    render(
+      <AppProvider>
+        <Capture />
+        <SelectorSidebarProbe />
+        <SelectorActionProbe />
+      </AppProvider>,
+    );
+    const sbBefore = counts.selSidebar;
+    const actBefore = counts.selAction;
+
+    // An unrelated change (the active tool) must not re-render either selector.
+    act(() => {
+      store.setTool("text");
+    });
+    expect(counts.selSidebar).toBe(sbBefore);
+    expect(counts.selAction).toBe(actBefore);
+
+    // Changing the selected field re-renders exactly that consumer...
+    act(() => {
+      store.setSidebarOpen(!store.sidebarOpen);
+    });
+    expect(counts.selSidebar).toBe(sbBefore + 1);
+    // ...and the stable-action selector still never re-renders.
+    expect(counts.selAction).toBe(actBefore);
   });
 });

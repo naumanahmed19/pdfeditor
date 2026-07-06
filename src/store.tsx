@@ -3,11 +3,13 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import type { PdfDoc } from "./lib/pdf";
 import { toast } from "sonner";
 import type {
@@ -473,6 +475,57 @@ export function useApp(): AppStore {
   const v = useContext(Ctx);
   if (!v) throw new Error("useApp outside provider");
   return v;
+}
+
+/**
+ * Subscription API for selector-based store access. The provider keeps the
+ * current store in a ref and notifies subscribers after each commit; consumers
+ * read it through React's own useSyncExternalStore, so they re-render only when
+ * their SELECTED slice changes — even though the store object itself is rebuilt
+ * every render. This context value is created once and never changes, so
+ * reading it (unlike reading the main Ctx) never itself forces a re-render.
+ */
+interface StoreApi {
+  subscribe: (cb: () => void) => () => void;
+  getStore: () => AppStore;
+}
+
+const StoreApiCtx = createContext<StoreApi | null>(null);
+
+/**
+ * Read a slice of the store. The component re-renders only when `selector`'s
+ * result changes (compared with `isEqual`, default Object.is). Prefer this over
+ * `useApp()` in components that don't need the whole store — especially
+ * peripheral chrome (sidebar, title bar, AI panel) that would otherwise
+ * re-render on every unrelated editing update.
+ *
+ * Return a primitive or a stable reference; a selector that builds a fresh
+ * object each call needs a shallow `isEqual` (see `shallowEqual`) or it will
+ * re-render every time.
+ */
+export function useAppSelector<T>(
+  selector: (s: AppStore) => T,
+  isEqual?: (a: T, b: T) => boolean,
+): T {
+  const api = useContext(StoreApiCtx);
+  if (!api) throw new Error("useAppSelector outside provider");
+  return useSyncExternalStoreWithSelector(
+    api.subscribe,
+    api.getStore,
+    api.getStore,
+    selector,
+    isEqual,
+  );
+}
+
+/** Shallow-equality helper for selectors that return an object of fields. */
+export function shallowEqual<T extends Record<string, unknown>>(a: T, b: T): boolean {
+  if (Object.is(a, b)) return true;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) if (!Object.is(a[k], b[k])) return false;
+  return true;
 }
 
 /**
@@ -2936,9 +2989,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  // --- selector subscription plumbing (powers useAppSelector) ---
+  // Keep the latest store in a ref and notify subscribers after each commit.
+  const storeRef = useRef(value);
+  storeRef.current = value;
+  const listenersRef = useRef<Set<() => void>>(new Set());
+  const storeApi = useMemo<StoreApi>(
+    () => ({
+      subscribe: (cb) => {
+        listenersRef.current.add(cb);
+        return () => {
+          listenersRef.current.delete(cb);
+        };
+      },
+      getStore: () => storeRef.current,
+    }),
+    [],
+  );
+  useLayoutEffect(() => {
+    for (const cb of listenersRef.current) cb();
+  });
+
   return (
-    <Ctx.Provider value={value}>
-      <UICtx.Provider value={uiValue}>{children}</UICtx.Provider>
-    </Ctx.Provider>
+    <StoreApiCtx.Provider value={storeApi}>
+      <Ctx.Provider value={value}>
+        <UICtx.Provider value={uiValue}>{children}</UICtx.Provider>
+      </Ctx.Provider>
+    </StoreApiCtx.Provider>
   );
 }
