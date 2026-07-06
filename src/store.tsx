@@ -81,7 +81,14 @@ export interface PasswordRequest {
 /** The document's base bytes + its parsed PDFium document at a point in history. */
 interface BaseState {
   bytes: Uint8Array;
-  pdf: PdfDoc;
+  /**
+   * The live proxy for these bytes, when one is retained (open + legacy reset
+   * paths that loadPdf a fresh doc). In-place content edits mutate the single
+   * live `doc.pdf` directly and store bytes only (pdf undefined); undo/redo
+   * reload from bytes when they cross a content boundary. Never rendered
+   * directly for a content step — see undo/redo.
+   */
+  pdf?: PdfDoc;
 }
 
 interface OpenDoc {
@@ -165,6 +172,9 @@ interface AppStore {
   pdf: PdfDoc | null;
   numPages: number;
   docVersion: number;
+  /** In-place content-edit revision (existing-object move/resize/delete/recolor);
+   *  bump repaints the live page without a remount. */
+  contentRev: number;
 
   openFile: (file: File) => Promise<void>;
   openBytes: (bytes: Uint8Array, name: string) => Promise<string | null>;
@@ -563,7 +573,28 @@ function pushHistory(
     bytesHistory,
     historyIndex: history.length - 1,
     bytes: base.bytes,
-    pdf: base.pdf,
+    // Keep the current live proxy when a base carries none (bytes-only steps
+    // from in-place content edits) — never blank out doc.pdf.
+    pdf: base.pdf ?? d.pdf,
+  };
+}
+
+/**
+ * Append an undo step for an IN-PLACE content edit (move/resize/delete/recolor
+ * of an existing page object). The live `d.pdf` was already mutated in place,
+ * so the step records only the new bytes — no per-step proxy. Annotations are
+ * untouched by an object edit, so they carry forward. doc.pdf is left as-is.
+ */
+function pushContentEdit(d: OpenDoc, nextBytes: Uint8Array): Partial<OpenDoc> {
+  const trimHist = d.history.slice(0, d.historyIndex + 1);
+  const trimBase = d.bytesHistory.slice(0, d.historyIndex + 1);
+  const history = [...trimHist, d.annotations].slice(-HISTORY_CAP);
+  const bytesHistory = [...trimBase, { bytes: nextBytes }].slice(-HISTORY_CAP);
+  return {
+    bytes: nextBytes,
+    history,
+    bytesHistory,
+    historyIndex: history.length - 1,
   };
 }
 
@@ -604,6 +635,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [paneSizes, setPaneSizes] = useState<number[]>([]);
   const MAX_PANES = 4;
   const [docVersion, setDocVersion] = useState(0);
+  // Bumped when the live document is edited IN PLACE (existing-object move /
+  // resize / delete / recolor). Unlike docVersion it is NOT used as a React
+  // key, so pages repaint from the same live `pdf` handle without remounting
+  // (no flash, no scroll jump) — the render effects just re-read it.
+  const [contentRev, setContentRev] = useState(0);
 
   const active = docs.find((d) => d.id === activeTabId) ?? null;
 
@@ -1104,33 +1140,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSelected(null);
   }, [activeTabId, updateDoc]);
 
-  // Undo/redo restore both annotations and the base bytes/pdf from the aligned
-  // timeline. Swapping `pdf` re-renders pages in place — no docVersion bump, so
-  // there's no remount flash or scroll jump.
+  // Restore an aligned (annotations + base bytes) history step.
+  //
+  // The single live `pdf` is mutated in place by object edits, so a step's
+  // retained proxy can't be trusted for a content boundary — instead:
+  //  • same base bytes as now  → only annotations changed, keep the live pdf;
+  //  • a distinct retained proxy → legacy reset step, swap it in;
+  //  • otherwise               → reload the one live pdf from the step's bytes.
+  // Reloads are a whole-doc parse, but undo/redo is rare — the common forward
+  // edit stays reparse-free.
+  const restoreStep = useCallback(
+    async (doc: OpenDoc, target: number) => {
+      const base = doc.bytesHistory[target] ?? { bytes: doc.bytes, pdf: doc.pdf };
+      const annotations = doc.history[target] ?? {};
+      if (base.bytes === doc.bytes) {
+        updateDoc(doc.id, { historyIndex: target, annotations });
+      } else if (base.pdf && base.pdf !== doc.pdf) {
+        updateDoc(doc.id, { historyIndex: target, annotations, bytes: base.bytes, pdf: base.pdf });
+        setContentRev((v) => v + 1);
+      } else {
+        const nextPdf = await loadPdf(base.bytes);
+        const prev = doc.pdf;
+        updateDoc(doc.id, { historyIndex: target, annotations, bytes: base.bytes, pdf: nextPdf });
+        setContentRev((v) => v + 1);
+        // Free the outgoing proxy unless a history base still references it
+        // (those are freed together on close via destroyDocProxies).
+        if (prev && prev !== nextPdf && !doc.bytesHistory.some((b) => b.pdf === prev)) {
+          prev.destroy().catch(() => {});
+        }
+      }
+      setSelected(null);
+    },
+    [updateDoc],
+  );
+
   const undo = useCallback(() => {
     if (!active) return;
-    const target = Math.max(0, active.historyIndex - 1);
-    const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
-    updateDoc(active.id, {
-      historyIndex: target,
-      annotations: active.history[target] ?? {},
-      bytes: base.bytes,
-      pdf: base.pdf,
-    });
-    setSelected(null);
-  }, [active, updateDoc]);
+    void restoreStep(active, Math.max(0, active.historyIndex - 1));
+  }, [active, restoreStep]);
 
   const redo = useCallback(() => {
     if (!active) return;
-    const target = Math.min(active.history.length - 1, active.historyIndex + 1);
-    const base = active.bytesHistory[target] ?? { bytes: active.bytes, pdf: active.pdf };
-    updateDoc(active.id, {
-      historyIndex: target,
-      annotations: active.history[target] ?? {},
-      bytes: base.bytes,
-      pdf: base.pdf,
-    });
-  }, [active, updateDoc]);
+    void restoreStep(active, Math.min(active.history.length - 1, active.historyIndex + 1));
+  }, [active, restoreStep]);
 
   const hasAnnotations = useMemo(
     () => (active ? docHasEdits(active) : false),
@@ -1829,12 +1881,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [active],
   );
 
-  /** Read the movable objects (text + images) on a page, for the object tool. */
+  /** Read the movable objects (text + images) on a page, for the object tool.
+   *  Reads from the LIVE document handle — no whole-document reparse. */
   const getPageObjects = useCallback(
     async (pageIndex: number) => {
       if (!active) return [];
-      const { getPageObjects: read } = await import("./lib/pdfium");
-      return read(active.bytes, pageIndex);
+      return active.pdf.getPageObjects(pageIndex);
     },
     [active],
   );
@@ -1855,6 +1907,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
         pushHistory(d, d.annotations, { bytes: nextBytes, pdf: nextPdf }),
       );
       setSelected(null);
+      persistWorking(id, active.name, nextBytes);
+    },
+    [active, updateDoc, persistWorking],
+  );
+
+  /**
+   * Fast path for editing an EXISTING page object (move / resize / delete /
+   * recolor). Mutates the live rendering document directly and repaints just
+   * that page via contentRev — no editing-engine round trip and no whole-doc
+   * reparse. The only whole-doc work is serializing for undo/persist, and it
+   * reuses the already-open handle (no reload). This is what makes dragging
+   * existing text/images feel instant instead of freezing on every drop.
+   */
+  const commitObjectEdit = useCallback(
+    (mutate: (pdf: PdfDoc) => void) => {
+      if (!active) return;
+      const id = active.id;
+      const pdf = active.pdf;
+      mutate(pdf); // in-place edit on the live doc (synchronous)
+      const nextBytes = pdf.serialize(); // reflects the edit; no reparse
+      updateDoc(id, (d) => pushContentEdit(d, nextBytes));
+      setSelected(null);
+      setContentRev((v) => v + 1); // repaint the live page(s) in place
       persistWorking(id, active.name, nextBytes);
     },
     [active, updateDoc, persistWorking],
@@ -1951,28 +2026,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /** Move/resize an existing object (text or image) via an affine transform. */
   const applyObjectTransform = useCallback(
     async (pageIndex: number, objectIndex: number, m: PdfiumMatrix) => {
-      const { transformObject } = await import("./lib/pdfium");
-      await commitInPlace((b) => transformObject(b, pageIndex, objectIndex, m));
+      commitObjectEdit((pdf) => pdf.transformObject(pageIndex, objectIndex, m));
     },
-    [commitInPlace],
+    [commitObjectEdit],
   );
 
   /** Delete an existing object (text, image or path) from the page. */
   const removeObjectAt = useCallback(
     async (pageIndex: number, objectIndex: number) => {
-      const { removeObject } = await import("./lib/pdfium");
-      await commitInPlace((b) => removeObject(b, pageIndex, objectIndex));
+      commitObjectEdit((pdf) => pdf.removeObject(pageIndex, objectIndex));
     },
-    [commitInPlace],
+    [commitObjectEdit],
   );
 
   /** Restyle an existing object's fill/stroke color and/or stroke width. */
   const applyObjectStyle = useCallback(
     async (pageIndex: number, objectIndex: number, style: PdfiumObjectStyle) => {
-      const { setObjectStyle } = await import("./lib/pdfium");
-      await commitInPlace((b) => setObjectStyle(b, pageIndex, objectIndex, style));
+      commitObjectEdit((pdf) => pdf.setObjectStyle(pageIndex, objectIndex, style));
     },
-    [commitInPlace],
+    [commitObjectEdit],
   );
 
   /**
@@ -2607,6 +2679,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pdf: active?.pdf ?? null,
     numPages: active?.pdf?.numPages ?? 0,
     docVersion,
+    contentRev,
     openFile,
     openBytes,
     requestOpen,

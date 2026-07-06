@@ -12,9 +12,15 @@
 import { init, type WrappedPdfiumModule } from "@embedpdf/pdfium";
 import wasmUrl from "@embedpdf/pdfium/pdfium.wasm?url";
 import type { OutlineNode } from "../types";
+import type { Matrix, ObjectStyle, PageObject, Rgba } from "./pdfium";
 
 const FPDF_ANNOT = 0x01;
 const FPDF_LCD_TEXT = 0x02;
+
+// Page-object types (fpdf_edit.h).
+const FPDF_PAGEOBJ_TEXT = 1;
+const FPDF_PAGEOBJ_PATH = 2;
+const FPDF_PAGEOBJ_IMAGE = 3;
 
 let modPromise: Promise<WrappedPdfiumModule> | null = null;
 
@@ -41,7 +47,43 @@ function rt(mod: WrappedPdfiumModule) {
     wasmExports: { malloc: (n: number) => number; free: (p: number) => void };
     setValue: (ptr: number, value: number, type: string) => void;
     getValue: (ptr: number, type: string) => number;
+    addFunction: (fn: (...a: number[]) => number, sig: string) => number;
+    removeFunction: (ptr: number) => void;
   };
+}
+
+/** Read a NUL-terminated UTF-8 string PDFium wrote to the heap. */
+function readUtf8(mod: WrappedPdfiumModule, ptr: number, byteLen: number): string {
+  const r = rt(mod);
+  let end = ptr;
+  while (end < ptr + byteLen && r.HEAPU8[end] !== 0) end++;
+  return new TextDecoder().decode(r.HEAPU8.subarray(ptr, end));
+}
+
+/** Serialize a live PDFium document handle to fresh bytes (FPDF_SaveAsCopy). */
+function saveDoc(mod: WrappedPdfiumModule, doc: number): Uint8Array {
+  const r = rt(mod);
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  const cb = r.addFunction((_pThis: number, pData: number, size: number) => {
+    parts.push(r.HEAPU8.slice(pData, pData + size));
+    total += size;
+    return 1;
+  }, "iiii");
+  const structPtr = r.wasmExports.malloc(8); // { int version; WriteBlock* fn }
+  r.setValue(structPtr, 1, "i32");
+  r.setValue(structPtr + 4, cb, "i32");
+  const ok = mod.FPDF_SaveAsCopy(doc, structPtr, 0);
+  r.wasmExports.free(structPtr);
+  r.removeFunction(cb);
+  if (!ok) throw new Error("PDFium: FPDF_SaveAsCopy failed");
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
 }
 
 function toHeap(mod: WrappedPdfiumModule, bytes: Uint8Array): number {
@@ -195,6 +237,149 @@ export class PdfPage {
   private text(): number {
     if (!this.textPage) this.textPage = this.mod.FPDFText_LoadPage(this.handle);
     return this.textPage;
+  }
+
+  /** Drop the cached text page — call after the page content changes so text
+   *  geometry (selection layer, object bounds) is re-read fresh. */
+  resetText(): void {
+    if (this.textPage) {
+      this.mod.FPDFText_ClosePage(this.textPage);
+      this.textPage = 0;
+    }
+  }
+
+  /**
+   * The movable objects on this page — text runs, images and vector paths —
+   * with page-space bounds, read directly from the LIVE page handle (no
+   * document reparse). Mirrors pdfium.ts's byte-based getPageObjects.
+   */
+  getObjects(): PageObject[] {
+    const m = this.mod;
+    const r = rt(m);
+    const tp = this.text();
+    const f4 = r.wasmExports.malloc(16);
+    const fs = r.wasmExports.malloc(4);
+    const c4 = r.wasmExports.malloc(16);
+    const readColor = (
+      get: (o: number, r: number, g: number, b: number, a: number) => boolean,
+      obj: number,
+    ): Rgba => {
+      if (!get(obj, c4, c4 + 4, c4 + 8, c4 + 12)) return null;
+      const a = r.getValue(c4 + 12, "i32") & 0xff;
+      if (a === 0) return null;
+      return [
+        r.getValue(c4, "i32") & 0xff,
+        r.getValue(c4 + 4, "i32") & 0xff,
+        r.getValue(c4 + 8, "i32") & 0xff,
+        a,
+      ];
+    };
+    const out: PageObject[] = [];
+    try {
+      const count = m.FPDFPage_CountObjects(this.handle);
+      for (let i = 0; i < count; i++) {
+        const obj = m.FPDFPage_GetObject(this.handle, i);
+        const type = m.FPDFPageObj_GetType(obj);
+        if (
+          type !== FPDF_PAGEOBJ_TEXT &&
+          type !== FPDF_PAGEOBJ_IMAGE &&
+          type !== FPDF_PAGEOBJ_PATH
+        )
+          continue;
+        if (!m.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
+        let text = "";
+        let fontSize = 0;
+        let fontName = "";
+        if (type === FPDF_PAGEOBJ_TEXT) {
+          const need = m.FPDFTextObj_GetText(obj, tp, 0, 0);
+          if (need > 0) {
+            const b = r.wasmExports.malloc(need * 2);
+            m.FPDFTextObj_GetText(obj, tp, b, need);
+            text = readUtf16(m, b, need * 2);
+            r.wasmExports.free(b);
+          }
+          m.FPDFTextObj_GetFontSize(obj, fs);
+          fontSize = r.getValue(fs, "float");
+          const font = m.FPDFTextObj_GetFont(obj);
+          if (font) {
+            const n = m.FPDFFont_GetBaseFontName(font, 0, 0);
+            if (n > 0) {
+              const nb = r.wasmExports.malloc(n);
+              m.FPDFFont_GetBaseFontName(font, nb, n);
+              fontName = readUtf8(m, nb, n);
+              r.wasmExports.free(nb);
+            }
+          }
+        }
+        out.push({
+          index: i,
+          kind:
+            type === FPDF_PAGEOBJ_TEXT
+              ? "text"
+              : type === FPDF_PAGEOBJ_IMAGE
+                ? "image"
+                : "path",
+          text,
+          left: r.getValue(f4, "float"),
+          bottom: r.getValue(f4 + 4, "float"),
+          right: r.getValue(f4 + 8, "float"),
+          top: r.getValue(f4 + 12, "float"),
+          fontSize,
+          fill: type === FPDF_PAGEOBJ_IMAGE ? null : readColor(m.FPDFPageObj_GetFillColor, obj),
+          stroke: type === FPDF_PAGEOBJ_PATH ? readColor(m.FPDFPageObj_GetStrokeColor, obj) : null,
+          strokeWidth:
+            type === FPDF_PAGEOBJ_PATH && m.FPDFPageObj_GetStrokeWidth(obj, fs)
+              ? r.getValue(fs, "float")
+              : 0,
+          fontName,
+        });
+      }
+      return out;
+    } finally {
+      r.wasmExports.free(f4);
+      r.wasmExports.free(fs);
+      r.wasmExports.free(c4);
+    }
+  }
+
+  /**
+   * Apply an in-place content edit to this page: mutate an object, regenerate
+   * the content stream, and drop the stale text-page cache. The change is
+   * visible on the next render of THIS live handle — no reparse, no reload.
+   */
+  private edit(fn: (m: WrappedPdfiumModule, page: number) => void): void {
+    fn(this.mod, this.handle);
+    this.mod.FPDFPage_GenerateContent(this.handle);
+    this.resetText();
+  }
+
+  /** Move/scale the object at `objectIndex` by an affine matrix (page space). */
+  transformObject(objectIndex: number, mtx: Matrix): void {
+    this.edit((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      m.FPDFPageObj_Transform(obj, mtx.a, mtx.b, mtx.c, mtx.d, mtx.e, mtx.f);
+    });
+  }
+
+  /** Delete the object at `objectIndex` from the content stream. */
+  removeObject(objectIndex: number): void {
+    this.edit((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      if (m.FPDFPage_RemoveObject(page, obj)) m.FPDFPageObj_Destroy(obj);
+    });
+  }
+
+  /** Recolor / restroke the object at `objectIndex`. */
+  setObjectStyle(objectIndex: number, style: ObjectStyle): void {
+    this.edit((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      if (style.fill) m.FPDFPageObj_SetFillColor(obj, ...style.fill);
+      if (style.stroke) m.FPDFPageObj_SetStrokeColor(obj, ...style.stroke);
+      if (style.strokeWidth != null) m.FPDFPageObj_SetStrokeWidth(obj, style.strokeWidth);
+    });
   }
 
   /** pdf.js-compatible viewport at `scale`. */
@@ -680,6 +865,31 @@ export class PdfDoc {
   /** pdf.js-compatible page access: 1-based and async. */
   async getPage(oneBased: number): Promise<PdfPage> {
     return this.page(oneBased - 1);
+  }
+
+  /** Movable objects on a page, read from the live handle (no reparse). */
+  getPageObjects(pageIndex: number): PageObject[] {
+    return this.page(pageIndex).getObjects();
+  }
+
+  /** In-place move/scale of an existing object. Renders on next repaint. */
+  transformObject(pageIndex: number, objectIndex: number, m: Matrix): void {
+    this.page(pageIndex).transformObject(objectIndex, m);
+  }
+
+  /** In-place delete of an existing object. */
+  removeObject(pageIndex: number, objectIndex: number): void {
+    this.page(pageIndex).removeObject(objectIndex);
+  }
+
+  /** In-place recolor/restroke of an existing object. */
+  setObjectStyle(pageIndex: number, objectIndex: number, style: ObjectStyle): void {
+    this.page(pageIndex).setObjectStyle(objectIndex, style);
+  }
+
+  /** Serialize the current (possibly in-place-edited) document to fresh bytes. */
+  serialize(): Uint8Array {
+    return saveDoc(this.mod, this.handle);
   }
 
   /** Document outline (bookmarks) with resolved page indices. */

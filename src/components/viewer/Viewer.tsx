@@ -910,6 +910,9 @@ function PageView({
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [painted, setPainted] = useState(false);
+  // Tracks the last content-edit revision this page painted, to tell an
+  // in-place repaint (no skeleton) from a fresh render (skeleton).
+  const lastRevRef = useRef(0);
   const renderTask = useRef<{ cancel: () => void } | null>(null);
   const [textLayerReady, setTextLayerReady] = useState(0);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
@@ -959,7 +962,12 @@ function PageView({
       setPainted(false);
       return;
     }
-    setPainted(false);
+    // An in-place content edit (contentRev bumped) just repaints over the
+    // existing canvas — don't drop to the skeleton, which would gray-flash on
+    // every object move. The skeleton still shows for first paint / zoom.
+    const contentOnly = lastRevRef.current !== app.contentRev;
+    lastRevRef.current = app.contentRev;
+    if (!contentOnly) setPainted(false);
     let cancelled = false;
     const timer = setTimeout(async () => {
       const canvas = canvasRef.current;
@@ -1002,7 +1010,9 @@ function PageView({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [pdf, pageIndex, scale, visible]);
+    // app.contentRev: an existing-object edit mutated the live doc in place —
+    // repaint from the same handle (no pdf identity change to key off).
+  }, [pdf, pageIndex, scale, visible, app.contentRev]);
 
   // Search highlighting on the text layer — wraps only the matched
   // substring in a mark, not the whole text run.
@@ -2136,8 +2146,9 @@ function ObjectLayer({
     return () => {
       alive = false;
     };
+    // app.contentRev: reload object rects after an in-place edit repaints.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, pageIndex, scale]);
+  }, [pdf, pageIndex, scale, app.contentRev]);
 
   const selObj = objects.find((o) => o.index === sel) ?? null;
 
