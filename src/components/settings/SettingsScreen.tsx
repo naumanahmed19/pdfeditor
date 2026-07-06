@@ -25,6 +25,7 @@ import {
 } from "../../lib/browserLlm";
 import { BROWSER_MODEL } from "../../lib/modelConfig";
 import { ACCENTS } from "../../lib/accents";
+import { setFormFieldSkin, useFormFieldSkin } from "../viewer/formFieldTheme";
 import type { ProviderKind } from "../../types";
 
 const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
@@ -41,6 +42,7 @@ const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
 export function SettingsScreen() {
   const app = useApp();
   const s = app.settings;
+  const fieldSkin = useFormFieldSkin();
   const [models, setModels] = useState<string[]>([]);
   const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -92,6 +94,27 @@ export function SettingsScreen() {
                   )}
                 >
                   {t}
+                </button>
+              ))}
+            </div>
+          </Row>
+          <Row
+            title="Form field skin"
+            description="Styling for fillable form fields (blue tint, or shadcn inputs)."
+          >
+            <div className="inline-flex rounded-md bg-muted p-0.5">
+              {(["blue", "shadcn"] as const).map((skin) => (
+                <button
+                  key={skin}
+                  onClick={() => setFormFieldSkin(skin)}
+                  className={cn(
+                    "h-7 rounded-sm px-3 text-xs font-medium capitalize transition",
+                    fieldSkin === skin
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {skin}
                 </button>
               ))}
             </div>

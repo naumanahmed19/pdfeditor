@@ -92,20 +92,3 @@ export function useFormFieldSkin(): FormFieldSkin {
 export function useFormFieldTheme(): FormFieldThemeDef {
   return FORM_FIELD_THEMES[useFormFieldSkin()];
 }
-
-/** Floating toggle to flip skins — a testing aid, safe to delete. */
-export function FormFieldSkinToggle() {
-  const skin = useFormFieldSkin();
-  return (
-    <div className="pointer-events-auto fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
-      <span className="text-muted-foreground">Field skin</span>
-      <button
-        type="button"
-        onClick={() => setFormFieldSkin(skin === "blue" ? "shadcn" : "blue")}
-        className="rounded-md border px-2 py-1 font-medium capitalize hover:bg-accent"
-      >
-        {skin}
-      </button>
-    </div>
-  );
-}
