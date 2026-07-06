@@ -10,7 +10,8 @@
 - [x] Form-design mode with a field palette (sidebar), not a toolbar menu
 - [x] Properties panel per field: name, tooltip, default value, required,
       read-only, font size, text alignment, multiline toggle, max length
-      (+ export value, date format, dropdown flags, button caption)
+      (+ export value, date format, dropdown flags, button caption, text
+      color, comb/password toggles, format/validation preset)
 - [x] Alignment guides, snapping and optional grid while placing/moving —
       edges/centers/page-center guides, Alt suspends, grid size configurable
 - [x] Multi-select, copy/paste, and duplicate fields — Shift-click, Ctrl+A
@@ -39,6 +40,30 @@
       menu (Comments, Attachments, Form) so the tab row stays uncluttered
 - [ ] Form-builder polish (deferred): marquee/rubber-band selection, drag
       reorder in the outline, field property copy between fields
+- Adobe/PDFium form-field parity pass (mostly shipped):
+      - [x] Designer support for list boxes (single + multi-select) — palette
+        "Show as list box" toggle + multi-select flag; save path emits
+        `createOptionList`/`/MultiSelect`, fill view renders a real `<select
+        multiple>`
+      - [x] Comb text fields (fixed character cells) with max length, preview,
+        saved `/Comb` flag and PDFium appearance regeneration; fill view uses a
+        native `<input>` with per-cell caret/overwrite editing
+      - [x] Masked/password text fields via the standard `/Password` flag, plus
+        in-app preview that displays bullets
+      - [x] Input masks and validation presets (SSN, phone, ZIP, email,
+        currency/number/percent) via Acrobat-compatible /AA format+validate
+        JavaScript; our no-JS viewer mirrors them client-side in the builder
+        preview AND the fill view (engine reads the /AA JS back to a preset)
+      - [x] Submit/reset button actions (delegated to PDFium's form engine on
+        click); print/custom-JavaScript actions still deferred (no-JS engine)
+      - [ ] Add image-upload/image-button workflow where possible; likely custom
+        button + image annotation replacement rather than a universal AcroForm
+        field
+      - [ ] Add barcode generation support as generated PDF content/appearance
+        (Acrobat live barcode fields are not simple PDFium-native fields)
+      - [ ] Document Adobe Sign-only workflow fields that are out of AcroForm scope
+        unless we build a signing/workflow backend: payment, transaction number,
+        signer identity fields, participation stamp, routing/attachment fields
 
 ## PDFium engine (@embedpdf/pdfium)
 
