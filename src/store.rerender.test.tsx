@@ -6,6 +6,7 @@
 // components that only read unrelated chrome state (theme, sidebar). This test
 // pins that guarantee so a future change can't silently regress it.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { memo } from "react";
 import { render, act, cleanup } from "@testing-library/react";
 import { AppProvider, useApp, useAppSelector } from "./store";
 
@@ -27,8 +28,43 @@ vi.mock("./lib/pdftools", () => ({
   bakeAnnotations: vi.fn(),
 }));
 
-const counts = { capture: 0, tool: 0, sidebar: 0, selSidebar: 0, selAction: 0 };
+const counts = {
+  capture: 0,
+  tool: 0,
+  sidebar: 0,
+  selSidebar: 0,
+  selAction: 0,
+  parent: 0,
+  memoProbe: 0,
+  plainProbe: 0,
+};
 let store: ReturnType<typeof useApp>;
+
+/** Selector consumer WITHOUT memo — re-renders when its parent does. */
+function PlainSelectorProbe() {
+  useAppSelector((s) => s.sidebarOpen);
+  counts.plainProbe++;
+  return null;
+}
+/** Selector consumer WITH memo (no props) — should ignore parent re-renders. */
+const MemoSelectorProbe = memo(function MemoSelectorProbe() {
+  useAppSelector((s) => s.sidebarOpen);
+  counts.memoProbe++;
+  return null;
+});
+/** A parent that reads the whole store (like the app's Shell) and renders the
+ *  probes INLINE (new elements each render) — exactly how Shell renders
+ *  TitleBar/Sidebar/AiPanel. Re-renders on every store change. */
+function ReRenderingParent() {
+  useApp();
+  counts.parent++;
+  return (
+    <>
+      <PlainSelectorProbe />
+      <MemoSelectorProbe />
+    </>
+  );
+}
 
 function Capture() {
   store = useApp();
@@ -62,6 +98,7 @@ function SelectorActionProbe() {
 
 beforeEach(() => {
   counts.capture = counts.tool = counts.sidebar = counts.selSidebar = counts.selAction = 0;
+  counts.parent = counts.memoProbe = counts.plainProbe = 0;
 });
 afterEach(() => cleanup());
 
@@ -126,5 +163,27 @@ describe("store re-render isolation", () => {
     expect(counts.selSidebar).toBe(sbBefore + 1);
     // ...and the stable-action selector still never re-renders.
     expect(counts.selAction).toBe(actBefore);
+  });
+
+  it("a selector only pays off under React.memo when the parent re-renders", () => {
+    render(
+      <AppProvider>
+        <Capture />
+        <ReRenderingParent />
+      </AppProvider>,
+    );
+    const parentBefore = counts.parent;
+    const plainBefore = counts.plainProbe;
+    const memoBefore = counts.memoProbe;
+
+    // An unrelated change re-renders the whole-store parent...
+    act(() => {
+      store.setTool("text");
+    });
+    expect(counts.parent).toBe(parentBefore + 1);
+    // ...which drags the NON-memoized selector child along (selector defeated)...
+    expect(counts.plainProbe).toBe(plainBefore + 1);
+    // ...but the memoized child (no props) ignores the parent re-render entirely.
+    expect(counts.memoProbe).toBe(memoBefore);
   });
 });

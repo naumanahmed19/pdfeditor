@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -36,7 +36,11 @@ import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 
-export function Sidebar() {
+// Memoized: no props, so parent (Shell) re-renders don't touch it; it and its
+// panels track their own store slices via useAppSelector.
+export const Sidebar = memo(SidebarImpl);
+
+function SidebarImpl() {
   const app = useAppSelector(
     (s) => ({ formBuilder: s.formBuilder, pdf: s.pdf, sidebarOpen: s.sidebarOpen, setFormBuilder: s.setFormBuilder }),
     shallowEqual,

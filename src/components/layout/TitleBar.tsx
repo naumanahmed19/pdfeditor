@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
@@ -49,7 +49,11 @@ import { AboutModal } from "./AboutModal";
 import { PasswordModal } from "./PasswordModal";
 import { PrintModal } from "../viewer/PrintModal";
 
-export function TitleBar() {
+// Memoized: it has no props, so it ignores parent (Shell) re-renders and only
+// re-renders when its own selected store fields change.
+export const TitleBar = memo(TitleBarImpl);
+
+function TitleBarImpl() {
   // Select only what the title bar reads (no editing-tool state), so it stays
   // calm while you draw/select/drag on the page.
   const app = useAppSelector(
