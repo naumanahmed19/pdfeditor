@@ -20,6 +20,7 @@ import {
   existingFieldToFormField,
 } from "../../lib/formbuilder";
 import { useFormFieldTheme } from "./formFieldTheme";
+import { fieldValueError, formatFieldValue } from "../../lib/fieldFormat";
 import type { Annotation, FormFieldAnnotation } from "../../types";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -939,12 +940,20 @@ export function FieldPreviewInput({
           />
         );
       }
+      // Format preset (currency/phone/…): show the formatted value when the
+      // field isn't focused, and flag validation errors — mirroring the baked
+      // Acrobat AF actions so the builder preview is WYSIWYG.
+      const fmt = ann.fieldType === "text" ? ann.format : undefined;
+      const fmtError = fmt && fmt !== "none" ? fieldValueError(fmt, value) : null;
+      const displayValue = fmt && fmt !== "none" && !focused ? formatFieldValue(fmt, value) : value;
       return (
         <input
           {...common}
           type={ann.fieldType === "text" && ann.password ? "password" : "text"}
+          value={displayValue}
+          title={fmtError ?? undefined}
           placeholder={ann.fieldType === "date" ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
-          className={cn(base, "px-1")}
+          className={cn(base, "px-1", fmtError && "ring-1 ring-inset ring-red-500")}
           onChange={(e) => app.setPreviewValue(name, e.target.value)}
         />
       );
