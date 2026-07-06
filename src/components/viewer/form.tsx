@@ -8,12 +8,17 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalSpaceAround,
+  Pencil,
   PenLine,
 } from "lucide-react";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
-import { DATE_FORMATS } from "../../lib/formbuilder";
+import {
+  DATE_FORMATS,
+  type ExistingFieldSpec,
+  existingFieldToFormField,
+} from "../../lib/formbuilder";
 import { useFormFieldTheme } from "./formFieldTheme";
 import type { Annotation, FormFieldAnnotation } from "../../types";
 import { Button } from "../ui/button";
@@ -599,6 +604,36 @@ function FieldDesigner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSelected]);
 
+  // Convert this existing field into a fully editable one (same flow as the
+  // sidebar's Edit action): promote to a placeholder, delete the original.
+  const canPromote = app.formBuilder && field.kind !== "radio";
+  const promote = () => {
+    const spec: ExistingFieldSpec = {
+      fieldType:
+        field.kind === "checkbox" || field.kind === "button"
+          ? "Btn"
+          : field.kind === "dropdown" || field.kind === "listbox"
+            ? "Ch"
+            : "Tx",
+      checkBox: field.kind === "checkbox",
+      radioButton: false,
+      combo: field.kind === "dropdown",
+      multiSelect: !!field.multiSelect,
+      comb: !!field.comb,
+      multiLine: field.kind === "multiline",
+      maxLen: field.maxLen,
+      readOnly: field.readOnly,
+      fieldValue: field.initial,
+      options: (field.options ?? []).map((o) => o.value),
+    };
+    const ann = existingFieldToFormField(app.annotations, field.name, rect, spec);
+    if (!ann) return;
+    app.upsertFieldOp(base, { deleted: true });
+    app.addAnnotation(pageIndex, ann);
+    app.setSelectedField(null);
+    app.setSelected({ page: pageIndex, id: ann.id });
+  };
+
   // Hidden once deleted — checked after all hooks so the hook order is stable.
   if (op?.deleted) return null;
 
@@ -639,6 +674,17 @@ function FieldDesigner({
           {op?.newName && op.newName !== field.name ? " (renamed)" : ""}
         </span>
       </div>
+      {isSelected && canPromote && (
+        <button
+          type="button"
+          title="Edit this field"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={promote}
+          className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-sm border border-white bg-blue-500 text-white shadow-sm hover:bg-blue-600"
+        >
+          <Pencil className="h-2.5 w-2.5" />
+        </button>
+      )}
       {isSelected && (
         <div
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
