@@ -475,6 +475,33 @@ export function useApp(): AppStore {
   return v;
 }
 
+/**
+ * Low-frequency "chrome" state (theme, accent, sidebar, AI panel, viewport
+ * class), split into its own context so components that only read chrome don't
+ * re-render on every hot editing update (tool/color/selection/drag) flowing
+ * through the main store. Its value is memoized on just these fields, so a
+ * change elsewhere in the app leaves this context's identity untouched.
+ */
+export interface UIStore {
+  theme: "light" | "dark";
+  toggleTheme: () => void;
+  accent: AccentId;
+  setAccent: (a: AccentId) => void;
+  sidebarOpen: boolean;
+  setSidebarOpen: (v: boolean) => void;
+  aiOpen: boolean;
+  setAiOpen: (v: boolean) => void;
+  isMobile: boolean;
+}
+
+const UICtx = createContext<UIStore | null>(null);
+
+export function useUI(): UIStore {
+  const v = useContext(UICtx);
+  if (!v) throw new Error("useUI outside provider");
+  return v;
+}
+
 function loadJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -2651,9 +2678,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", handler);
   }, [anyEdits]);
 
+  const toggleTheme = useCallback(
+    () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+    [],
+  );
+
   const value: AppStore = {
     theme,
-    toggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+    toggleTheme,
     accent,
     setAccent,
     screen,
@@ -2879,5 +2911,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  const uiValue = useMemo<UIStore>(
+    () => ({
+      theme,
+      toggleTheme,
+      accent,
+      setAccent,
+      sidebarOpen,
+      setSidebarOpen,
+      aiOpen,
+      setAiOpen,
+      isMobile,
+    }),
+    [
+      theme,
+      toggleTheme,
+      accent,
+      setAccent,
+      sidebarOpen,
+      setSidebarOpen,
+      aiOpen,
+      setAiOpen,
+      isMobile,
+    ],
+  );
+
+  return (
+    <Ctx.Provider value={value}>
+      <UICtx.Provider value={uiValue}>{children}</UICtx.Provider>
+    </Ctx.Provider>
+  );
 }
