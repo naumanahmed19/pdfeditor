@@ -586,7 +586,12 @@ function fillFormValues(doc: PDFDocument, formValues: Record<string, unknown>) {
       } else if (field instanceof PDFRadioGroup) {
         if (typeof value === "string" && value) field.select(value);
       } else if (field instanceof PDFDropdown || field instanceof PDFOptionList) {
-        if (typeof value === "string" && value) field.select(value);
+        if (Array.isArray(value)) {
+          const picks = value.filter((v): v is string => typeof v === "string" && !!v);
+          if (picks.length) field.select(picks);
+        } else if (typeof value === "string" && value) {
+          field.select(value);
+        }
       }
     } catch {
       /* field missing or incompatible — skip */

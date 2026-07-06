@@ -26,7 +26,7 @@ import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 interface FormFieldSpec {
   key: string;
   name: string;
-  kind: "text" | "multiline" | "checkbox" | "radio" | "dropdown";
+  kind: "text" | "multiline" | "checkbox" | "radio" | "dropdown" | "listbox";
   left: number;
   top: number;
   width: number;
@@ -37,6 +37,10 @@ interface FormFieldSpec {
   initial: unknown;
   readOnly: boolean;
   maxLen?: number;
+  /** Text field with the Comb flag: value laid out across `maxLen` fixed cells. */
+  comb?: boolean;
+  /** List box (choice field, non-combo) allowing more than one selection. */
+  multiSelect?: boolean;
 }
 
 /** Renders the PDF's AcroForm fields as fillable inputs. */
@@ -81,6 +85,7 @@ export function FormLayer({
               kind: a.multiLine ? "multiline" : "text",
               initial: a.fieldValue ?? "",
               maxLen: a.maxLen || undefined,
+              comb: !a.multiLine && !!a.comb && !!a.maxLen,
             });
           } else if (a.fieldType === "Btn" && a.checkBox) {
             out.push({
@@ -96,14 +101,27 @@ export function FormLayer({
               initial: a.fieldValue ?? "",
             });
           } else if (a.fieldType === "Ch") {
+            // A choice field is a dropdown when the Combo flag is set, otherwise
+            // a list box (several options visible at once, optionally multi-select).
+            const isCombo = !!a.combo;
+            const options = (a.options ?? []).map((o: any) => ({
+              value: String(o.exportValue ?? o.displayValue ?? ""),
+              label: String(o.displayValue ?? o.exportValue ?? ""),
+            }));
             out.push({
               ...base,
-              kind: "dropdown",
-              options: (a.options ?? []).map((o: any) => ({
-                value: String(o.exportValue ?? o.displayValue ?? ""),
-                label: String(o.displayValue ?? o.exportValue ?? ""),
-              })),
-              initial: Array.isArray(a.fieldValue) ? a.fieldValue[0] : a.fieldValue ?? "",
+              kind: isCombo ? "dropdown" : "listbox",
+              options,
+              multiSelect: !isCombo && !!a.multiSelect,
+              initial: isCombo
+                ? Array.isArray(a.fieldValue)
+                  ? a.fieldValue[0]
+                  : a.fieldValue ?? ""
+                : Array.isArray(a.fieldValue)
+                  ? a.fieldValue
+                  : a.fieldValue != null && a.fieldValue !== ""
+                    ? [a.fieldValue]
+                    : [],
             });
           }
         }
@@ -205,6 +223,42 @@ export function FormLayer({
             </select>
           );
         }
+        if (f.kind === "listbox") {
+          const selected: string[] = Array.isArray(current)
+            ? current.map(String)
+            : current != null && current !== ""
+              ? [String(current)]
+              : Array.isArray(f.initial)
+                ? (f.initial as unknown[]).map(String)
+                : f.initial != null && f.initial !== ""
+                  ? [String(f.initial)]
+                  : [];
+          return (
+            <select
+              key={f.key}
+              multiple={f.multiSelect}
+              size={Math.max(2, f.options?.length ?? 2)}
+              value={f.multiSelect ? selected : selected[0] ?? ""}
+              disabled={f.readOnly}
+              onChange={(e) =>
+                f.multiSelect
+                  ? app.setFormValue(
+                      f.name,
+                      Array.from(e.target.selectedOptions).map((o) => o.value),
+                    )
+                  : app.setFormValue(f.name, e.target.value)
+              }
+              className={cn(inputCls, "overflow-auto p-0")}
+              style={{ ...style, fontSize: Math.min(14, Math.max(9, 11 * scale)) }}
+            >
+              {(f.options ?? []).map((o) => (
+                <option key={o.value} value={o.value} className="px-1">
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          );
+        }
         const value = String(current !== undefined ? current : f.initial ?? "");
         if (f.kind === "multiline") {
           return (
@@ -217,6 +271,37 @@ export function FormLayer({
               className={cn(inputCls, "resize-none p-1")}
               style={style}
             />
+          );
+        }
+        if (f.comb && f.maxLen) {
+          // Comb field: value spread across `maxLen` equal cells. A transparent
+          // input over a grid captures typing while the cells show each glyph.
+          const n = f.maxLen;
+          const chars = value.split("");
+          return (
+            <div key={f.key} className={cn(inputCls, "overflow-hidden p-0")} style={style}>
+              <div className="pointer-events-none absolute inset-0 flex">
+                {Array.from({ length: n }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      "flex flex-1 items-center justify-center",
+                      i < n - 1 && "border-r border-blue-400/40",
+                    )}
+                  >
+                    {chars[i] ?? ""}
+                  </div>
+                ))}
+              </div>
+              <input
+                type="text"
+                value={value}
+                maxLength={n}
+                disabled={f.readOnly}
+                onChange={(e) => app.setFormValue(f.name, e.target.value)}
+                className="absolute inset-0 h-full w-full bg-transparent text-center text-transparent caret-slate-900 outline-none"
+              />
+            </div>
           );
         }
         return (
