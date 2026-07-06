@@ -1,9 +1,16 @@
-import { defineConfig } from "vite";
+/// <reference types="vitest/config" />
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // Dev-time proxies let the app reach local model servers without CORS issues.
 export default defineConfig({
   plugins: [react()],
+  // Unit tests (vitest). Pure-logic suites run in the default node environment;
+  // suites that need the DOM opt in per-file with `// @vitest-environment jsdom`.
+  test: {
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    environment: "node",
+  },
   // Worker deps (Transformers.js) are ESM — bundle the worker as ES modules.
   worker: {
     format: "es",

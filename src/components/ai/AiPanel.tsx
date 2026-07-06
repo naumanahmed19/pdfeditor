@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useApp } from "../../store";
+import { useAppSelector, shallowEqual } from "../../store";
 import { Button } from "../ui/button";
 import { Select } from "../ui/select";
 import { cn, uid } from "../../lib/utils";
@@ -85,7 +85,29 @@ const SELECTION_ACTIONS = [
 ] as const;
 
 export function AiPanel() {
-  const app = useApp();
+  // Select only the fields the panel uses (no editing-tool state), so it stays
+  // insulated from tool/color/selection churn while you edit.
+  const app = useAppSelector(
+    (s) => ({
+      addAnnotation: s.addAnnotation,
+      aiAsk: s.aiAsk,
+      aiOpen: s.aiOpen,
+      askAi: s.askAi,
+      currentPage: s.currentPage,
+      docName: s.docName,
+      fontSize: s.fontSize,
+      isMobile: s.isMobile,
+      numPages: s.numPages,
+      pdf: s.pdf,
+      setAiOpen: s.setAiOpen,
+      setEditMode: s.setEditMode,
+      setScreen: s.setScreen,
+      setSettings: s.setSettings,
+      setSidebarOpen: s.setSidebarOpen,
+      settings: s.settings,
+    }),
+    shallowEqual,
+  );
   const [messages, setMessages] = useState<UiMessage[]>(loadChat);
   const [models, setModels] = useState<string[]>([]);
 

@@ -1,0 +1,130 @@
+// @vitest-environment jsdom
+//
+// Re-render isolation test for the app store. The whole point of splitting the
+// mega-context into slices is that changing a hot, high-frequency field (the
+// active tool, which flips on every editing interaction) must NOT re-render
+// components that only read unrelated chrome state (theme, sidebar). This test
+// pins that guarantee so a future change can't silently regress it.
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, act, cleanup } from "@testing-library/react";
+import { AppProvider, useApp, useAppSelector } from "./store";
+
+// Keep the provider hermetic: stub the browser-only / heavy modules it imports
+// so mounting it in jsdom doesn't touch IndexedDB, the File System Access API,
+// or the pdf-lib/PDFium graph.
+vi.mock("./lib/persist", () => ({
+  getStoredDoc: vi.fn(async () => null),
+  listStoredDocs: vi.fn(async () => []),
+  markDocClosed: vi.fn(async () => {}),
+  persistDoc: vi.fn(async () => {}),
+}));
+vi.mock("./lib/folder", () => ({
+  pickFolder: vi.fn(async () => null),
+  readNode: vi.fn(async () => null),
+}));
+vi.mock("./lib/pdftools", () => ({
+  addOcrTextLayer: vi.fn(),
+  bakeAnnotations: vi.fn(),
+}));
+
+const counts = { capture: 0, tool: 0, sidebar: 0, selSidebar: 0, selAction: 0 };
+let store: ReturnType<typeof useApp>;
+
+function Capture() {
+  store = useApp();
+  counts.capture++;
+  return null;
+}
+/** Reads the hot field. */
+function ToolProbe() {
+  useApp().tool;
+  counts.tool++;
+  return null;
+}
+/** Reads only chrome state via a selector — must be insulated from tool changes. */
+function SidebarProbe() {
+  useAppSelector((s) => s.sidebarOpen);
+  counts.sidebar++;
+  return null;
+}
+/** Selects a single field via useAppSelector — the new subscription path. */
+function SelectorSidebarProbe() {
+  useAppSelector((s) => s.sidebarOpen);
+  counts.selSidebar++;
+  return null;
+}
+/** Selects a stable action — should never re-render after mount. */
+function SelectorActionProbe() {
+  useAppSelector((s) => s.openFile);
+  counts.selAction++;
+  return null;
+}
+
+beforeEach(() => {
+  counts.capture = counts.tool = counts.sidebar = counts.selSidebar = counts.selAction = 0;
+});
+afterEach(() => cleanup());
+
+describe("store re-render isolation", () => {
+  it("changing the active tool does not re-render a chrome-only consumer", () => {
+    render(
+      <AppProvider>
+        <Capture />
+        <ToolProbe />
+        <SidebarProbe />
+      </AppProvider>,
+    );
+    const sidebarBefore = counts.sidebar;
+    const toolBefore = counts.tool;
+
+    act(() => {
+      store.setTool("text");
+    });
+
+    // The tool consumer must react to the change...
+    expect(counts.tool).toBe(toolBefore + 1);
+    // ...but a consumer that only reads chrome state must NOT.
+    expect(counts.sidebar).toBe(sidebarBefore);
+  });
+
+  it("a UI-slice consumer still reacts to its own chrome changes", () => {
+    render(
+      <AppProvider>
+        <Capture />
+        <SidebarProbe />
+      </AppProvider>,
+    );
+    const before = counts.sidebar;
+    act(() => {
+      store.setSidebarOpen(!store.sidebarOpen);
+    });
+    expect(counts.sidebar).toBe(before + 1);
+  });
+
+  it("useAppSelector re-renders only when the selected field changes", () => {
+    render(
+      <AppProvider>
+        <Capture />
+        <SelectorSidebarProbe />
+        <SelectorActionProbe />
+      </AppProvider>,
+    );
+    const sbBefore = counts.selSidebar;
+    const actBefore = counts.selAction;
+
+    // An unrelated change (the active tool) must not re-render either selector.
+    act(() => {
+      store.setTool("text");
+    });
+    expect(counts.selSidebar).toBe(sbBefore);
+    expect(counts.selAction).toBe(actBefore);
+
+    // Changing the selected field re-renders exactly that consumer...
+    act(() => {
+      store.setSidebarOpen(!store.sidebarOpen);
+    });
+    expect(counts.selSidebar).toBe(sbBefore + 1);
+    // ...and the stable-action selector still never re-renders.
+    expect(counts.selAction).toBe(actBefore);
+  });
+});
