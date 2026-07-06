@@ -971,6 +971,39 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
     );
   };
 
+  // Text-field format/validation presets, baked as Acrobat AF actions so they
+  // format & validate in Acrobat / Chrome (our no-JS viewer shows plain text).
+  const addFormatActions = (field: { acroField: any }, format: string) => {
+    // AFSpecial psf: 0=ZIP, 2=Phone, 3=SSN. AFNumber currStyle "$" prepends.
+    const F_K: Record<string, [string, string]> = {
+      number: ["AFNumber_Format(2, 0, 0, 0, '', false);", "AFNumber_Keystroke(2, 0, 0, 0, '', false);"],
+      currency: ["AFNumber_Format(2, 0, 0, 0, '$', true);", "AFNumber_Keystroke(2, 0, 0, 0, '$', true);"],
+      percent: ["AFPercent_Format(2, 0);", "AFPercent_Keystroke(2, 0);"],
+      zip: ["AFSpecial_Format(0);", "AFSpecial_Keystroke(0);"],
+      phone: ["AFSpecial_Format(2);", "AFSpecial_Keystroke(2);"],
+      ssn: ["AFSpecial_Format(3);", "AFSpecial_Keystroke(3);"],
+    };
+    let aa: Record<string, unknown> | null = null;
+    if (format === "email") {
+      aa = {
+        V: {
+          Type: "Action",
+          S: "JavaScript",
+          JS: PDFString.of(
+            'if(event.value && !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(event.value)){app.alert("Enter a valid email address.");event.rc=false;}',
+          ),
+        },
+      };
+    } else if (F_K[format]) {
+      const [f, k] = F_K[format];
+      aa = {
+        F: { Type: "Action", S: "JavaScript", JS: PDFString.of(f) },
+        K: { Type: "Action", S: "JavaScript", JS: PDFString.of(k) },
+      };
+    }
+    if (aa) field.acroField.dict.set(PDFName.of("AA"), doc.context.obj(aa as never));
+  };
+
   // pdf-lib hardcodes /Yes as a checkbox's on-state; a custom export value
   // means renaming that state in the appearance dicts, /AS and /V.
   const setCheckboxExport = (field: { acroField: any }, exportValue: string) => {
@@ -1069,6 +1102,8 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           styleWidgets(f, ann);
           if (ann.fieldType === "date") {
             addDateActions(f, ann.dateFormat || "mm/dd/yyyy");
+          } else if (ann.format && ann.format !== "none") {
+            addFormatActions(f, ann.format);
           }
           break;
         }

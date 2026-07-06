@@ -211,6 +211,8 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   multiSelect?: boolean;
   /** Date field display format (AFDate picture, e.g. "mm/dd/yyyy"). */
   dateFormat?: string;
+  /** Text field format/validation preset (Acrobat AF actions). */
+  format?: "none" | "number" | "currency" | "percent" | "phone" | "ssn" | "zip" | "email";
   /** Push-button caption. */
   buttonCaption?: string;
   /** Push-button action run on click (none = a plain visual button). */

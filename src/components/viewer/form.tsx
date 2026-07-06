@@ -1342,6 +1342,26 @@ export function FieldProperties({
         </div>
       )}
 
+      {isText && !ann.multiline && !ann.comb && !ann.password && (
+        <div className="space-y-0.5">
+          <div className={lbl}>Format</div>
+          <Select
+            className={sm}
+            value={ann.format ?? "none"}
+            onChange={(e) => onPatch({ format: e.target.value as FormFieldAnnotation["format"] })}
+          >
+            <option value="none">None</option>
+            <option value="number">Number</option>
+            <option value="currency">Currency ($)</option>
+            <option value="percent">Percentage</option>
+            <option value="phone">Phone</option>
+            <option value="ssn">SSN</option>
+            <option value="zip">ZIP code</option>
+            <option value="email">Email</option>
+          </Select>
+        </div>
+      )}
+
       {isChoice && (
         <div className="space-y-0.5">
           <div className={lbl}>
