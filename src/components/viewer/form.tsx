@@ -249,7 +249,13 @@ export function FormLayer({
                   : app.setFormValue(f.name, e.target.value)
               }
               className={cn(inputCls, "overflow-auto p-0")}
-              style={{ ...style, fontSize: Math.min(14, Math.max(9, 11 * scale)) }}
+              style={{
+                ...style,
+                fontSize: Math.min(14, Math.max(9, 11 * scale)),
+                // Opaque so the baked list-box appearance on the canvas beneath
+                // doesn't show through and double the option labels.
+                background: "#ffffff",
+              }}
             >
               {(f.options ?? []).map((o) => (
                 <option key={o.value} value={o.value} className="px-1">

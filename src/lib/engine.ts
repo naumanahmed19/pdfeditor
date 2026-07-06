@@ -154,6 +154,8 @@ export interface FieldInfo {
   options: string[];
   flags: number;
   readOnly: boolean;
+  /** Text field /MaxLen (0 when unset). Drives comb-field cell count. */
+  maxLen: number;
   rect: { x: number; y: number; w: number; h: number };
 }
 
@@ -208,6 +210,14 @@ export interface CompatAnnotation {
   checkBox?: boolean;
   radioButton?: boolean;
   multiLine?: boolean;
+  /** Choice field: combo (dropdown) vs. list box. */
+  combo?: boolean;
+  /** Choice field allows multiple selections (list box). */
+  multiSelect?: boolean;
+  /** Text field with the Comb flag: value laid out across `maxLen` cells. */
+  comb?: boolean;
+  /** Text field /MaxLen. */
+  maxLen?: number;
   readOnly?: boolean;
   hidden?: boolean;
   options?: Array<{ displayValue: string; exportValue: string }>;
@@ -446,6 +456,12 @@ export class PdfPage {
         checkBox: f.fieldType === 2,
         radioButton: f.fieldType === 3,
         multiLine: (f.flags & (1 << 12)) !== 0,
+        // Choice: PDFium type 4 = combo (dropdown), 5 = list box. Text: Comb is
+        // field-flag bit 25; choice MultiSelect is bit 22 (spec 1-based).
+        combo: f.fieldType === 4,
+        multiSelect: t === "Ch" && (f.flags & (1 << 21)) !== 0,
+        comb: t === "Tx" && (f.flags & (1 << 24)) !== 0,
+        maxLen: f.maxLen || undefined,
         readOnly: f.readOnly,
         hidden: false,
         options: f.options.map((o) => ({ displayValue: o, exportValue: o })),
@@ -650,6 +666,7 @@ export class PdfPage {
     const fields: FieldInfo[] = [];
     const n = m.FPDFPage_GetAnnotCount(this.handle);
     const rectBuf = r.wasmExports.malloc(16);
+    const numBuf = r.wasmExports.malloc(4);
     try {
       for (let i = 0; i < n; i++) {
         const annot = m.FPDFPage_GetAnnot(this.handle, i);
@@ -668,6 +685,18 @@ export class PdfPage {
             m.FPDFAnnot_GetFormFieldExportValue(form, annot, p, cap),
           );
           const flags = m.FPDFAnnot_GetFormFieldFlags(form, annot);
+          // Text /MaxLen (comb fields need it for cell count). Read the number
+          // straight off the widget dict; 0 when absent or unsupported.
+          let maxLen = 0;
+          if (fieldType === 6 && typeof m.FPDFAnnot_GetNumberValue === "function") {
+            try {
+              if (m.FPDFAnnot_GetNumberValue(annot, "MaxLen", numBuf)) {
+                maxLen = Math.max(0, Math.round(r.getValue(numBuf, "float")));
+              }
+            } catch {
+              /* older WASM build without GetNumberValue — leave 0 */
+            }
+          }
           const options: string[] = [];
           const optCount = m.FPDFAnnot_GetOptionCount(form, annot);
           for (let o = 0; o < optCount; o++) {
@@ -689,6 +718,7 @@ export class PdfPage {
             options,
             flags,
             readOnly: (flags & 1) !== 0,
+            maxLen,
             rect: this.pageRectToDisplay(left, top, right, bottom),
           });
         } finally {
@@ -697,6 +727,7 @@ export class PdfPage {
       }
     } finally {
       r.wasmExports.free(rectBuf);
+      r.wasmExports.free(numBuf);
     }
     return fields;
   }
