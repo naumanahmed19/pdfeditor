@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { useApp } from "../../store";
+import { useAppSelector } from "../../store";
 
 const isPdf = (file: File) =>
   file.type === "application/pdf" || /\.pdf$/i.test(file.name);
@@ -13,7 +13,9 @@ const isPdf = (file: File) =>
  * longer swallows file drops.
  */
 export function DropZone() {
-  const app = useApp();
+  // Only needs the openFile action — select it so the drop target never
+  // re-renders on unrelated store churn.
+  const openFile = useAppSelector((s) => s.openFile);
 
   useEffect(() => {
     const hasFiles = (e: DragEvent) =>
@@ -40,7 +42,7 @@ export function DropZone() {
         );
       }
       void (async () => {
-        for (const f of pdfs) await app.openFile(f);
+        for (const f of pdfs) await openFile(f);
       })();
     };
 
@@ -50,7 +52,7 @@ export function DropZone() {
       window.removeEventListener("dragover", onOver);
       window.removeEventListener("drop", onDrop);
     };
-  }, [app]);
+  }, [openFile]);
 
   return null;
 }
