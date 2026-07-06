@@ -7,7 +7,7 @@
 // pins that guarantee so a future change can't silently regress it.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, cleanup } from "@testing-library/react";
-import { AppProvider, useApp, useUI, useAppSelector } from "./store";
+import { AppProvider, useApp, useAppSelector } from "./store";
 
 // Keep the provider hermetic: stub the browser-only / heavy modules it imports
 // so mounting it in jsdom doesn't touch IndexedDB, the File System Access API,
@@ -41,9 +41,9 @@ function ToolProbe() {
   counts.tool++;
   return null;
 }
-/** Reads only chrome state via the UI slice — must be insulated from tool changes. */
+/** Reads only chrome state via a selector — must be insulated from tool changes. */
 function SidebarProbe() {
-  useUI().sidebarOpen;
+  useAppSelector((s) => s.sidebarOpen);
   counts.sidebar++;
   return null;
 }
