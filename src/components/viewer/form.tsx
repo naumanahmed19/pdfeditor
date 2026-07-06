@@ -282,14 +282,19 @@ export function FormLayer({
           );
         }
         if (f.comb && f.maxLen) {
-          // Comb field: value spread across `maxLen` equal cells. A transparent
-          // input over a grid captures typing while the cells show each glyph.
+          // Comb field: value spread across `maxLen` equal cells. A fully
+          // invisible input over a grid captures typing while the cells show
+          // each glyph. The input's text/caret/selection are all hidden so it
+          // never reveals the raw left-aligned string (focus shows as a ring).
           const n = f.maxLen;
           const chars = value.split("");
           return (
             <div
               key={f.key}
-              className={cn(inputCls, "overflow-hidden p-0")}
+              className={cn(
+                inputCls,
+                "overflow-hidden p-0 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-400/60",
+              )}
               // Opaque so PDFium's baked comb appearance beneath doesn't show
               // through and double the glyphs; our grid is the only thing drawn.
               style={{ ...style, background: "#ffffff" }}
@@ -313,7 +318,7 @@ export function FormLayer({
                 maxLength={n}
                 disabled={f.readOnly}
                 onChange={(e) => app.setFormValue(f.name, e.target.value)}
-                className="absolute inset-0 h-full w-full bg-transparent text-center text-transparent caret-slate-900 outline-none"
+                className="absolute inset-0 h-full w-full bg-transparent text-transparent caret-transparent outline-none [&::selection]:bg-transparent [&::selection]:text-transparent"
               />
             </div>
           );
