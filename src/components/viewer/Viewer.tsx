@@ -60,6 +60,7 @@ import {
   FONT_CSS,
 } from "./textedit";
 import { FloatingNav } from "./FloatingNav";
+import type { PageDims } from "./types";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { MARKUP_COLORS, MARKUP_LABEL, squigglyPath } from "../../lib/markup";
@@ -136,11 +137,6 @@ function textAnnCss(ann: TextAnnotation): React.CSSProperties {
     fontWeight: ann.bold ? 700 : 400,
     fontStyle: ann.italic ? "italic" : "normal",
   };
-}
-
-interface PageDims {
-  width: number;
-  height: number;
 }
 
 export function Viewer() {
