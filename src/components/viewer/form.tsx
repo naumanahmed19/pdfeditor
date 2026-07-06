@@ -20,6 +20,7 @@ import {
   existingFieldToFormField,
 } from "../../lib/formbuilder";
 import { useFormFieldTheme } from "./formFieldTheme";
+import { type FieldFormat, fieldValueError, formatFieldValue } from "../../lib/fieldFormat";
 import type { Annotation, FormFieldAnnotation } from "../../types";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -47,6 +48,8 @@ interface FormFieldSpec {
   comb?: boolean;
   /** List box (choice field, non-combo) allowing more than one selection. */
   multiSelect?: boolean;
+  /** Text field format preset (from /AA AF actions). */
+  format?: FieldFormat;
 }
 
 /** Renders the PDF's AcroForm fields as fillable inputs. */
@@ -93,6 +96,7 @@ export function FormLayer({
               initial: a.fieldValue ?? "",
               maxLen: a.maxLen || undefined,
               comb: !a.multiLine && !!a.comb && !!a.maxLen,
+              format: a.format as FieldFormat | undefined,
             });
           } else if (a.fieldType === "Btn" && a.checkBox) {
             out.push({
@@ -345,6 +349,20 @@ export function FormLayer({
             />
           );
         }
+        if (f.format && f.format !== "none") {
+          return (
+            <FormatTextField
+              key={f.key}
+              value={value}
+              format={f.format}
+              readOnly={f.readOnly}
+              maxLength={f.maxLen}
+              className={cn(inputCls, "px-1")}
+              style={style}
+              onChange={(v) => app.setFormValue(f.name, v)}
+            />
+          );
+        }
         return (
           <input
             key={f.key}
@@ -359,6 +377,48 @@ export function FormLayer({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Text fill-input for a field with a format preset. Shows the raw value while
+ * focused (so editing is unfiltered) and the Acrobat-style formatted value once
+ * blurred, mirroring what the baked /AA actions produce in Acrobat/Chrome.
+ * A failing validation (e.g. a malformed email) gets a red ring + message.
+ */
+function FormatTextField({
+  value,
+  format,
+  readOnly,
+  maxLength,
+  className,
+  style,
+  onChange,
+}: {
+  value: string;
+  format: FieldFormat;
+  readOnly?: boolean;
+  maxLength?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  onChange: (v: string) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const error = fieldValueError(format, value);
+  const display = focused ? value : formatFieldValue(format, value);
+  return (
+    <input
+      type="text"
+      value={display}
+      disabled={readOnly}
+      maxLength={maxLength}
+      title={error ?? undefined}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onChange={(e) => onChange(e.target.value)}
+      className={cn(className, error && "ring-1 ring-red-500")}
+      style={style}
+    />
   );
 }
 
@@ -939,12 +999,20 @@ export function FieldPreviewInput({
           />
         );
       }
+      // Format preset (currency/phone/…): show the formatted value when the
+      // field isn't focused, and flag validation errors — mirroring the baked
+      // Acrobat AF actions so the builder preview is WYSIWYG.
+      const fmt = ann.fieldType === "text" ? ann.format : undefined;
+      const fmtError = fmt && fmt !== "none" ? fieldValueError(fmt, value) : null;
+      const displayValue = fmt && fmt !== "none" && !focused ? formatFieldValue(fmt, value) : value;
       return (
         <input
           {...common}
           type={ann.fieldType === "text" && ann.password ? "password" : "text"}
+          value={displayValue}
+          title={fmtError ?? undefined}
           placeholder={ann.fieldType === "date" ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
-          className={cn(base, "px-1")}
+          className={cn(base, "px-1", fmtError && "ring-1 ring-inset ring-red-500")}
           onChange={(e) => app.setPreviewValue(name, e.target.value)}
         />
       );
@@ -1251,48 +1319,67 @@ export function FieldProperties({
       )}
 
       {(isTexty || isChoice || isBtn) && (
-        <div className="flex items-end gap-2">
-          <div className="flex-1 space-y-0.5">
-            <div className={lbl}>Font size</div>
-            <Select
-              className={sm}
-              value={String(ann.fontSize ?? 0)}
-              onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
-            >
-              <option value="0">Auto</option>
-              {[8, 9, 10, 11, 12, 14, 16, 18].map((s) => (
-                <option key={s} value={s}>
-                  {s}pt
-                </option>
-              ))}
-            </Select>
-          </div>
-          {(isTexty || isChoice) && (
-            <div className="space-y-0.5">
-              <div className={lbl}>Color</div>
-              <ColorSwatch
-                value={ann.textColor ?? "#000000"}
-                onChange={(v) => onPatch({ textColor: v })}
-              />
+        <div className="space-y-1.5">
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className={lbl}>Font size</div>
+              <Select
+                className={sm}
+                value={String(ann.fontSize ?? 0)}
+                onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
+              >
+                <option value="0">Auto</option>
+                {[8, 9, 10, 11, 12, 14, 16, 18].map((s) => (
+                  <option key={s} value={s}>
+                    {s}pt
+                  </option>
+                ))}
+              </Select>
             </div>
-          )}
-          <ToggleGroup
-            value={[ann.align ?? "left"]}
-            onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}
-            aria-label="Text alignment"
-          >
-            {(["left", "center", "right"] as const).map((a) => (
-              <ToggleGroupItem key={a} value={a} title={a} className="text-[11px] capitalize">
-                {a[0].toUpperCase()}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+            {(isTexty || isChoice) && (
+              <div className="space-y-0.5">
+                <div className={lbl}>Color</div>
+                <ColorSwatch
+                  value={ann.textColor ?? "#000000"}
+                  onChange={(v) => onPatch({ textColor: v })}
+                />
+              </div>
+            )}
+          </div>
+          <div className="space-y-0.5">
+            <div className={lbl}>Align</div>
+            <ToggleGroup
+              value={[ann.align ?? "left"]}
+              onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}
+              aria-label="Text alignment"
+            >
+              {(["left", "center", "right"] as const).map((a) => (
+                <ToggleGroupItem key={a} value={a} title={a} className="text-[11px] capitalize">
+                  {a[0].toUpperCase()}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
         </div>
       )}
 
       {isText && (
         <div className="space-y-1.5">
-          <div className="flex items-end gap-2">
+          <div className="space-y-0.5">
+            <div className={lbl}>Max length</div>
+            <Input
+              key={`max-${ann.id}`}
+              type="number"
+              min={0}
+              className={sm}
+              defaultValue={ann.maxLength ?? ""}
+              placeholder="∞"
+              onBlur={(e) =>
+                onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
+              }
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <label className="flex items-center gap-1.5 text-[11px]">
               <Checkbox
                 checked={!!ann.multiline}
@@ -1300,45 +1387,51 @@ export function FieldProperties({
               />
               Multiline
             </label>
-            <div className="flex-1 space-y-0.5">
-              <div className={lbl}>Max length</div>
-              <Input
-                key={`max-${ann.id}`}
-                type="number"
-                min={0}
-                className={sm}
-                defaultValue={ann.maxLength ?? ""}
-                placeholder="∞"
-                onBlur={(e) =>
-                  onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
-                }
-              />
-            </div>
+            {!ann.multiline && (
+              <>
+                <label
+                  className="flex items-center gap-1.5 text-[11px]"
+                  title="Fixed character cells — requires a max length"
+                >
+                  <Checkbox
+                    checked={!!ann.comb}
+                    onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
+                  />
+                  Comb (fixed cells)
+                  {ann.comb && !ann.maxLength && (
+                    <span className="text-[10px] text-amber-600">needs max length</span>
+                  )}
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px]" title="Masks the value with dots">
+                  <Checkbox
+                    checked={!!ann.password}
+                    onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
+                  />
+                  Password
+                </label>
+              </>
+            )}
           </div>
-          {!ann.multiline && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <label
-                className="flex items-center gap-1.5 text-[11px]"
-                title="Fixed character cells — requires a max length"
-              >
-                <Checkbox
-                  checked={!!ann.comb}
-                  onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
-                />
-                Comb (fixed cells)
-                {ann.comb && !ann.maxLength && (
-                  <span className="text-[10px] text-amber-600">needs max length</span>
-                )}
-              </label>
-              <label className="flex items-center gap-1.5 text-[11px]" title="Masks the value with dots">
-                <Checkbox
-                  checked={!!ann.password}
-                  onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
-                />
-                Password
-              </label>
-            </div>
-          )}
+        </div>
+      )}
+
+      {isText && !ann.multiline && !ann.comb && !ann.password && (
+        <div className="space-y-0.5">
+          <div className={lbl}>Format</div>
+          <Select
+            className={sm}
+            value={ann.format ?? "none"}
+            onChange={(e) => onPatch({ format: e.target.value as FormFieldAnnotation["format"] })}
+          >
+            <option value="none">None</option>
+            <option value="number">Number</option>
+            <option value="currency">Currency ($)</option>
+            <option value="percent">Percentage</option>
+            <option value="phone">Phone</option>
+            <option value="ssn">SSN</option>
+            <option value="zip">ZIP code</option>
+            <option value="email">Email</option>
+          </Select>
         </div>
       )}
 

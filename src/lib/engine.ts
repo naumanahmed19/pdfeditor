@@ -156,7 +156,20 @@ export interface FieldInfo {
   readOnly: boolean;
   /** Text field /MaxLen (0 when unset). Drives comb-field cell count. */
   maxLen: number;
+  /** Format preset inferred from the field's /AA AF actions. */
+  format?: string;
   rect: { x: number; y: number; w: number; h: number };
+}
+
+/** Map a field's /AA format + validate JavaScript back to a format preset. */
+function inferTextFormat(fmtJs: string, valJs: string): string | undefined {
+  if (/AFNumber_Format/.test(fmtJs)) return /['"]\$['"]/.test(fmtJs) ? "currency" : "number";
+  if (/AFPercent_Format/.test(fmtJs)) return "percent";
+  if (/AFSpecial_Format\(\s*0/.test(fmtJs)) return "zip";
+  if (/AFSpecial_Format\(\s*2/.test(fmtJs)) return "phone";
+  if (/AFSpecial_Format\(\s*3/.test(fmtJs)) return "ssn";
+  if (valJs && /email/i.test(valJs)) return "email";
+  return undefined;
 }
 
 /**
@@ -218,6 +231,8 @@ export interface CompatAnnotation {
   comb?: boolean;
   /** Text field /MaxLen. */
   maxLen?: number;
+  /** Text field format preset (from /AA AF actions). */
+  format?: string;
   readOnly?: boolean;
   hidden?: boolean;
   options?: Array<{ displayValue: string; exportValue: string }>;
@@ -481,6 +496,7 @@ export class PdfPage {
         multiSelect: t === "Ch" && (f.flags & (1 << 21)) !== 0,
         comb: t === "Tx" && (f.flags & (1 << 24)) !== 0,
         maxLen: f.maxLen || undefined,
+        format: f.format,
         readOnly: f.readOnly,
         hidden: false,
         options: f.options.map((o) => ({ displayValue: o, exportValue: o })),
@@ -716,6 +732,22 @@ export class PdfPage {
               /* older WASM build without GetNumberValue — leave 0 */
             }
           }
+          // Format preset — inferred from the /AA format/validate JavaScript
+          // (Acrobat AF actions) so the fill layer can format existing fields.
+          let format: string | undefined;
+          if (fieldType === 6 && typeof m.FPDFAnnot_GetFormAdditionalActionJavaScript === "function") {
+            try {
+              const fmtJs = withUtf16Buffer(m, (p, cap) =>
+                m.FPDFAnnot_GetFormAdditionalActionJavaScript(form, annot, 13 /* FORMAT */, p, cap),
+              );
+              const valJs = withUtf16Buffer(m, (p, cap) =>
+                m.FPDFAnnot_GetFormAdditionalActionJavaScript(form, annot, 14 /* VALIDATE */, p, cap),
+              );
+              format = inferTextFormat(fmtJs, valJs);
+            } catch {
+              /* older WASM build without the AA getter */
+            }
+          }
           const options: string[] = [];
           const optCount = m.FPDFAnnot_GetOptionCount(form, annot);
           for (let o = 0; o < optCount; o++) {
@@ -738,6 +770,7 @@ export class PdfPage {
             flags,
             readOnly: (flags & 1) !== 0,
             maxLen,
+            format,
             rect: this.pageRectToDisplay(left, top, right, bottom),
           });
         } finally {
