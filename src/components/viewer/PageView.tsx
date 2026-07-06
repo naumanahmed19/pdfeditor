@@ -587,13 +587,15 @@ export function PageView({
         onClick={onTextLayerClick}
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
-      {/* Existing-content editing lives on its own "Move objects" tool
-          (app.tool === "editobject"), kept separate from Select so moving your
-          own annotations never fights with grabbing underlying page text /
-          images. Rendered BELOW the form and annotation layers so form fields
-          and your own annotations keep priority — clicks that miss them fall
-          through here. */}
-      {app.tool === "editobject" && visible && (
+      {/* Existing-content editing lives on the "Move objects" tool
+          (app.tool === "editobject"), kept separate from Select in the normal
+          editor. In the form builder (design, not preview) the Select tool
+          doubles as it — one tool moves/deletes existing labels and fields.
+          Rendered BELOW the form/annotation layers so fields keep priority and
+          only clicks that miss them fall through to editing page content. */}
+      {(app.tool === "editobject" ||
+        (app.formBuilder && !app.formPreview && app.tool === "select")) &&
+        visible && (
         <ObjectLayer
           pdf={pdf}
           pageIndex={pageIndex}

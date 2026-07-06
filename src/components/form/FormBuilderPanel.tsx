@@ -9,6 +9,7 @@ import {
   Eye,
   List,
   MousePointerClick,
+  Pencil,
   PenLine,
   Plus,
   SquareCheck,
@@ -19,11 +20,14 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useApp } from "../../store";
 import { cn, uid } from "../../lib/utils";
+import { toast } from "sonner";
 import {
   FIELD_DND_MIME,
   FIELD_TYPES,
   TOOL_FOR_FIELD,
   allFormFields,
+  existingFieldToFormField,
+  type ExistingFieldSpec,
   nextFieldName,
   paletteDrag,
   validateForm,
@@ -355,6 +359,7 @@ interface ExistingWidget {
   name: string;
   page: number;
   rect: { x: number; y: number; w: number; h: number };
+  spec: ExistingFieldSpec;
 }
 
 /** Fields already present in the document's AcroForm (from the loaded PDF). */
@@ -391,6 +396,21 @@ function ExistingFields() {
               name: a.fieldName as string,
               page: p,
               rect,
+              spec: {
+                fieldType: a.fieldType,
+                checkBox: !!a.checkBox,
+                radioButton: !!a.radioButton,
+                combo: !!a.combo,
+                multiSelect: !!a.multiSelect,
+                comb: !!a.comb,
+                multiLine: !!a.multiLine,
+                maxLen: a.maxLen || undefined,
+                readOnly: !!a.readOnly,
+                fieldValue: a.fieldValue,
+                options: (a.options ?? []).map((o: any) =>
+                  String(o.exportValue ?? o.displayValue ?? ""),
+                ),
+              },
             });
           }
         }
@@ -403,6 +423,24 @@ function ExistingFields() {
       alive = false;
     };
   }, [app.pdf, app.docVersion]);
+
+  // "Promote": turn an existing field into an editable placeholder (deleted on
+  // save + recreated), then select it so the full properties panel opens.
+  const promote = (w: ExistingWidget) => {
+    const ann = existingFieldToFormField(app.annotations, w.name, w.rect, w.spec);
+    if (!ann) {
+      toast.error("Radio groups and signature fields can't be converted to editable fields yet.");
+      return;
+    }
+    app.upsertFieldOp(
+      { key: w.key, fieldName: w.name, pageIndex: w.page, origRect: w.rect },
+      { deleted: true },
+    );
+    app.addAnnotation(w.page, ann);
+    app.setSelectedField(null);
+    app.setSelected({ page: w.page, id: ann.id });
+    app.scrollToPage(w.page);
+  };
 
   if (!widgets.length) return null;
 
@@ -445,6 +483,11 @@ function ExistingFields() {
                   </span>
                 </button>
                 <span className="hidden shrink-0 group-hover:flex">
+                  {!op?.deleted && !w.spec.radioButton && (
+                    <IconBtn title="Edit field (convert to editable)" onClick={() => promote(w)}>
+                      <Pencil className="h-3 w-3" />
+                    </IconBtn>
+                  )}
                   {op?.deleted ? (
                     <IconBtn
                       title="Restore field"

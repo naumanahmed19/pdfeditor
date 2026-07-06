@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -8,12 +8,18 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalSpaceAround,
+  Pencil,
   PenLine,
 } from "lucide-react";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
-import { DATE_FORMATS } from "../../lib/formbuilder";
+import {
+  DATE_FORMATS,
+  type ExistingFieldSpec,
+  existingFieldToFormField,
+} from "../../lib/formbuilder";
+import { useFormFieldTheme } from "./formFieldTheme";
 import type { Annotation, FormFieldAnnotation } from "../../types";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -26,7 +32,7 @@ import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 interface FormFieldSpec {
   key: string;
   name: string;
-  kind: "text" | "multiline" | "checkbox" | "radio" | "dropdown";
+  kind: "text" | "multiline" | "checkbox" | "radio" | "dropdown" | "listbox" | "button";
   left: number;
   top: number;
   width: number;
@@ -37,6 +43,10 @@ interface FormFieldSpec {
   initial: unknown;
   readOnly: boolean;
   maxLen?: number;
+  /** Text field with the Comb flag: value laid out across `maxLen` fixed cells. */
+  comb?: boolean;
+  /** List box (choice field, non-combo) allowing more than one selection. */
+  multiSelect?: boolean;
 }
 
 /** Renders the PDF's AcroForm fields as fillable inputs. */
@@ -52,6 +62,7 @@ export function FormLayer({
   visible: boolean;
 }) {
   const app = useApp();
+  const theme = useFormFieldTheme();
   const [fields, setFields] = useState<FormFieldSpec[]>([]);
 
   useEffect(() => {
@@ -81,6 +92,7 @@ export function FormLayer({
               kind: a.multiLine ? "multiline" : "text",
               initial: a.fieldValue ?? "",
               maxLen: a.maxLen || undefined,
+              comb: !a.multiLine && !!a.comb && !!a.maxLen,
             });
           } else if (a.fieldType === "Btn" && a.checkBox) {
             out.push({
@@ -95,15 +107,32 @@ export function FormLayer({
               buttonValue: a.buttonValue ?? "",
               initial: a.fieldValue ?? "",
             });
+          } else if (a.fieldType === "Btn") {
+            // Pushbutton (Reset / Submit / JavaScript). Rendered as a click
+            // target whose action is delegated to PDFium's form engine.
+            out.push({ ...base, kind: "button", initial: "" });
           } else if (a.fieldType === "Ch") {
+            // A choice field is a dropdown when the Combo flag is set, otherwise
+            // a list box (several options visible at once, optionally multi-select).
+            const isCombo = !!a.combo;
+            const options = (a.options ?? []).map((o: any) => ({
+              value: String(o.exportValue ?? o.displayValue ?? ""),
+              label: String(o.displayValue ?? o.exportValue ?? ""),
+            }));
             out.push({
               ...base,
-              kind: "dropdown",
-              options: (a.options ?? []).map((o: any) => ({
-                value: String(o.exportValue ?? o.displayValue ?? ""),
-                label: String(o.displayValue ?? o.exportValue ?? ""),
-              })),
-              initial: Array.isArray(a.fieldValue) ? a.fieldValue[0] : a.fieldValue ?? "",
+              kind: isCombo ? "dropdown" : "listbox",
+              options,
+              multiSelect: !isCombo && !!a.multiSelect,
+              initial: isCombo
+                ? Array.isArray(a.fieldValue)
+                  ? a.fieldValue[0]
+                  : a.fieldValue ?? ""
+                : Array.isArray(a.fieldValue)
+                  ? a.fieldValue
+                  : a.fieldValue != null && a.fieldValue !== ""
+                    ? [a.fieldValue]
+                    : [],
             });
           }
         }
@@ -119,8 +148,24 @@ export function FormLayer({
 
   if (!fields.length) return null;
 
-  const inputCls =
-    "absolute rounded-[2px] border border-blue-400/50 bg-sky-400/10 text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white disabled:opacity-60";
+  // Run a pushbutton's action (Reset/Submit/JS) via PDFium, then pull the
+  // resulting field values back into the app so the overlays update.
+  const runFieldAction = async (f: FormFieldSpec) => {
+    try {
+      const page = await pdf.getPage(pageIndex + 1);
+      page.clickWidget(f.left + f.width / 2, f.top + f.height / 2);
+      const annots = await page.getAnnotations();
+      for (const a of annots as any[]) {
+        if (a.subtype !== "Widget" || !a.fieldName) continue;
+        if (a.fieldType === "Btn" && !a.checkBox && !a.radioButton) continue;
+        app.setFormValue(a.fieldName, formValueFromAnnot(a));
+      }
+    } catch {
+      /* button had no runnable action */
+    }
+  };
+
+  const inputCls = theme.input;
 
   // Edit mode: existing fields become selectable designer objects — except
   // in the form builder's live preview, where everything stays fillable.
@@ -156,6 +201,28 @@ export function FormLayer({
         };
         const current = app.formValues[f.name];
 
+        if (f.kind === "button") {
+          // Transparent hit target over the button baked into the page; the
+          // action (Reset/Submit/JS) is delegated to PDFium on click.
+          return (
+            <button
+              key={f.key}
+              type="button"
+              disabled={f.readOnly}
+              onClick={() => void runFieldAction(f)}
+              title={f.name}
+              className="absolute cursor-pointer bg-transparent"
+              style={{
+                left: rect.x * scale,
+                top: rect.y * scale,
+                width: rect.w * scale,
+                height: rect.h * scale,
+                pointerEvents: "auto",
+              }}
+            />
+          );
+        }
+
         if (f.kind === "checkbox") {
           const checked = current !== undefined ? !!current : !!f.initial;
           return (
@@ -165,7 +232,7 @@ export function FormLayer({
               checked={checked}
               disabled={f.readOnly}
               onChange={(e) => app.setFormValue(f.name, e.target.checked)}
-              className={cn(inputCls, "accent-blue-600")}
+              className={cn(inputCls, theme.accent)}
               style={style}
             />
           );
@@ -180,7 +247,7 @@ export function FormLayer({
               checked={groupValue === f.buttonValue}
               disabled={f.readOnly}
               onChange={() => app.setFormValue(f.name, f.buttonValue)}
-              className={cn(inputCls, "accent-blue-600")}
+              className={cn(inputCls, theme.accent)}
               style={style}
             />
           );
@@ -205,6 +272,48 @@ export function FormLayer({
             </select>
           );
         }
+        if (f.kind === "listbox") {
+          const selected: string[] = Array.isArray(current)
+            ? current.map(String)
+            : current != null && current !== ""
+              ? [String(current)]
+              : Array.isArray(f.initial)
+                ? (f.initial as unknown[]).map(String)
+                : f.initial != null && f.initial !== ""
+                  ? [String(f.initial)]
+                  : [];
+          return (
+            <select
+              key={f.key}
+              multiple={f.multiSelect}
+              size={Math.max(2, f.options?.length ?? 2)}
+              value={f.multiSelect ? selected : selected[0] ?? ""}
+              disabled={f.readOnly}
+              onChange={(e) =>
+                f.multiSelect
+                  ? app.setFormValue(
+                      f.name,
+                      Array.from(e.target.selectedOptions).map((o) => o.value),
+                    )
+                  : app.setFormValue(f.name, e.target.value)
+              }
+              className={cn(inputCls, "overflow-auto p-0")}
+              style={{
+                ...style,
+                fontSize: Math.min(14, Math.max(9, 11 * scale)),
+                // Opaque so the baked list-box appearance on the canvas beneath
+                // doesn't show through and double the option labels.
+                background: theme.fill,
+              }}
+            >
+              {(f.options ?? []).map((o) => (
+                <option key={o.value} value={o.value} className="px-1">
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          );
+        }
         const value = String(current !== undefined ? current : f.initial ?? "");
         if (f.kind === "multiline") {
           return (
@@ -215,7 +324,24 @@ export function FormLayer({
               maxLength={f.maxLen}
               onChange={(e) => app.setFormValue(f.name, e.target.value)}
               className={cn(inputCls, "resize-none p-1")}
-              style={style}
+              // Height-based sizing suits single-line fields; a multi-line box is
+              // many lines tall, so use a normal per-line font instead.
+              style={{ ...style, fontSize: Math.min(14, Math.max(9, 11 * scale)) }}
+            />
+          );
+        }
+        if (f.comb && f.maxLen) {
+          return (
+            <CombField
+              key={f.key}
+              n={f.maxLen}
+              value={value}
+              readOnly={f.readOnly}
+              className={cn(inputCls, "overflow-hidden p-0")}
+              // Opaque so PDFium's baked comb appearance beneath doesn't show
+              // through and double the glyphs; our grid is the only thing drawn.
+              style={{ ...style, background: theme.fill }}
+              onChange={(v) => app.setFormValue(f.name, v)}
             />
           );
         }
@@ -236,8 +362,166 @@ export function FormLayer({
   );
 }
 
+let combMeasureCanvas: HTMLCanvasElement | null = null;
+
+/**
+ * Comb text field: one glyph per fixed cell (like Chrome's PDF viewer). It's a
+ * REAL native <input> — visible monospace text spread across the cells with
+ * measured letter-spacing, and cell dividers painted as a background — so the
+ * native caret (blinking, correctly positioned) and selection just work. Only
+ * editing is customised: a keystroke OVERWRITES the active cell instead of
+ * inserting and shoving the rest of the value sideways.
+ */
+function CombField({
+  n,
+  value,
+  readOnly,
+  className,
+  style,
+  onChange,
+}: {
+  n: number;
+  value: string;
+  readOnly: boolean;
+  className: string;
+  style: React.CSSProperties;
+  onChange: (v: string) => void;
+}) {
+  const theme = useFormFieldTheme();
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Caret to restore after an overwrite edit re-renders the controlled input.
+  const pending = useRef<number | null>(null);
+  const [layout, setLayout] = useState<{ ls: number; indent: number; cellW: number } | null>(null);
+
+  // Measure so each glyph sits centred in its own cell: cellW is the field
+  // width / n, letter-spacing pads each monospace glyph out to a full cell, and
+  // text-indent shifts the row by half a cell to centre the first glyph.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const cs = getComputedStyle(el);
+    const cellW = el.clientWidth / n;
+    combMeasureCanvas ??= document.createElement("canvas");
+    const ctx = combMeasureCanvas.getContext("2d");
+    let charW = cellW * 0.6;
+    if (ctx) {
+      ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+      charW = ctx.measureText("0").width || charW;
+    }
+    setLayout({ ls: cellW - charW, indent: (cellW - charW) / 2, cellW });
+  }, [n, style.width, style.height, style.fontSize]);
+
+  useLayoutEffect(() => {
+    if (pending.current == null || !inputRef.current) return;
+    const p = pending.current;
+    pending.current = null;
+    inputRef.current.setSelectionRange(p, p);
+  });
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (readOnly) return;
+    const el = inputRef.current;
+    if (!el) return;
+    const p = el.selectionStart ?? value.length;
+    const move = (q: number) => {
+      const c = Math.max(0, Math.min(n, q));
+      el.setSelectionRange(c, c);
+    };
+    switch (e.key) {
+      case "ArrowLeft":
+        e.preventDefault();
+        move(p - 1);
+        return;
+      case "ArrowRight":
+        e.preventDefault();
+        move(Math.min(value.length, p + 1));
+        return;
+      case "Home":
+        e.preventDefault();
+        move(0);
+        return;
+      case "End":
+        e.preventDefault();
+        move(value.length);
+        return;
+      case "Backspace":
+        e.preventDefault();
+        if (p < value.length) {
+          // Caret on a filled cell — remove THAT glyph (what looks selected).
+          onChange(value.slice(0, p) + value.slice(p + 1));
+          pending.current = p;
+        } else if (p > 0) {
+          onChange(value.slice(0, p - 1) + value.slice(p));
+          pending.current = p - 1;
+        }
+        return;
+      case "Delete":
+        e.preventDefault();
+        onChange(value.slice(0, p) + value.slice(p + 1));
+        pending.current = p;
+        return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (p >= n) return;
+      onChange((value.slice(0, p) + e.key + value.slice(p + 1)).slice(0, n));
+      pending.current = p + 1;
+    }
+  };
+
+  const dividers = layout
+    ? `repeating-linear-gradient(to right, transparent 0, transparent ${layout.cellW - 1}px, ${theme.divider} ${layout.cellW - 1}px, ${theme.divider} ${layout.cellW}px)`
+    : undefined;
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      value={value}
+      maxLength={n}
+      disabled={readOnly}
+      onKeyDown={onKeyDown}
+      // Native path handles paste/IME; single keystrokes are handled above.
+      onChange={(e) => {
+        onChange(e.target.value.slice(0, n));
+        pending.current = Math.min(e.target.selectionStart ?? n, n);
+      }}
+      className={className}
+      style={{
+        ...style,
+        boxSizing: "border-box",
+        padding: 0,
+        background: theme.fill,
+        backgroundImage: dividers,
+        color: theme.text,
+        fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
+        letterSpacing: layout ? `${layout.ls}px` : undefined,
+        textIndent: layout ? `${layout.indent}px` : undefined,
+        textAlign: "left",
+      }}
+    />
+  );
+}
+
 function fieldOpKey(f: FormFieldSpec, pageIndex: number): string {
   return `${f.name}|${pageIndex}|${Math.round(f.left)},${Math.round(f.top)}`;
+}
+
+/** Map a re-read engine annotation to the app's formValues representation
+ *  (same shape the initial parse produces) — used after a button action. */
+function formValueFromAnnot(a: any): unknown {
+  if (a.fieldType === "Tx") return a.fieldValue ?? "";
+  if (a.fieldType === "Btn" && a.checkBox) return !!a.fieldValue && a.fieldValue !== "Off";
+  if (a.fieldType === "Btn" && a.radioButton) return a.fieldValue ?? "";
+  if (a.fieldType === "Ch") {
+    if (a.combo) return Array.isArray(a.fieldValue) ? a.fieldValue[0] ?? "" : a.fieldValue ?? "";
+    return Array.isArray(a.fieldValue)
+      ? a.fieldValue
+      : a.fieldValue != null && a.fieldValue !== ""
+        ? [a.fieldValue]
+        : [];
+  }
+  return "";
 }
 
 /** Selectable/movable/deletable overlay for an EXISTING form field (edit mode). */
@@ -261,16 +545,18 @@ function FieldDesigner({
   const op = app.fieldOps[key];
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  if (op?.deleted) return null;
-
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
-  // Existing AcroForm fields are existing page content, so — like page text and
-  // images (see ObjectLayer / PageView) — they move on the "Move objects" tool,
-  // NOT the Select tool that drags annotations you added. A read-only widget acts
-  // as "locked" (clicks pass through).
-  const canEdit = app.tool === "editobject" && !field.readOnly;
+  // In the form builder, existing fields are first-class editable objects, so
+  // they move with the Select tool alongside the new fields you're placing. In
+  // the regular editor they're existing page content — like page text/images —
+  // and move only on the "Move objects" tool, NOT the Select tool that drags
+  // annotations you added. A read-only widget acts as "locked" (clicks pass
+  // through) in either case.
+  const canEdit =
+    ((app.formBuilder && app.tool === "select") || app.tool === "editobject") &&
+    !field.readOnly;
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
     if (!canEdit) return;
@@ -318,6 +604,39 @@ function FieldDesigner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSelected]);
 
+  // Convert this existing field into a fully editable one (same flow as the
+  // sidebar's Edit action): promote to a placeholder, delete the original.
+  const canPromote = app.formBuilder && field.kind !== "radio";
+  const promote = () => {
+    const spec: ExistingFieldSpec = {
+      fieldType:
+        field.kind === "checkbox" || field.kind === "button"
+          ? "Btn"
+          : field.kind === "dropdown" || field.kind === "listbox"
+            ? "Ch"
+            : "Tx",
+      checkBox: field.kind === "checkbox",
+      radioButton: false,
+      combo: field.kind === "dropdown",
+      multiSelect: !!field.multiSelect,
+      comb: !!field.comb,
+      multiLine: field.kind === "multiline",
+      maxLen: field.maxLen,
+      readOnly: field.readOnly,
+      fieldValue: field.initial,
+      options: (field.options ?? []).map((o) => o.value),
+    };
+    const ann = existingFieldToFormField(app.annotations, field.name, rect, spec);
+    if (!ann) return;
+    app.upsertFieldOp(base, { deleted: true });
+    app.addAnnotation(pageIndex, ann);
+    app.setSelectedField(null);
+    app.setSelected({ page: pageIndex, id: ann.id });
+  };
+
+  // Hidden once deleted — checked after all hooks so the hook order is stable.
+  if (op?.deleted) return null;
+
   return (
     <div
       style={{
@@ -355,6 +674,17 @@ function FieldDesigner({
           {op?.newName && op.newName !== field.name ? " (renamed)" : ""}
         </span>
       </div>
+      {isSelected && canPromote && (
+        <button
+          type="button"
+          title="Edit this field"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={promote}
+          className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-sm border border-white bg-blue-500 text-white shadow-sm hover:bg-blue-600"
+        >
+          <Pencil className="h-2.5 w-2.5" />
+        </button>
+      )}
       {isSelected && (
         <div
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
@@ -491,11 +821,46 @@ export function FieldPreviewInput({
       );
     }
     case "dropdown": {
+      if (ann.listBox) {
+        const sel = Array.isArray(stored)
+          ? stored.map(String)
+          : stored != null && stored !== ""
+            ? [String(stored)]
+            : ann.defaultValue
+              ? [ann.defaultValue]
+              : [];
+        return (
+          <select
+            className={cn(base, "overflow-auto")}
+            style={{ fontSize, color: ann.textColor, ...widgetCss, ...focusStyle }}
+            multiple={!!ann.multiSelect}
+            size={Math.max(2, (ann.options ?? []).length)}
+            value={ann.multiSelect ? sel : sel[0] ?? ""}
+            disabled={ann.readOnly}
+            onChange={(e) =>
+              ann.multiSelect
+                ? app.setPreviewValue(
+                    name,
+                    Array.from(e.target.selectedOptions).map((o) => o.value),
+                  )
+                : app.setPreviewValue(name, e.target.value)
+            }
+            onPointerDown={stop}
+            {...focusHandlers}
+          >
+            {(ann.options ?? []).map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        );
+      }
       const value = String(stored ?? ann.defaultValue ?? "");
       return (
         <select
           className={base}
-          style={{ fontSize, ...widgetCss, ...focusStyle }}
+          style={{ fontSize, color: ann.textColor, ...widgetCss, ...focusStyle }}
           value={value}
           disabled={ann.readOnly}
           onChange={(e) => app.setPreviewValue(name, e.target.value)}
@@ -539,13 +904,31 @@ export function FieldPreviewInput({
     default: {
       // text & date
       const value = String(stored ?? ann.defaultValue ?? "");
+      if (ann.fieldType === "text" && ann.comb && !ann.multiline && ann.maxLength && ann.maxLength > 0) {
+        return (
+          <CombField
+            n={ann.maxLength}
+            value={value}
+            readOnly={!!ann.readOnly}
+            className={cn(base, "overflow-hidden p-0")}
+            style={{ fontSize, ...widgetCss, ...focusStyle }}
+            onChange={(v) => app.setPreviewValue(name, v)}
+          />
+        );
+      }
       const common = {
         value,
         disabled: ann.readOnly,
         maxLength: ann.maxLength,
         onPointerDown: stop,
         ...focusHandlers,
-        style: { fontSize, textAlign: ann.align, ...widgetCss, ...focusStyle } as React.CSSProperties,
+        style: {
+          fontSize,
+          textAlign: ann.align,
+          color: ann.textColor,
+          ...widgetCss,
+          ...focusStyle,
+        } as React.CSSProperties,
       };
       if (ann.fieldType === "text" && ann.multiline) {
         return (
@@ -559,7 +942,7 @@ export function FieldPreviewInput({
       return (
         <input
           {...common}
-          type="text"
+          type={ann.fieldType === "text" && ann.password ? "password" : "text"}
           placeholder={ann.fieldType === "date" ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
           className={cn(base, "px-1")}
           onChange={(e) => app.setPreviewValue(name, e.target.value)}
@@ -737,16 +1120,46 @@ export function FieldProperties({
       )}
 
       {isBtn && (
-        <div className="space-y-0.5">
-          <div className={lbl}>Caption</div>
-          <Input
-            key={`cap-${ann.id}`}
-            className={sm}
-            defaultValue={ann.buttonCaption ?? ""}
-            placeholder={ann.fieldName}
-            onBlur={(e) => onPatch({ buttonCaption: e.target.value || undefined })}
-          />
-        </div>
+        <>
+          <div className="space-y-0.5">
+            <div className={lbl}>Caption</div>
+            <Input
+              key={`cap-${ann.id}`}
+              className={sm}
+              defaultValue={ann.buttonCaption ?? ""}
+              placeholder={ann.fieldName}
+              onBlur={(e) => onPatch({ buttonCaption: e.target.value || undefined })}
+            />
+          </div>
+          <div className="space-y-0.5">
+            <div className={lbl}>Action</div>
+            <Select
+              className={sm}
+              value={ann.buttonAction ?? "none"}
+              onChange={(e) =>
+                onPatch({
+                  buttonAction: e.target.value as FormFieldAnnotation["buttonAction"],
+                })
+              }
+            >
+              <option value="none">None</option>
+              <option value="reset">Reset form</option>
+              <option value="submit">Submit form</option>
+            </Select>
+          </div>
+          {ann.buttonAction === "submit" && (
+            <div className="space-y-0.5">
+              <div className={lbl}>Submit URL</div>
+              <Input
+                key={`url-${ann.id}`}
+                className={sm}
+                defaultValue={ann.submitUrl ?? ""}
+                placeholder="https://…"
+                onBlur={(e) => onPatch({ submitUrl: e.target.value || undefined })}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {!isBtn && (
@@ -809,21 +1222,31 @@ export function FieldProperties({
       )}
 
       {ann.fieldType === "dropdown" && (
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <label className="flex items-center gap-1.5 text-[11px]">
             <Checkbox
-              checked={!!ann.editable}
-              onCheckedChange={(v: boolean) => onPatch({ editable: v })}
+              checked={!!ann.listBox}
+              onCheckedChange={(v: boolean) => onPatch({ listBox: v })}
             />
-            Allow custom text
+            Show as list box
           </label>
-          <label className="flex items-center gap-1.5 text-[11px]">
-            <Checkbox
-              checked={!!ann.multiSelect}
-              onCheckedChange={(v: boolean) => onPatch({ multiSelect: v })}
-            />
-            Multi-select
-          </label>
+          {ann.listBox ? (
+            <label className="flex items-center gap-1.5 text-[11px]">
+              <Checkbox
+                checked={!!ann.multiSelect}
+                onCheckedChange={(v: boolean) => onPatch({ multiSelect: v })}
+              />
+              Multi-select
+            </label>
+          ) : (
+            <label className="flex items-center gap-1.5 text-[11px]">
+              <Checkbox
+                checked={!!ann.editable}
+                onCheckedChange={(v: boolean) => onPatch({ editable: v })}
+              />
+              Allow custom text
+            </label>
+          )}
         </div>
       )}
 
@@ -844,6 +1267,15 @@ export function FieldProperties({
               ))}
             </Select>
           </div>
+          {(isTexty || isChoice) && (
+            <div className="space-y-0.5">
+              <div className={lbl}>Color</div>
+              <ColorSwatch
+                value={ann.textColor ?? "#000000"}
+                onChange={(v) => onPatch({ textColor: v })}
+              />
+            </div>
+          )}
           <ToggleGroup
             value={[ann.align ?? "left"]}
             onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}
@@ -859,28 +1291,54 @@ export function FieldProperties({
       )}
 
       {isText && (
-        <div className="flex items-end gap-2">
-          <label className="flex items-center gap-1.5 text-[11px]">
-            <Checkbox
-              checked={!!ann.multiline}
-              onCheckedChange={(v: boolean) => onPatch({ multiline: v })}
-            />
-            Multiline
-          </label>
-          <div className="flex-1 space-y-0.5">
-            <div className={lbl}>Max length</div>
-            <Input
-              key={`max-${ann.id}`}
-              type="number"
-              min={0}
-              className={sm}
-              defaultValue={ann.maxLength ?? ""}
-              placeholder="∞"
-              onBlur={(e) =>
-                onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
-              }
-            />
+        <div className="space-y-1.5">
+          <div className="flex items-end gap-2">
+            <label className="flex items-center gap-1.5 text-[11px]">
+              <Checkbox
+                checked={!!ann.multiline}
+                onCheckedChange={(v: boolean) => onPatch({ multiline: v, comb: false })}
+              />
+              Multiline
+            </label>
+            <div className="flex-1 space-y-0.5">
+              <div className={lbl}>Max length</div>
+              <Input
+                key={`max-${ann.id}`}
+                type="number"
+                min={0}
+                className={sm}
+                defaultValue={ann.maxLength ?? ""}
+                placeholder="∞"
+                onBlur={(e) =>
+                  onPatch({ maxLength: e.target.value ? Number(e.target.value) : undefined })
+                }
+              />
+            </div>
           </div>
+          {!ann.multiline && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <label
+                className="flex items-center gap-1.5 text-[11px]"
+                title="Fixed character cells — requires a max length"
+              >
+                <Checkbox
+                  checked={!!ann.comb}
+                  onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
+                />
+                Comb (fixed cells)
+                {ann.comb && !ann.maxLength && (
+                  <span className="text-[10px] text-amber-600">needs max length</span>
+                )}
+              </label>
+              <label className="flex items-center gap-1.5 text-[11px]" title="Masks the value with dots">
+                <Checkbox
+                  checked={!!ann.password}
+                  onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
+                />
+                Password
+              </label>
+            </div>
+          )}
         </div>
       )}
 

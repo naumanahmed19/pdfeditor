@@ -586,7 +586,12 @@ function fillFormValues(doc: PDFDocument, formValues: Record<string, unknown>) {
       } else if (field instanceof PDFRadioGroup) {
         if (typeof value === "string" && value) field.select(value);
       } else if (field instanceof PDFDropdown || field instanceof PDFOptionList) {
-        if (typeof value === "string" && value) field.select(value);
+        if (Array.isArray(value)) {
+          const picks = value.filter((v): v is string => typeof v === "string" && !!v);
+          if (picks.length) field.select(picks);
+        } else if (typeof value === "string" && value) {
+          field.select(value);
+        }
       }
     } catch {
       /* field missing or incompatible — skip */
@@ -763,6 +768,10 @@ export async function bakeAnnotations(
     }
   }
 
+  // Delete removed/promoted existing fields FIRST, so a promoted field can be
+  // recreated with the same name (createFormFields dedupes against live names).
+  if (fieldOps && Object.keys(fieldOps).length) applyFieldDeletions(doc, fieldOps);
+
   if (newFields.length) createFormFields(doc, newFields);
 
   // Fill values before renames so entered values land in their fields.
@@ -793,6 +802,25 @@ export async function bakeAnnotations(
 }
 
 /** Apply move/rename/delete edits to existing AcroForm fields. */
+/** Remove fields marked deleted — runs before createFormFields so a promoted
+ *  field can reclaim the original's name. */
+function applyFieldDeletions(doc: PDFDocument, fieldOps: Record<string, ExistingFieldOp>) {
+  let form;
+  try {
+    form = doc.getForm();
+  } catch {
+    return;
+  }
+  for (const op of Object.values(fieldOps)) {
+    if (!op.deleted) continue;
+    try {
+      form.removeField(form.getField(op.fieldName));
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 function applyFieldOps(
   doc: PDFDocument,
   fieldOps: Record<string, ExistingFieldOp>,
@@ -807,11 +835,8 @@ function applyFieldOps(
   const renamed = new Set<string>();
   for (const op of Object.values(fieldOps)) {
     try {
+      if (op.deleted) continue; // handled up front by applyFieldDeletions
       const field = form.getField(op.fieldName);
-      if (op.deleted) {
-        form.removeField(field);
-        continue;
-      }
       if (op.newRect) {
         const page = doc.getPage(op.pageIndex);
         const { width: pw, height: ph } = page.getSize();
@@ -1019,6 +1044,12 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           if (ann.required) f.enableRequired();
           if (ann.readOnly) f.enableReadOnly();
           if (ann.maxLength && ann.maxLength > 0) f.setMaxLength(ann.maxLength);
+          if (ann.fieldType === "text" && ann.comb && !ann.multiline && ann.maxLength) {
+            f.enableCombing();
+          }
+          if (ann.fieldType === "text" && ann.password && !ann.multiline) {
+            f.enablePassword();
+          }
           if (ann.align) {
             f.setAlignment(
               ann.align === "center"
@@ -1031,6 +1062,7 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           if (ann.defaultValue) f.setText(ann.defaultValue);
           f.addToPage(page, rect);
           if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
+          if (ann.textColor) setFieldTextColor(f, ann.textColor);
           // Border/background go through the widget MK; addToPage set defaults,
           // so re-apply our colors explicitly then the style.
           applyWidgetAppearance(doc, f, appearance);
@@ -1052,12 +1084,16 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           break;
         }
         case "dropdown": {
-          const f = form.createDropdown(uniqueName(ann.fieldName));
+          // A choice field is a real list box (Ch, non-combo) when "Show as
+          // list box" is set, otherwise a combo dropdown.
+          const f = ann.listBox
+            ? form.createOptionList(uniqueName(ann.fieldName))
+            : form.createDropdown(uniqueName(ann.fieldName));
           f.setOptions((ann.options ?? []).map((o) => o.trim()).filter(Boolean));
           if (ann.readOnly) f.enableReadOnly();
           if (ann.required) f.enableRequired();
-          if (ann.editable) f.enableEditing();
-          if (ann.multiSelect) f.enableMultiselect();
+          if (f instanceof PDFDropdown && ann.editable) f.enableEditing();
+          if (ann.listBox && ann.multiSelect) f.enableMultiselect();
           if (ann.defaultValue) {
             try {
               f.select(ann.defaultValue);
@@ -1067,6 +1103,7 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           }
           f.addToPage(page, rect);
           if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
+          if (ann.textColor) setFieldTextColor(f, ann.textColor);
           applyWidgetAppearance(doc, f, appearance);
           styleWidgets(f, ann);
           break;
@@ -1084,6 +1121,7 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
           applyWidgetAppearance(doc, f, appearance);
           styleWidgets(f, ann);
+          setButtonAction(doc, f, ann);
           break;
         }
         case "radio": {
@@ -1108,6 +1146,52 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
 }
 
 /** Re-apply border/background color to every widget of a field via its MK dict. */
+/** Set a field's value-text color by editing its /DA color operator in place
+ *  (keeps the font/size pdf-lib already put there). Skips fields with no font
+ *  context so we never produce a broken appearance. */
+function setFieldTextColor(
+  field: { acroField: { getDefaultAppearance(): string | undefined; setDefaultAppearance(da: string): void } },
+  hex: string,
+) {
+  const da = field.acroField.getDefaultAppearance();
+  if (!da || !/\bTf\b/.test(da)) return;
+  const { r, g, b } = hexToRgb01(hex);
+  const noColor = da
+    .replace(/\s*[\d.]+\s+g\b/g, "")
+    .replace(/\s*[\d.]+\s+[\d.]+\s+[\d.]+\s+(rg|k)\b/g, "");
+  field.acroField.setDefaultAppearance(
+    `${noColor} ${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} rg`.trim(),
+  );
+}
+
+/** Attach a Reset/Submit action (/A) to a push-button's widget(s), so it does
+ *  something when clicked — in our viewer and in Acrobat/Chrome alike. */
+function setButtonAction(
+  doc: PDFDocument,
+  field: { acroField: { getWidgets: () => Array<{ dict: PDFDict }> } },
+  ann: FormFieldAnnotation,
+) {
+  let action: PDFDict | null = null;
+  if (ann.buttonAction === "reset") {
+    action = doc.context.obj({
+      Type: PDFName.of("Action"),
+      S: PDFName.of("ResetForm"),
+    }) as PDFDict;
+  } else if (ann.buttonAction === "submit" && ann.submitUrl) {
+    action = doc.context.obj({
+      Type: PDFName.of("Action"),
+      S: PDFName.of("SubmitForm"),
+      F: PDFString.of(ann.submitUrl),
+      // ExportFormat (submit as URL-encoded HTML) + GetMethod.
+      Flags: 12,
+    }) as PDFDict;
+  }
+  if (!action) return;
+  for (const w of field.acroField.getWidgets()) {
+    w.dict.set(PDFName.of("A"), action);
+  }
+}
+
 function applyWidgetAppearance(
   doc: PDFDocument,
   field: { acroField: any },

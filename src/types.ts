@@ -186,9 +186,15 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   readOnly?: boolean;
   /** Text font size in pt; 0 or undefined = auto-size. */
   fontSize?: number;
+  /** Value text color (hex); applied via the field's /DA. */
+  textColor?: string;
   align?: FieldAlign;
   multiline?: boolean;
   maxLength?: number;
+  /** Text field laid out as fixed comb cells (needs maxLength; /Comb flag). */
+  comb?: boolean;
+  /** Text field that masks its value (/Password flag). */
+  password?: boolean;
   /** Widget appearance. */
   borderColor?: string;
   backgroundColor?: string;
@@ -199,12 +205,18 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   exportValue?: string;
   /** Dropdown: user can type a custom value (combo /Edit flag). */
   editable?: boolean;
-  /** Dropdown: allow selecting multiple options (/MultiSelect flag). */
+  /** Choice field shown as a list box (non-combo) instead of a dropdown. */
+  listBox?: boolean;
+  /** List box: allow selecting multiple options (/MultiSelect flag). */
   multiSelect?: boolean;
   /** Date field display format (AFDate picture, e.g. "mm/dd/yyyy"). */
   dateFormat?: string;
   /** Push-button caption. */
   buttonCaption?: string;
+  /** Push-button action run on click (none = a plain visual button). */
+  buttonAction?: "none" | "reset" | "submit";
+  /** Target URL when buttonAction === "submit". */
+  submitUrl?: string;
 }
 
 /** A pending edit to an EXISTING AcroForm field (move/rename/delete). */
