@@ -1320,7 +1320,7 @@ export function FieldProperties({
 
       {(isTexty || isChoice || isBtn) && (
         <div className="flex items-end gap-2">
-          <div className="flex-1 space-y-0.5">
+          <div className="min-w-0 flex-1 space-y-0.5">
             <div className={lbl}>Font size</div>
             <Select
               className={sm}
@@ -1344,17 +1344,20 @@ export function FieldProperties({
               />
             </div>
           )}
-          <ToggleGroup
-            value={[ann.align ?? "left"]}
-            onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}
-            aria-label="Text alignment"
-          >
-            {(["left", "center", "right"] as const).map((a) => (
-              <ToggleGroupItem key={a} value={a} title={a} className="text-[11px] capitalize">
-                {a[0].toUpperCase()}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+          <div className="space-y-0.5">
+            <div className={lbl}>Align</div>
+            <ToggleGroup
+              value={[ann.align ?? "left"]}
+              onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}
+              aria-label="Text alignment"
+            >
+              {(["left", "center", "right"] as const).map((a) => (
+                <ToggleGroupItem key={a} value={a} title={a} className="text-[11px] capitalize">
+                  {a[0].toUpperCase()}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
         </div>
       )}
 
