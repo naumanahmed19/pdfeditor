@@ -12,6 +12,8 @@ import { cn } from "../../lib/utils";
 export type FormFieldSkin = "blue" | "shadcn";
 
 export interface FormFieldThemeDef {
+  /** User-facing name (internal keys stay stable for storage). */
+  label: string;
   /** Base class for text inputs / selects / textareas / comb. */
   input: string;
   /** Accent-color utility for checkbox & radio. */
@@ -29,6 +31,7 @@ const BASE = "absolute outline-none transition disabled:opacity-60";
 export const FORM_FIELD_THEMES: Record<FormFieldSkin, FormFieldThemeDef> = {
   // The app's current look.
   blue: {
+    label: "Blue",
     input: cn(
       BASE,
       "rounded-[2px] border border-blue-400/50 bg-sky-400/10 text-slate-900 focus:border-blue-500 focus:bg-white",
@@ -38,8 +41,9 @@ export const FORM_FIELD_THEMES: Record<FormFieldSkin, FormFieldThemeDef> = {
     text: "#0f172a",
     divider: "rgba(96,165,250,0.45)",
   },
-  // shadcn's default input tokens.
+  // shadcn's default input tokens (shown to users as "Default").
   shadcn: {
+    label: "Default",
     input: cn(
       BASE,
       "rounded-md border border-input bg-background text-foreground shadow-sm focus:border-ring focus:ring-2 focus:ring-ring",
