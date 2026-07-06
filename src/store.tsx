@@ -29,6 +29,7 @@ import {
   searchDocument,
   extractAllText,
   setPasswordPrompter,
+  hasRasterImages,
 } from "./lib/pdf";
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
@@ -1424,21 +1425,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
             open: true,
           }).then(refreshRecent);
         }
-        // Offer OCR if the document has essentially no extractable text (scan).
+        // Offer OCR only for a genuine scan: essentially no extractable text
+        // AND actual raster image content. A blank/vector page has neither, so
+        // it must not be misdiagnosed as scanned.
         void extractAllText(pdfDoc)
-          .then((textPages) => {
+          .then(async (textPages) => {
             const chars = textPages.reduce((n, p) => n + p.full.trim().length, 0);
-            if (chars < pdfDoc.numPages * 10) {
-              toast("This looks like a scanned PDF", {
-                description:
-                  "Run OCR to make its text searchable, selectable and AI-readable.",
-                action: {
-                  label: "Run OCR",
-                  onClick: () => void runOcrRef.current?.(),
-                },
-                duration: 12000,
-              });
-            }
+            if (chars >= pdfDoc.numPages * 10) return;
+            if (!(await hasRasterImages(pdfDoc))) return;
+            toast("This looks like a scanned PDF", {
+              description:
+                "Run OCR to make its text searchable, selectable and AI-readable.",
+              action: {
+                label: "Run OCR",
+                onClick: () => void runOcrRef.current?.(),
+              },
+              duration: 12000,
+            });
           })
           .catch(() => {});
         return doc.id;

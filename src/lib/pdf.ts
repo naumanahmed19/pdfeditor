@@ -69,6 +69,20 @@ export async function extractAllText(pdf: PdfDoc): Promise<PageText[]> {
   return pages;
 }
 
+/**
+ * True if any of the first `maxPages` pages contains a raster image object —
+ * the signature of a scanned document. Lets callers tell a genuine scan
+ * (image, no text) apart from a blank or purely vector page (no text, no
+ * image), so OCR is only offered for the former.
+ */
+export function hasRasterImages(pdf: PdfDoc, maxPages = 5): boolean {
+  const n = Math.min(pdf.numPages, maxPages);
+  for (let i = 0; i < n; i++) {
+    if (pdf.page(i).getObjects().some((o) => o.kind === "image")) return true;
+  }
+  return false;
+}
+
 export async function searchDocument(
   pdf: PdfDoc,
   query: string,
