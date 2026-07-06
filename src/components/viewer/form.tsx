@@ -412,7 +412,13 @@ function CombField({
         return;
       case "Backspace":
         e.preventDefault();
-        if (p > 0) {
+        if (p < value.length) {
+          // Caret is on a filled (highlighted) cell — remove THAT cell's glyph,
+          // which is the one the user sees selected. Otherwise (caret past the
+          // text) fall back to removing the previous cell.
+          onChange(value.slice(0, p) + value.slice(p + 1));
+          pending.current = p;
+        } else if (p > 0) {
           onChange(value.slice(0, p - 1) + value.slice(p));
           pending.current = p - 1;
         }
