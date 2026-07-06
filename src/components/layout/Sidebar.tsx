@@ -48,9 +48,9 @@ function SidebarImpl() {
   const [tab, setTab] = useState<SidebarTab>("recent");
 
   // Entering the form builder brings its palette into view; leaving it
-  // returns to the page thumbnails.
+  // (via Done) returns to the Recent list by default.
   useEffect(() => {
-    setTab((t) => (app.formBuilder ? "form" : t === "form" ? "pages" : t));
+    setTab((t) => (app.formBuilder ? "form" : t === "form" ? "recent" : t));
   }, [app.formBuilder]);
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
@@ -60,7 +60,7 @@ function SidebarImpl() {
     <aside
       className={cn(
         // Mobile: fixed slide-over drawer below the title bar.
-        "fixed bottom-0 left-0 top-[42px] z-40 flex w-[280px] max-w-[85vw] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-transform duration-200 ease-out",
+        "fixed bottom-0 left-0 top-[42px] z-50 flex w-[280px] max-w-[85vw] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-transform duration-200 ease-out",
         // Desktop: static column.
         "lg:static lg:z-auto lg:w-[288px] lg:max-w-none lg:translate-x-0 lg:border-r-0 lg:shadow-none lg:transition-none",
         app.sidebarOpen ? "translate-x-0" : "-translate-x-full lg:hidden",
