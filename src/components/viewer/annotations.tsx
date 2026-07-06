@@ -36,7 +36,6 @@ import type {
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Popover, PopoverContent } from "../ui/popover";
-import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 
 let warnedWhiteout = false;
