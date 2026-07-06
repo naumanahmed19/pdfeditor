@@ -275,7 +275,9 @@ export function FormLayer({
               maxLength={f.maxLen}
               onChange={(e) => app.setFormValue(f.name, e.target.value)}
               className={cn(inputCls, "resize-none p-1")}
-              style={style}
+              // Height-based sizing suits single-line fields; a multi-line box is
+              // many lines tall, so use a normal per-line font instead.
+              style={{ ...style, fontSize: Math.min(14, Math.max(9, 11 * scale)) }}
             />
           );
         }
