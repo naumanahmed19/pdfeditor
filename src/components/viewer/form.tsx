@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -341,12 +341,25 @@ function CombField({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [caret, setCaret] = useState<number | null>(null);
+  // Caret to restore after an edit re-renders the (controlled) input.
+  const pending = useRef<number | null>(null);
   const chars = value.split("");
 
-  const sync = () => {
+  const place = (p: number) => {
     const el = inputRef.current;
-    setCaret(el && document.activeElement === el ? el.selectionStart : null);
+    if (!el) return;
+    const np = Math.max(0, Math.min(n, p));
+    el.setSelectionRange(np, np);
+    setCaret(np);
   };
+
+  useLayoutEffect(() => {
+    if (pending.current == null) return;
+    const p = pending.current;
+    pending.current = null;
+    place(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
 
   // Reliably drop the caret when focus/interaction leaves the field — onBlur
   // alone can miss cases (e.g. clicking empty page area).
@@ -365,21 +378,62 @@ function CombField({
 
   // A comb fills left-to-right with no gaps, so clamp the caret to the typed
   // length: clicking a cell past the text just parks it at the end.
-  const placeCaret = (e: React.PointerEvent) => {
+  const placeFromClick = (e: React.PointerEvent) => {
     if (readOnly) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const idx = Math.max(
       0,
       Math.min(value.length, Math.floor((e.clientX - rect.left) / (rect.width / n))),
     );
-    requestAnimationFrame(() => {
-      inputRef.current?.setSelectionRange(idx, idx);
-      sync();
-    });
+    requestAnimationFrame(() => place(idx));
+  };
+
+  // Drive editing explicitly so a fixed cell OVERWRITES on type (like a mask)
+  // instead of inserting and shoving the rest of the value sideways.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (readOnly) return;
+    const p = inputRef.current?.selectionStart ?? value.length;
+    switch (e.key) {
+      case "ArrowLeft":
+        e.preventDefault();
+        place(p - 1);
+        return;
+      case "ArrowRight":
+        e.preventDefault();
+        place(Math.min(value.length, p + 1));
+        return;
+      case "Home":
+        e.preventDefault();
+        place(0);
+        return;
+      case "End":
+        e.preventDefault();
+        place(value.length);
+        return;
+      case "Backspace":
+        e.preventDefault();
+        if (p > 0) {
+          onChange(value.slice(0, p - 1) + value.slice(p));
+          pending.current = p - 1;
+        }
+        return;
+      case "Delete":
+        e.preventDefault();
+        onChange(value.slice(0, p) + value.slice(p + 1));
+        pending.current = p;
+        return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (p >= n) return;
+      // Overwrite the glyph in this cell (append when past the current text).
+      onChange((value.slice(0, p) + e.key + value.slice(p + 1)).slice(0, n));
+      pending.current = p + 1;
+    }
   };
 
   return (
-    <div ref={containerRef} className={className} style={style} onPointerDown={placeCaret}>
+    <div ref={containerRef} className={className} style={style} onPointerDown={placeFromClick}>
       <div className="pointer-events-none absolute inset-0 flex">
         {Array.from({ length: n }).map((_, i) => (
           <div
@@ -387,11 +441,13 @@ function CombField({
             className={cn(
               "relative flex flex-1 items-center justify-center overflow-hidden",
               i < n - 1 && "border-r border-blue-400/40",
+              // Tint the active cell so it's clear which one a keystroke edits.
+              caret === i && "bg-blue-400/15",
             )}
           >
             {chars[i] ?? ""}
-            {/* Caret sits at the cell's left edge (before its glyph), so it never
-                overlaps the centered character when clicking a filled cell. */}
+            {/* Caret at the cell's left edge (before its glyph), so it never
+                overlaps the centered character in a filled cell. */}
             {caret === i && (
               <span className="pointer-events-none absolute left-[3px] top-[15%] bottom-[15%] w-px animate-pulse bg-slate-800" />
             )}
@@ -404,15 +460,14 @@ function CombField({
         value={value}
         maxLength={n}
         disabled={readOnly}
+        onKeyDown={onKeyDown}
+        // Native path only for paste/IME; keystrokes are handled above.
         onChange={(e) => {
-          onChange(e.target.value);
-          requestAnimationFrame(sync);
+          onChange(e.target.value.slice(0, n));
+          pending.current = Math.min(e.target.selectionStart ?? n, n);
         }}
-        onFocus={sync}
+        onFocus={() => place(inputRef.current?.selectionStart ?? value.length)}
         onBlur={() => setCaret(null)}
-        onSelect={sync}
-        onKeyUp={sync}
-        onClick={sync}
         className="absolute inset-0 h-full w-full bg-transparent text-transparent caret-transparent outline-none [&::selection]:bg-transparent [&::selection]:text-transparent"
       />
     </div>
