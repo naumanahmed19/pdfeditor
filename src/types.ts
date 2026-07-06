@@ -8,6 +8,7 @@ export type ToolKind =
   | "ellipse"
   | "line"
   | "whiteout"
+  | "redaction"
   | "image"
   | "signature"
   | "formtext"
@@ -58,6 +59,19 @@ export interface WhiteoutAnnotation extends BaseAnnotation {
   color?: string;
 }
 
+/**
+ * A destructive redaction. Unlike whiteout (a cosmetic cover), any page holding
+ * one of these is rasterized on save: the page is re-rendered to an image with a
+ * solid bar burned in over each region, and the original page — text, fonts and
+ * image objects — is dropped from the output entirely. The content beneath is
+ * physically removed, not hidden.
+ */
+export interface RedactionAnnotation extends BaseAnnotation {
+  kind: "redaction";
+  /** Bar color — defaults to black. */
+  color?: string;
+}
+
 export interface ShapeAnnotation extends BaseAnnotation {
   kind: "rect" | "ellipse" | "line";
   color: string;
@@ -105,6 +119,7 @@ export type Annotation =
   | TextAnnotation
   | HighlightAnnotation
   | WhiteoutAnnotation
+  | RedactionAnnotation
   | ShapeAnnotation
   | InkAnnotation
   | ImageAnnotation

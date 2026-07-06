@@ -39,6 +39,17 @@ function warnWhiteoutOnce() {
   });
 }
 
+let warnedRedaction = false;
+function warnRedactionOnce() {
+  if (warnedRedaction) return;
+  warnedRedaction = true;
+  toast.info("Redaction permanently removes what's underneath", {
+    description:
+      "When you save or export, each redacted page is flattened to an image with the content beneath the bars destroyed — but that page also loses its selectable text. Review placement before saving.",
+    duration: 9000,
+  });
+}
+
 const WELL_MATCHED_FONT =
   /helvetica|arial|liberation\s?sans|times|liberation\s?serif|courier|liberation\s?mono|calibri|carlito|cambria|caladea/i;
 const warnedFonts = new Set<string>();
@@ -1232,9 +1243,12 @@ function FieldDesigner({
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
+  // Mirror AnnotationItem: existing fields are only movable in edit mode with
+  // the select tool, and read-only widgets act as "locked" (clicks pass through).
+  const canEdit = app.editMode && app.tool === "select" && !field.readOnly;
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
-    if (app.tool !== "select") return;
+    if (!canEdit) return;
     e.stopPropagation();
     e.preventDefault();
     app.setSelectedField(base);
@@ -1287,13 +1301,13 @@ function FieldDesigner({
         top: rect.y * scale,
         width: rect.w * scale,
         height: rect.h * scale,
-        pointerEvents: app.tool === "select" ? "auto" : "none",
-        cursor: app.tool === "select" ? "move" : "default",
-        touchAction: app.tool === "select" ? "none" : "auto",
+        pointerEvents: canEdit ? "auto" : "none",
+        cursor: canEdit ? "move" : "default",
+        touchAction: canEdit ? "none" : "auto",
       }}
       className={cn(
         isSelected && "ring-2 ring-blue-500 ring-offset-1",
-        !isSelected && app.tool === "select" && "hover:ring-1 hover:ring-blue-400/60",
+        !isSelected && canEdit && "hover:ring-1 hover:ring-blue-400/60",
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
     >
@@ -1347,6 +1361,7 @@ function AnnotationLayer({
     "ellipse",
     "line",
     "whiteout",
+    "redaction",
     "ink",
     "formtext",
     "formcheckbox",
@@ -1523,6 +1538,9 @@ function AnnotationLayer({
         } else if (app.tool === "whiteout") {
           app.addAnnotation(pageIndex, { ...base, kind: "whiteout" });
           warnWhiteoutOnce();
+        } else if (app.tool === "redaction") {
+          app.addAnnotation(pageIndex, { ...base, kind: "redaction" });
+          warnRedactionOnce();
         } else if (
           app.tool === "rect" ||
           app.tool === "ellipse" ||
@@ -1605,13 +1623,17 @@ function AnnotationLayer({
                 ? "#eab308"
                 : app.tool === "whiteout"
                   ? "#94a3b8"
-                  : app.toolColor,
+                  : app.tool === "redaction"
+                    ? "#ef4444"
+                    : app.toolColor,
             background:
               app.tool === "highlight"
                 ? "rgba(250,204,21,0.3)"
                 : app.tool === "whiteout"
                   ? "rgba(255,255,255,0.8)"
-                  : "transparent",
+                  : app.tool === "redaction"
+                    ? "rgba(0,0,0,0.85)"
+                    : "transparent",
           }}
         />
       )}
@@ -1839,6 +1861,20 @@ function AnnotationItem({
         <div
           className="h-full w-full"
           style={{ background: ann.color ?? "#ffffff" }}
+        />
+      );
+      break;
+    case "redaction":
+      // Solid bar; a dashed red outline while editing flags it as a pending
+      // destructive redaction (vs. a plain black shape) until it's baked in.
+      body = (
+        <div
+          className="h-full w-full"
+          style={{
+            background: ann.color ?? "#000000",
+            outline: app.editMode ? "1.5px dashed #ef4444" : undefined,
+            outlineOffset: "-1.5px",
+          }}
         />
       );
       break;

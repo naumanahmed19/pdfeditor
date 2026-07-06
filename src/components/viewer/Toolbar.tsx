@@ -16,6 +16,7 @@ import {
   Redo2,
   Square,
   SquareCheck,
+  SquareSlash,
   TextCursorInput,
   Type,
   Undo2,
@@ -44,6 +45,7 @@ const TOOLS: Array<{ key: ToolKind; icon: typeof Type; label: string }> = [
   { key: "ellipse", icon: Circle, label: "Ellipse" },
   { key: "line", icon: Minus, label: "Line" },
   { key: "whiteout", icon: Eraser, label: "Whiteout (cover content)" },
+  { key: "redaction", icon: SquareSlash, label: "Redact (permanently remove content)" },
 ];
 
 export function EditorToolbar() {

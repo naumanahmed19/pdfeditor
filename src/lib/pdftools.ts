@@ -18,6 +18,7 @@ import type {
   TextAnnotation,
 } from "../types";
 import type { OcrPage } from "./ocr";
+import { loadPdf } from "./pdf";
 import { hexToRgb01 } from "./utils";
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
@@ -372,6 +373,9 @@ export async function bakeAnnotations(
   };
 
   const newFields: PlacedField[] = [];
+  // Redactions aren't drawn by pdf-lib — they're burned in by rasterizing the
+  // whole page after everything else is baked (see applyRedactions below).
+  const redactions: Record<number, RedactionRect[]> = {};
 
   for (const [pageIndexStr, list] of Object.entries(annotations)) {
     const pageIndex = Number(pageIndexStr);
@@ -381,6 +385,16 @@ export async function bakeAnnotations(
     const rotation = page.getRotation().angle;
 
     for (const ann of list) {
+      if (ann.kind === "redaction") {
+        (redactions[pageIndex] ??= []).push({
+          x: ann.x,
+          y: ann.y,
+          w: ann.w,
+          h: ann.h,
+          color: ann.color ?? "#000000",
+        });
+        continue;
+      }
       const r = toPdfRect(ann, pw, ph, rotation);
       if (ann.kind === "formfield") {
         newFields.push({ ann, r, pageIndex });
@@ -403,7 +417,98 @@ export async function bakeAnnotations(
 
   if (fieldOps && Object.keys(fieldOps).length) applyFieldOps(doc, fieldOps);
 
-  return doc.save();
+  const baked = await doc.save();
+  if (!Object.keys(redactions).length) return baked;
+  // Redacted pages are flattened last, so the raster captures every other
+  // baked annotation too, then the bars are painted over the top.
+  return applyRedactions(baked, redactions);
+}
+
+/** A region to permanently strike out, in viewer space (top-left, PDF points). */
+export type RedactionRect = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color?: string;
+};
+
+// Render redacted pages at ~2x for legible text, but cap the longest side so a
+// large page can't blow up memory.
+const REDACTION_SCALE = 2;
+const REDACTION_MAX_DIM = 4000;
+
+/**
+ * Rebuild `bytes` so every page named in `rectsByPage` is destructively redacted:
+ * the page is re-rendered to a raster, a solid bar is burned over each region,
+ * and that image becomes the page. Because the output is assembled in a fresh
+ * document — non-redacted pages copied over, redacted pages rebuilt from the
+ * raster — the original content of a redacted page (text, fonts, embedded
+ * images) is never carried into the result and cannot be recovered from it.
+ *
+ * The trade-off is inherent to redaction-by-flattening: a redacted page loses
+ * its selectable text layer and any interactivity (links, form widgets).
+ */
+export async function applyRedactions(
+  bytes: Uint8Array,
+  rectsByPage: Record<number, RedactionRect[]>,
+): Promise<Uint8Array> {
+  const src = await load(bytes);
+  const pdfjs = await loadPdf(bytes);
+  try {
+    const out = await PDFDocument.create();
+    const count = src.getPageCount();
+    for (let i = 0; i < count; i++) {
+      const rects = rectsByPage[i];
+      if (!rects?.length) {
+        const [copied] = await out.copyPages(src, [i]);
+        out.addPage(copied);
+        continue;
+      }
+
+      const jsPage = await pdfjs.getPage(i + 1);
+      const unit = jsPage.getViewport({ scale: 1 });
+      const scale = Math.min(
+        REDACTION_SCALE,
+        REDACTION_MAX_DIM / Math.max(1, unit.width, unit.height),
+      );
+      const viewport = jsPage.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.ceil(viewport.width));
+      canvas.height = Math.max(1, Math.ceil(viewport.height));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Redaction failed: no 2D canvas context");
+      await jsPage.render({ canvasContext: ctx, viewport } as any).promise;
+
+      // Rects are in scale-1 display points (rotation already applied by the
+      // viewport), so they map onto the canvas by the render scale.
+      for (const r of rects) {
+        ctx.fillStyle = r.color ?? "#000000";
+        ctx.fillRect(r.x * scale, r.y * scale, r.w * scale, r.h * scale);
+      }
+      jsPage.cleanup();
+
+      const jpg = await canvasToJpeg(canvas);
+      const img = await out.embedJpg(jpg);
+      // New page = display size at scale 1; the raster already bakes in rotation,
+      // so the page itself stays unrotated.
+      const w = viewport.width / scale;
+      const h = viewport.height / scale;
+      const page = out.addPage([w, h]);
+      page.drawImage(img, { x: 0, y: 0, width: w, height: h });
+    }
+    return await out.save();
+  } finally {
+    pdfjs.destroy().catch(() => {});
+  }
+}
+
+async function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", 0.92),
+  );
+  if (!blob) throw new Error("Redaction failed: could not rasterize page");
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /** Apply move/rename/delete edits to existing AcroForm fields. */

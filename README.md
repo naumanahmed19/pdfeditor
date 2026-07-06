@@ -42,7 +42,8 @@ rotated pages). Toggle **Edit** mode; contextual controls appear per tool.
   page-color-matched patch and reopened as an editable box — with the original
   **font family, size, bold/italic and ink color auto-detected** from the page.
 - **Highlight** (drag a box, or select text and highlight it), **freehand ink**,
-  **rectangle / ellipse / line**, **whiteout**, and **image stamps**.
+  **rectangle / ellipse / line**, **whiteout**, **image stamps**, and true
+  **redaction** that destructively removes the content beneath it on save.
 - **Signatures**: draw, type (script fonts), or upload an image — saved for
   reuse and placed anywhere.
 - **Fonts**: the 14 standard PDF fonts plus bundled metric-compatible
@@ -156,8 +157,14 @@ save-in-place work there too.
 - Structural operations (rotate/delete/reorder/watermark) bake any pending
   annotations into the document first, then apply.
 - **Whiteout hides, it doesn't redact** — the covered text still exists in the
-  saved PDF. Don't use it to remove confidential content (true redaction is on
-  the roadmap — see [TODO.md](TODO.md)).
+  saved PDF. To actually remove confidential content, use the **Redact** tool
+  instead.
+- **Redaction is destructive.** On save/export, any page carrying a redaction is
+  re-rendered to an image with a solid bar burned in over each region, and the
+  document is rebuilt so the original page — text, fonts and embedded images — is
+  never carried into the output. Nothing under a bar survives, and nothing is
+  left orphaned in the file. The trade-off: a redacted page becomes a flat image,
+  so it loses its selectable text layer and any links or form fields.
 - The reference (non-focused) split pane is read-only and shows the saved
   document; edit by focusing that pane.
 - Editing text that uses a subset-embedded custom font falls back to the closest
@@ -166,5 +173,5 @@ save-in-place work there too.
 - OCR fetches its language model once from a CDN (cached); the recognition
   itself runs locally, so your document is never uploaded.
 
-See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, true redaction,
-and a PDFium evaluation).
+See [TODO.md](TODO.md) for the roadmap (a full form-builder UX and a PDFium
+evaluation).
