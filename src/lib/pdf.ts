@@ -69,6 +69,43 @@ export async function extractAllText(pdf: PdfDoc): Promise<PageText[]> {
   return pages;
 }
 
+// Operator-list ops that paint a raster image. Names vary slightly across
+// pdf.js versions (v4 dropped paintJpegXObject), so resolve by name and drop
+// any that don't exist in the installed build.
+const IMAGE_OPS = new Set(
+  [
+    "paintImageXObject",
+    "paintImageXObjectRepeat",
+    "paintInlineImageXObject",
+    "paintImageMaskXObject",
+    "paintImageMaskXObjectGroup",
+    "paintImageMaskXObjectRepeat",
+    "paintSolidColorImageMask",
+    "paintJpegXObject",
+  ]
+    .map((name) => (pdfjsLib.OPS as Record<string, number | undefined>)[name])
+    .filter((v): v is number => typeof v === "number"),
+);
+
+/**
+ * True if any of the first `maxPages` pages draws a raster image — the
+ * signature of a scanned document. Lets callers tell a genuine scan (image,
+ * no text) apart from a blank or purely vector page (no text, no image), so
+ * OCR is only offered for the former.
+ */
+export async function hasRasterImages(
+  pdf: PDFDocumentProxy,
+  maxPages = 5,
+): Promise<boolean> {
+  const n = Math.min(pdf.numPages, maxPages);
+  for (let i = 1; i <= n; i++) {
+    const page = await pdf.getPage(i);
+    const opList = await page.getOperatorList();
+    if (opList.fnArray.some((fn: number) => IMAGE_OPS.has(fn))) return true;
+  }
+  return false;
+}
+
 export async function searchDocument(
   pdf: PdfDoc,
   query: string,
