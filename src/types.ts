@@ -186,6 +186,8 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   readOnly?: boolean;
   /** Text font size in pt; 0 or undefined = auto-size. */
   fontSize?: number;
+  /** Value text color (hex); applied via the field's /DA. */
+  textColor?: string;
   align?: FieldAlign;
   multiline?: boolean;
   maxLength?: number;

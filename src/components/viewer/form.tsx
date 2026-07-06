@@ -785,7 +785,7 @@ export function FieldPreviewInput({
         return (
           <select
             className={cn(base, "overflow-auto")}
-            style={{ fontSize, ...widgetCss, ...focusStyle }}
+            style={{ fontSize, color: ann.textColor, ...widgetCss, ...focusStyle }}
             multiple={!!ann.multiSelect}
             size={Math.max(2, (ann.options ?? []).length)}
             value={ann.multiSelect ? sel : sel[0] ?? ""}
@@ -813,7 +813,7 @@ export function FieldPreviewInput({
       return (
         <select
           className={base}
-          style={{ fontSize, ...widgetCss, ...focusStyle }}
+          style={{ fontSize, color: ann.textColor, ...widgetCss, ...focusStyle }}
           value={value}
           disabled={ann.readOnly}
           onChange={(e) => app.setPreviewValue(name, e.target.value)}
@@ -875,7 +875,13 @@ export function FieldPreviewInput({
         maxLength: ann.maxLength,
         onPointerDown: stop,
         ...focusHandlers,
-        style: { fontSize, textAlign: ann.align, ...widgetCss, ...focusStyle } as React.CSSProperties,
+        style: {
+          fontSize,
+          textAlign: ann.align,
+          color: ann.textColor,
+          ...widgetCss,
+          ...focusStyle,
+        } as React.CSSProperties,
       };
       if (ann.fieldType === "text" && ann.multiline) {
         return (
@@ -1214,6 +1220,15 @@ export function FieldProperties({
               ))}
             </Select>
           </div>
+          {(isTexty || isChoice) && (
+            <div className="space-y-0.5">
+              <div className={lbl}>Color</div>
+              <ColorSwatch
+                value={ann.textColor ?? "#000000"}
+                onChange={(v) => onPatch({ textColor: v })}
+              />
+            </div>
+          )}
           <ToggleGroup
             value={[ann.align ?? "left"]}
             onValueChange={(v: string[]) => v[0] && onPatch({ align: v[0] as FormFieldAnnotation["align"] })}

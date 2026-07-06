@@ -1042,6 +1042,7 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           if (ann.defaultValue) f.setText(ann.defaultValue);
           f.addToPage(page, rect);
           if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
+          if (ann.textColor) setFieldTextColor(f, ann.textColor);
           // Border/background go through the widget MK; addToPage set defaults,
           // so re-apply our colors explicitly then the style.
           applyWidgetAppearance(doc, f, appearance);
@@ -1082,6 +1083,7 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           }
           f.addToPage(page, rect);
           if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
+          if (ann.textColor) setFieldTextColor(f, ann.textColor);
           applyWidgetAppearance(doc, f, appearance);
           styleWidgets(f, ann);
           break;
@@ -1124,6 +1126,24 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
 }
 
 /** Re-apply border/background color to every widget of a field via its MK dict. */
+/** Set a field's value-text color by editing its /DA color operator in place
+ *  (keeps the font/size pdf-lib already put there). Skips fields with no font
+ *  context so we never produce a broken appearance. */
+function setFieldTextColor(
+  field: { acroField: { getDefaultAppearance(): string | undefined; setDefaultAppearance(da: string): void } },
+  hex: string,
+) {
+  const da = field.acroField.getDefaultAppearance();
+  if (!da || !/\bTf\b/.test(da)) return;
+  const { r, g, b } = hexToRgb01(hex);
+  const noColor = da
+    .replace(/\s*[\d.]+\s+g\b/g, "")
+    .replace(/\s*[\d.]+\s+[\d.]+\s+[\d.]+\s+(rg|k)\b/g, "");
+  field.acroField.setDefaultAppearance(
+    `${noColor} ${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} rg`.trim(),
+  );
+}
+
 /** Attach a Reset/Submit action (/A) to a push-button's widget(s), so it does
  *  something when clicked — in our viewer and in Acrobat/Chrome alike. */
 function setButtonAction(
