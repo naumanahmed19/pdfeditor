@@ -191,6 +191,8 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   maxLength?: number;
   /** Text field laid out as fixed comb cells (needs maxLength; /Comb flag). */
   comb?: boolean;
+  /** Text field that masks its value (/Password flag). */
+  password?: boolean;
   /** Widget appearance. */
   borderColor?: string;
   backgroundColor?: string;

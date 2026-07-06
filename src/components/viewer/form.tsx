@@ -889,7 +889,7 @@ export function FieldPreviewInput({
       return (
         <input
           {...common}
-          type="text"
+          type={ann.fieldType === "text" && ann.password ? "password" : "text"}
           placeholder={ann.fieldType === "date" ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
           className={cn(base, "px-1")}
           onChange={(e) => app.setPreviewValue(name, e.target.value)}
@@ -1254,19 +1254,28 @@ export function FieldProperties({
             </div>
           </div>
           {!ann.multiline && (
-            <label
-              className="flex items-center gap-1.5 text-[11px]"
-              title="Fixed character cells — requires a max length"
-            >
-              <Checkbox
-                checked={!!ann.comb}
-                onCheckedChange={(v: boolean) => onPatch({ comb: v })}
-              />
-              Comb (fixed cells)
-              {ann.comb && !ann.maxLength && (
-                <span className="text-[10px] text-amber-600">needs max length</span>
-              )}
-            </label>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <label
+                className="flex items-center gap-1.5 text-[11px]"
+                title="Fixed character cells — requires a max length"
+              >
+                <Checkbox
+                  checked={!!ann.comb}
+                  onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
+                />
+                Comb (fixed cells)
+                {ann.comb && !ann.maxLength && (
+                  <span className="text-[10px] text-amber-600">needs max length</span>
+                )}
+              </label>
+              <label className="flex items-center gap-1.5 text-[11px]" title="Masks the value with dots">
+                <Checkbox
+                  checked={!!ann.password}
+                  onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
+                />
+                Password
+              </label>
+            </div>
           )}
         </div>
       )}

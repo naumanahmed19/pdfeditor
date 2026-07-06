@@ -1027,6 +1027,9 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           if (ann.fieldType === "text" && ann.comb && !ann.multiline && ann.maxLength) {
             f.enableCombing();
           }
+          if (ann.fieldType === "text" && ann.password && !ann.multiline) {
+            f.enablePassword();
+          }
           if (ann.align) {
             f.setAlignment(
               ann.align === "center"
