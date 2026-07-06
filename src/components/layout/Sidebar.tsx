@@ -26,7 +26,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
-import { useApp, type RecentFile } from "../../store";
+import { useAppSelector, shallowEqual, type RecentFile } from "../../store";
 import { cn, formatBytes } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
 import type { OutlineInput } from "../../lib/pdftools";
@@ -37,7 +37,10 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 
 export function Sidebar() {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ formBuilder: s.formBuilder, pdf: s.pdf, sidebarOpen: s.sidebarOpen, setFormBuilder: s.setFormBuilder }),
+    shallowEqual,
+  );
   const [tab, setTab] = useState<SidebarTab>("recent");
 
   // Entering the form builder brings its palette into view; leaving it
@@ -113,7 +116,10 @@ export function Sidebar() {
 
 /** All note annotations across pages, with click-to-jump. */
 function CommentsPanel() {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ annotations: s.annotations, scrollToPage: s.scrollToPage, setSelected: s.setSelected, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen }),
+    shallowEqual,
+  );
   const notes: Array<{ page: number; ann: NoteAnnotation }> = [];
   for (const [p, list] of Object.entries(app.annotations)) {
     for (const a of list) {
@@ -183,7 +189,10 @@ function collectFileNames(
 }
 
 function RecentList() {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ folderRoot: s.folderRoot, recentFiles: s.recentFiles, requestOpen: s.requestOpen, openFolder: s.openFolder, folderBusy: s.folderBusy, recentLoading: s.recentLoading }),
+    shallowEqual,
+  );
   // Files that live in the opened folder tree are shown there, not in the
   // flat Open/Recently-closed lists.
   const folderNames = collectFileNames(app.folderRoot);
@@ -273,7 +282,10 @@ function RecentListSkeleton() {
 }
 
 function FolderSection({ root }: { root: FolderNode }) {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ openFolder: s.openFolder, closeFolder: s.closeFolder }),
+    shallowEqual,
+  );
   const [open, setOpen] = useState(true);
   return (
     <div className="pb-1">
@@ -324,7 +336,10 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function RecentRow({ r }: { r: RecentFile }) {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ activeTabId: s.activeTabId, tabs: s.tabs, openRecent: s.openRecent, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen, openInPane: s.openInPane, closeTab: s.closeTab }),
+    shallowEqual,
+  );
   const isActive = r.id === app.activeTabId;
   // "Loaded" = actually in memory (a live tab). An open doc that isn't loaded
   // is one restored from last session but not yet activated — it loads on click.
@@ -441,7 +456,10 @@ function MoreTabsMenu({
   activeTab: SidebarTab;
   setTab: (t: SidebarTab) => void;
 }) {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ formBuilder: s.formBuilder, setFormBuilder: s.setFormBuilder }),
+    shallowEqual,
+  );
   const active = MORE_TABS.find((t) => t.key === activeTab);
   const TriggerIcon = active?.icon ?? MoreVertical;
 
@@ -520,7 +538,10 @@ function TabButton({
 }
 
 function ThumbnailList() {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ pdf: s.pdf, numPages: s.numPages, docVersion: s.docVersion, currentPage: s.currentPage, setScreen: s.setScreen, scrollToPage: s.scrollToPage, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen }),
+    shallowEqual,
+  );
   if (!app.pdf) return null;
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-3 py-2">
@@ -612,7 +633,10 @@ export function Thumbnail({
 }
 
 function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ recentFiles: s.recentFiles, activeTabId: s.activeTabId, openRecent: s.openRecent, openTreeFile: s.openTreeFile, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen }),
+    shallowEqual,
+  );
   const [open, setOpen] = useState(depth < 2);
   const pad = 6 + depth * 12;
 
@@ -681,7 +705,10 @@ function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
 }
 
 function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ currentPage: s.currentPage, scrollToPage: s.scrollToPage, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen, applyBytesOp: s.applyBytesOp }),
+    shallowEqual,
+  );
   const [outline, setOutline] = useState<OutlineNode[] | null>(null);
   const [draft, setDraft] = useState<OutlineInput[] | null>(null); // non-null = editing
 
@@ -834,7 +861,10 @@ function OutlineEditorTree({
   depth: number;
   onChange: (next: OutlineInput[]) => void;
 }) {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ currentPage: s.currentPage }),
+    shallowEqual,
+  );
   const patch = (i: number, node: OutlineInput | null) => {
     const next = [...nodes];
     if (node === null) next.splice(i, 1);
@@ -931,7 +961,10 @@ function OutlineEditorTree({
 
 /** View / add / remove / save the document's embedded files. */
 function AttachmentsPanel() {
-  const app = useApp();
+  const app = useAppSelector(
+    (s) => ({ docBytes: s.docBytes, docVersion: s.docVersion, applyBytesOp: s.applyBytesOp }),
+    shallowEqual,
+  );
   const [list, setList] = useState<AttachmentInfo[] | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const bytes = app.docBytes;
