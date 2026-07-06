@@ -397,6 +397,25 @@ export class PdfPage {
     return new PageViewport(this, scale);
   }
 
+  /**
+   * Dispatch a left-click at a display-space point (scale 1, top-left origin)
+   * so PDFium runs the widget's action there — e.g. a Reset button's ResetForm
+   * or a JavaScript button. Field values change in PDFium's form state; the
+   * caller should re-read getAnnotations() and sync them back into the app.
+   */
+  clickWidget(displayX: number, displayY: number): void {
+    const m = this.mod;
+    const form = this.form;
+    if (!form || typeof m.FORM_OnLButtonDown !== "function") return;
+    const [px, py] = this.deviceToPage(displayX, displayY);
+    try {
+      m.FORM_OnLButtonDown(form, this.handle, 0, px, py);
+      m.FORM_OnLButtonUp(form, this.handle, 0, px, py);
+    } catch {
+      /* best effort */
+    }
+  }
+
   /** Display point at scale 1 (top-left origin) → page space (bottom-left). */
   deviceToPage(x: number, y: number): [number, number] {
     const m = this.mod;

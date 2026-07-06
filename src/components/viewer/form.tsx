@@ -26,7 +26,7 @@ import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 interface FormFieldSpec {
   key: string;
   name: string;
-  kind: "text" | "multiline" | "checkbox" | "radio" | "dropdown" | "listbox";
+  kind: "text" | "multiline" | "checkbox" | "radio" | "dropdown" | "listbox" | "button";
   left: number;
   top: number;
   width: number;
@@ -100,6 +100,10 @@ export function FormLayer({
               buttonValue: a.buttonValue ?? "",
               initial: a.fieldValue ?? "",
             });
+          } else if (a.fieldType === "Btn") {
+            // Pushbutton (Reset / Submit / JavaScript). Rendered as a click
+            // target whose action is delegated to PDFium's form engine.
+            out.push({ ...base, kind: "button", initial: "" });
           } else if (a.fieldType === "Ch") {
             // A choice field is a dropdown when the Combo flag is set, otherwise
             // a list box (several options visible at once, optionally multi-select).
@@ -137,6 +141,23 @@ export function FormLayer({
 
   if (!fields.length) return null;
 
+  // Run a pushbutton's action (Reset/Submit/JS) via PDFium, then pull the
+  // resulting field values back into the app so the overlays update.
+  const runFieldAction = async (f: FormFieldSpec) => {
+    try {
+      const page = await pdf.getPage(pageIndex + 1);
+      page.clickWidget(f.left + f.width / 2, f.top + f.height / 2);
+      const annots = await page.getAnnotations();
+      for (const a of annots as any[]) {
+        if (a.subtype !== "Widget" || !a.fieldName) continue;
+        if (a.fieldType === "Btn" && !a.checkBox && !a.radioButton) continue;
+        app.setFormValue(a.fieldName, formValueFromAnnot(a));
+      }
+    } catch {
+      /* button had no runnable action */
+    }
+  };
+
   const inputCls =
     "absolute rounded-[2px] border border-blue-400/50 bg-sky-400/10 text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white disabled:opacity-60";
 
@@ -173,6 +194,28 @@ export function FormLayer({
           fontSize: Math.min(24, Math.max(9, rect.h * scale * 0.55)),
         };
         const current = app.formValues[f.name];
+
+        if (f.kind === "button") {
+          // Transparent hit target over the button baked into the page; the
+          // action (Reset/Submit/JS) is delegated to PDFium on click.
+          return (
+            <button
+              key={f.key}
+              type="button"
+              disabled={f.readOnly}
+              onClick={() => void runFieldAction(f)}
+              title={f.name}
+              className="absolute cursor-pointer bg-transparent"
+              style={{
+                left: rect.x * scale,
+                top: rect.y * scale,
+                width: rect.w * scale,
+                height: rect.h * scale,
+                pointerEvents: "auto",
+              }}
+            />
+          );
+        }
 
         if (f.kind === "checkbox") {
           const checked = current !== undefined ? !!current : !!f.initial;
@@ -455,6 +498,23 @@ function CombField({
 
 function fieldOpKey(f: FormFieldSpec, pageIndex: number): string {
   return `${f.name}|${pageIndex}|${Math.round(f.left)},${Math.round(f.top)}`;
+}
+
+/** Map a re-read engine annotation to the app's formValues representation
+ *  (same shape the initial parse produces) — used after a button action. */
+function formValueFromAnnot(a: any): unknown {
+  if (a.fieldType === "Tx") return a.fieldValue ?? "";
+  if (a.fieldType === "Btn" && a.checkBox) return !!a.fieldValue && a.fieldValue !== "Off";
+  if (a.fieldType === "Btn" && a.radioButton) return a.fieldValue ?? "";
+  if (a.fieldType === "Ch") {
+    if (a.combo) return Array.isArray(a.fieldValue) ? a.fieldValue[0] ?? "" : a.fieldValue ?? "";
+    return Array.isArray(a.fieldValue)
+      ? a.fieldValue
+      : a.fieldValue != null && a.fieldValue !== ""
+        ? [a.fieldValue]
+        : [];
+  }
+  return "";
 }
 
 /** Selectable/movable/deletable overlay for an EXISTING form field (edit mode). */
