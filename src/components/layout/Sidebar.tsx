@@ -48,9 +48,9 @@ function SidebarImpl() {
   const [tab, setTab] = useState<SidebarTab>("recent");
 
   // Entering the form builder brings its palette into view; leaving it
-  // returns to the page thumbnails.
+  // (via Done) returns to the Recent list by default.
   useEffect(() => {
-    setTab((t) => (app.formBuilder ? "form" : t === "form" ? "pages" : t));
+    setTab((t) => (app.formBuilder ? "form" : t === "form" ? "recent" : t));
   }, [app.formBuilder]);
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
