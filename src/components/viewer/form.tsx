@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -282,15 +282,12 @@ export function FormLayer({
           );
         }
         if (f.comb && f.maxLen) {
-          // Comb field: value spread across `maxLen` equal cells. A fully
-          // invisible input over a grid captures typing while the cells show
-          // each glyph. The input's text/caret/selection are all hidden so it
-          // never reveals the raw left-aligned string (focus shows as a ring).
-          const n = f.maxLen;
-          const chars = value.split("");
           return (
-            <div
+            <CombField
               key={f.key}
+              n={f.maxLen}
+              value={value}
+              readOnly={f.readOnly}
               className={cn(
                 inputCls,
                 "overflow-hidden p-0 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-400/60",
@@ -298,29 +295,8 @@ export function FormLayer({
               // Opaque so PDFium's baked comb appearance beneath doesn't show
               // through and double the glyphs; our grid is the only thing drawn.
               style={{ ...style, background: "#ffffff" }}
-            >
-              <div className="pointer-events-none absolute inset-0 flex">
-                {Array.from({ length: n }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "flex flex-1 items-center justify-center overflow-hidden",
-                      i < n - 1 && "border-r border-blue-400/40",
-                    )}
-                  >
-                    {chars[i] ?? ""}
-                  </div>
-                ))}
-              </div>
-              <input
-                type="text"
-                value={value}
-                maxLength={n}
-                disabled={f.readOnly}
-                onChange={(e) => app.setFormValue(f.name, e.target.value)}
-                className="absolute inset-0 h-full w-full bg-transparent text-transparent caret-transparent outline-none [&::selection]:bg-transparent [&::selection]:text-transparent"
-              />
-            </div>
+              onChange={(v) => app.setFormValue(f.name, v)}
+            />
           );
         }
         return (
@@ -336,6 +312,109 @@ export function FormLayer({
           />
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Comb text field: one glyph per fixed cell (like Chrome's PDF viewer). A real
+ * <input> underneath captures typing/IME but is fully invisible (transparent
+ * text, caret and selection) so it never leaks the raw left-aligned string.
+ * We draw our own blinking caret in the active cell and let a click drop the
+ * caret into whichever cell was clicked.
+ */
+function CombField({
+  n,
+  value,
+  readOnly,
+  className,
+  style,
+  onChange,
+}: {
+  n: number;
+  value: string;
+  readOnly: boolean;
+  className: string;
+  style: React.CSSProperties;
+  onChange: (v: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [caret, setCaret] = useState<number | null>(null);
+  const chars = value.split("");
+
+  const sync = () => {
+    const el = inputRef.current;
+    setCaret(el && document.activeElement === el ? el.selectionStart : null);
+  };
+
+  // Reliably drop the caret when focus/interaction leaves the field — onBlur
+  // alone can miss cases (e.g. clicking empty page area).
+  useEffect(() => {
+    if (caret === null) return;
+    const leave = (e: Event) => {
+      if (!containerRef.current?.contains(e.target as Node)) setCaret(null);
+    };
+    document.addEventListener("pointerdown", leave, true);
+    document.addEventListener("focusin", leave, true);
+    return () => {
+      document.removeEventListener("pointerdown", leave, true);
+      document.removeEventListener("focusin", leave, true);
+    };
+  }, [caret]);
+
+  // A comb fills left-to-right with no gaps, so clamp the caret to the typed
+  // length: clicking a cell past the text just parks it at the end.
+  const placeCaret = (e: React.PointerEvent) => {
+    if (readOnly) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const idx = Math.max(
+      0,
+      Math.min(value.length, Math.floor((e.clientX - rect.left) / (rect.width / n))),
+    );
+    requestAnimationFrame(() => {
+      inputRef.current?.setSelectionRange(idx, idx);
+      sync();
+    });
+  };
+
+  return (
+    <div ref={containerRef} className={className} style={style} onPointerDown={placeCaret}>
+      <div className="pointer-events-none absolute inset-0 flex">
+        {Array.from({ length: n }).map((_, i) => (
+          <div
+            key={i}
+            className={cn(
+              "relative flex flex-1 items-center justify-center overflow-hidden",
+              i < n - 1 && "border-r border-blue-400/40",
+            )}
+          >
+            {chars[i] ?? ""}
+            {/* Caret sits at the cell's left edge (before its glyph), so it never
+                overlaps the centered character when clicking a filled cell. */}
+            {caret === i && (
+              <span className="pointer-events-none absolute left-[3px] top-[15%] bottom-[15%] w-px animate-pulse bg-slate-800" />
+            )}
+          </div>
+        ))}
+      </div>
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        maxLength={n}
+        disabled={readOnly}
+        onChange={(e) => {
+          onChange(e.target.value);
+          requestAnimationFrame(sync);
+        }}
+        onFocus={sync}
+        onBlur={() => setCaret(null)}
+        onSelect={sync}
+        onKeyUp={sync}
+        onClick={sync}
+        className="absolute inset-0 h-full w-full bg-transparent text-transparent caret-transparent outline-none [&::selection]:bg-transparent [&::selection]:text-transparent"
+      />
     </div>
   );
 }
