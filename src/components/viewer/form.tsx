@@ -266,9 +266,11 @@ function FieldDesigner({
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
-  // Mirror AnnotationItem's `selectable`: an existing field is only movable with
-  // the select tool, and a read-only widget acts as "locked" (clicks pass through).
-  const canEdit = app.tool === "select" && !field.readOnly;
+  // Existing AcroForm fields are existing page content, so — like page text and
+  // images (see ObjectLayer / PageView) — they move on the "Move objects" tool,
+  // NOT the Select tool that drags annotations you added. A read-only widget acts
+  // as "locked" (clicks pass through).
+  const canEdit = app.tool === "editobject" && !field.readOnly;
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
     if (!canEdit) return;
