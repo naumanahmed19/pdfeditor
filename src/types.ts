@@ -205,6 +205,10 @@ export interface FormFieldAnnotation extends BaseAnnotation {
   dateFormat?: string;
   /** Push-button caption. */
   buttonCaption?: string;
+  /** Push-button action run on click (none = a plain visual button). */
+  buttonAction?: "none" | "reset" | "submit";
+  /** Target URL when buttonAction === "submit". */
+  submitUrl?: string;
 }
 
 /** A pending edit to an EXISTING AcroForm field (move/rename/delete). */

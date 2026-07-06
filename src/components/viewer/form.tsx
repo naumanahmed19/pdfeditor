@@ -1020,16 +1020,46 @@ export function FieldProperties({
       )}
 
       {isBtn && (
-        <div className="space-y-0.5">
-          <div className={lbl}>Caption</div>
-          <Input
-            key={`cap-${ann.id}`}
-            className={sm}
-            defaultValue={ann.buttonCaption ?? ""}
-            placeholder={ann.fieldName}
-            onBlur={(e) => onPatch({ buttonCaption: e.target.value || undefined })}
-          />
-        </div>
+        <>
+          <div className="space-y-0.5">
+            <div className={lbl}>Caption</div>
+            <Input
+              key={`cap-${ann.id}`}
+              className={sm}
+              defaultValue={ann.buttonCaption ?? ""}
+              placeholder={ann.fieldName}
+              onBlur={(e) => onPatch({ buttonCaption: e.target.value || undefined })}
+            />
+          </div>
+          <div className="space-y-0.5">
+            <div className={lbl}>Action</div>
+            <Select
+              className={sm}
+              value={ann.buttonAction ?? "none"}
+              onChange={(e) =>
+                onPatch({
+                  buttonAction: e.target.value as FormFieldAnnotation["buttonAction"],
+                })
+              }
+            >
+              <option value="none">None</option>
+              <option value="reset">Reset form</option>
+              <option value="submit">Submit form</option>
+            </Select>
+          </div>
+          {ann.buttonAction === "submit" && (
+            <div className="space-y-0.5">
+              <div className={lbl}>Submit URL</div>
+              <Input
+                key={`url-${ann.id}`}
+                className={sm}
+                defaultValue={ann.submitUrl ?? ""}
+                placeholder="https://…"
+                onBlur={(e) => onPatch({ submitUrl: e.target.value || undefined })}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {!isBtn && (

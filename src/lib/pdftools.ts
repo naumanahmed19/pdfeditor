@@ -1089,6 +1089,7 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
           if (ann.fontSize && ann.fontSize > 0) f.setFontSize(ann.fontSize);
           applyWidgetAppearance(doc, f, appearance);
           styleWidgets(f, ann);
+          setButtonAction(doc, f, ann);
           break;
         }
         case "radio": {
@@ -1113,6 +1114,34 @@ function createFormFields(doc: PDFDocument, placed: PlacedField[]) {
 }
 
 /** Re-apply border/background color to every widget of a field via its MK dict. */
+/** Attach a Reset/Submit action (/A) to a push-button's widget(s), so it does
+ *  something when clicked — in our viewer and in Acrobat/Chrome alike. */
+function setButtonAction(
+  doc: PDFDocument,
+  field: { acroField: { getWidgets: () => Array<{ dict: PDFDict }> } },
+  ann: FormFieldAnnotation,
+) {
+  let action: PDFDict | null = null;
+  if (ann.buttonAction === "reset") {
+    action = doc.context.obj({
+      Type: PDFName.of("Action"),
+      S: PDFName.of("ResetForm"),
+    }) as PDFDict;
+  } else if (ann.buttonAction === "submit" && ann.submitUrl) {
+    action = doc.context.obj({
+      Type: PDFName.of("Action"),
+      S: PDFName.of("SubmitForm"),
+      F: PDFString.of(ann.submitUrl),
+      // ExportFormat (submit as URL-encoded HTML) + GetMethod.
+      Flags: 12,
+    }) as PDFDict;
+  }
+  if (!action) return;
+  for (const w of field.acroField.getWidgets()) {
+    w.dict.set(PDFName.of("A"), action);
+  }
+}
+
 function applyWidgetAppearance(
   doc: PDFDocument,
   field: { acroField: any },
