@@ -123,22 +123,26 @@ async function loadModel(model: BrowserModelConfig): Promise<any> {
   return generator;
 }
 
-async function generate(
-  model: BrowserModelConfig,
+// Set once the current generation has emitted at least one token — a failure
+// after that isn't safe to retry (it would duplicate the streamed output).
+let streamedThisRun = false;
+
+// One generation pass, streaming tokens to the main thread as they arrive.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function runGeneration(
+  generator: any,
   messages: Msg[],
   temperature: number,
   maxTokens: number,
-) {
-  const generator = await loadModel(model);
-  isGenerating = true;
-  wasInterrupted = false;
-  stopper.reset();
-
+): Promise<void> {
   const streamer = new TextStreamer(generator.tokenizer, {
     skip_prompt: true,
     skip_special_tokens: true,
     callback_function: (text: string) => {
-      if (text) post("token", { delta: text });
+      if (text) {
+        streamedThisRun = true;
+        post("token", { delta: text });
+      }
     },
   });
 
@@ -152,6 +156,42 @@ async function generate(
     stopping_criteria: stopper,
     streamer,
   });
+}
+
+async function generate(
+  model: BrowserModelConfig,
+  messages: Msg[],
+  temperature: number,
+  maxTokens: number,
+) {
+  let generator = await loadModel(model);
+  isGenerating = true;
+  wasInterrupted = false;
+  streamedThisRun = false;
+  stopper.reset();
+
+  try {
+    await runGeneration(generator, messages, temperature, maxTokens);
+  } catch (err) {
+    // Some WebGPU failures only surface when generation runs, after a clean
+    // load — e.g. a mobile GPU that can't build the attention compute pipeline
+    // (workgroup storage over the device limit). If nothing streamed yet, drop
+    // to CPU (WASM) and retry once so the answer still comes through, slower.
+    if (device === "webgpu" && !wasInterrupted && !streamedThisRun) {
+      post("status", {
+        text: "This device's GPU can't run the model — switching to CPU (slower)…",
+      });
+      generatorPromise = null;
+      generator = await buildPipeline("wasm", model); // sets device = "wasm"
+      loadedModel = model;
+      generatorPromise = Promise.resolve(generator);
+      post("ready", { device });
+      stopper.reset();
+      await runGeneration(generator, messages, temperature, maxTokens);
+    } else {
+      throw err;
+    }
+  }
 
   post(wasInterrupted ? "stopped" : "done");
   isGenerating = false;
