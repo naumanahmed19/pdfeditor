@@ -23,7 +23,12 @@ import {
   preloadBrowserModel,
   webgpuAvailable,
 } from "../../lib/browserLlm";
-import { BROWSER_MODEL } from "../../lib/modelConfig";
+import {
+  availableBrowserModels,
+  type BrowserModelConfig,
+  effectiveBrowserModel,
+} from "../../lib/modelConfig";
+import { isHandheldDevice } from "../../lib/device";
 import { ACCENTS } from "../../lib/accents";
 import { FORM_FIELD_THEMES, setFormFieldSkin, useFormFieldSkin } from "../viewer/formFieldTheme";
 import type { ProviderKind } from "../../types";
@@ -31,22 +36,41 @@ import type { ProviderKind } from "../../types";
 const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   {
     value: "browser",
-    label: `Built-in (${BROWSER_MODEL.name})`,
-    hint: `Runs in your browser — no setup. Downloads once (${BROWSER_MODEL.sizeLabel}). Uses your GPU (WebGPU) when available, otherwise CPU (slower).`,
+    label: "Built-in",
+    hint: "Runs privately in your browser — no setup or API key. Downloads once, then works offline. Uses your GPU (WebGPU) when available, otherwise CPU (slower).",
   },
   { value: "ollama", label: "Ollama", hint: "Local models via Ollama (default port 11434)" },
   { value: "lmstudio", label: "LM Studio", hint: "Local models via LM Studio server (default port 1234)" },
   { value: "openai_compatible", label: "Custom API", hint: "Any OpenAI-compatible endpoint" },
 ];
 
+/** Ollama & LM Studio speak to localhost, which on a phone/tablet is the device
+ *  itself — unreachable — so they're hidden there, leaving the built-in model
+ *  and a remote Custom API. */
+const HANDHELD_PROVIDERS: ProviderKind[] = ["browser", "openai_compatible"];
+
 export function SettingsScreen() {
   const app = useApp();
   const s = app.settings;
   const fieldSkin = useFormFieldSkin();
+  const handheld = isHandheldDevice();
+  const providers = handheld
+    ? PROVIDERS.filter((p) => HANDHELD_PROVIDERS.includes(p.value))
+    : PROVIDERS;
   const [models, setModels] = useState<string[]>([]);
   const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [ok, setOk] = useState<boolean | null>(null);
+
+  // A provider persisted on another device (or before this build) could be one
+  // we now hide on handhelds — fall back to the built-in model so the assistant
+  // stays usable rather than pointing at an unreachable localhost server.
+  useEffect(() => {
+    if (handheld && !HANDHELD_PROVIDERS.includes(s.provider)) {
+      app.setSettings({ ...s, provider: "browser" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handheld]);
 
   const refresh = async () => {
     setChecking(true);
@@ -144,7 +168,7 @@ export function SettingsScreen() {
         <Panel title="AI provider">
           <Row title="Provider" description="Where AI requests are sent.">
             <div className="inline-flex rounded-md bg-muted p-0.5">
-              {PROVIDERS.map((p) => (
+              {providers.map((p) => (
                 <button
                   key={p.value}
                   title={p.hint}
@@ -202,7 +226,7 @@ export function SettingsScreen() {
           )}
 
           {s.provider === "browser" ? (
-            <GemmaModelPanel />
+            <BrowserModelSection handheld={handheld} />
           ) : (
             <Row
               title="Model"
@@ -292,10 +316,12 @@ export function SettingsScreen() {
           </Row>
         </Panel>
 
-        <p className="pt-4 text-xs text-muted-foreground">
-          Tip: for Ollama run <code className="rounded bg-muted px-1 py-0.5">ollama pull gemma3</code>,
-          for LM Studio enable the local server (Developer tab) and enable CORS if requests fail.
-        </p>
+        {!handheld && (
+          <p className="pt-4 text-xs text-muted-foreground">
+            Tip: for Ollama run <code className="rounded bg-muted px-1 py-0.5">ollama pull gemma3</code>,
+            for LM Studio enable the local server (Developer tab) and enable CORS if requests fail.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -339,13 +365,65 @@ function Row({
 type DownloadState = "idle" | "downloading" | "preparing" | "ready" | "error";
 
 /**
- * Download status, progress and controls for the in-browser Gemma model — lets
+ * The in-browser model chooser: a segmented picker on desktop (Gemma 4 vs the
+ * lightweight Qwen2.5), or a locked note on phones/tablets — which are pinned to
+ * the mobile-safe model because Gemma 4's ~3 GB weights OOM-crash a mobile tab.
+ * Below it, download controls for whichever model is selected.
+ */
+function BrowserModelSection({ handheld }: { handheld: boolean }) {
+  const app = useApp();
+  const s = app.settings;
+  const models = availableBrowserModels(handheld);
+  const selected = effectiveBrowserModel(s.browserModelId, handheld);
+
+  return (
+    <>
+      <Row
+        title="Model"
+        description={
+          handheld
+            ? "Phones and tablets use the lightweight Qwen2.5 — Gemma 4 (~3 GB) needs a desktop, so it's desktop-only."
+            : "Higher quality vs. a much smaller, faster download. Switch any time; each caches separately."
+        }
+      >
+        {handheld ? (
+          <span className="inline-flex items-center rounded-md border border-input bg-muted/60 px-2.5 py-1 text-xs font-medium">
+            {selected.name}
+          </span>
+        ) : (
+          <div className="inline-flex rounded-md bg-muted p-0.5">
+            {models.map((m) => (
+              <button
+                key={m.id}
+                title={`${m.blurb} (${m.sizeLabel})`}
+                onClick={() => app.setSettings({ ...s, browserModelId: m.id })}
+                className={cn(
+                  "h-7 rounded-sm px-3 text-xs font-medium transition",
+                  selected.id === m.id
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground",
+                )}
+              >
+                {m.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </Row>
+      {/* Remount on model switch so download state reflects the selected model. */}
+      <BrowserModelPanel key={selected.id} model={selected} />
+    </>
+  );
+}
+
+/**
+ * Download status, progress and controls for a given in-browser model — lets
  * users pre-download it, watch progress, retry a failed load, or clear a bad
  * cache, all without having to start a chat.
  */
-function GemmaModelPanel() {
+function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
   const [state, setState] = useState<DownloadState>(() =>
-    isBrowserModelDownloaded() ? "ready" : "idle",
+    isBrowserModelDownloaded(model.id) ? "ready" : "idle",
   );
   const [progress, setProgress] = useState<ModelLoadProgress | null>(null);
   const [error, setError] = useState("");
@@ -359,16 +437,16 @@ function GemmaModelPanel() {
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      await preloadBrowserModel((p) => {
+      await preloadBrowserModel(model, (p) => {
         setProgress(p);
         setState(p.phase === "preparing" ? "preparing" : "downloading");
       }, ac.signal);
       setState("ready");
       setProgress(null);
-      toast.success(`${BROWSER_MODEL.name} is ready — it now runs offline`);
+      toast.success(`${model.name} is ready — it now runs offline`);
     } catch (e) {
       if ((e as Error).name === "AbortError") {
-        setState(isBrowserModelDownloaded() ? "ready" : "idle");
+        setState(isBrowserModelDownloaded(model.id) ? "ready" : "idle");
       } else {
         setError((e as Error).message || "Download failed");
         setState("error");
@@ -386,7 +464,7 @@ function GemmaModelPanel() {
     setState("idle");
     setProgress(null);
     setError("");
-    toast.success("Cached model cleared — it will download again on next use");
+    toast.success("Cached model data cleared — it will download again on next use");
   };
 
   const busy = state === "downloading" || state === "preparing";
@@ -396,10 +474,10 @@ function GemmaModelPanel() {
     <div className="border-t px-4 py-3">
       <div className="flex items-start justify-between gap-6">
         <div className="min-w-0">
-          <p className="text-sm">Model</p>
+          <p className="text-sm">Download</p>
           <p className="pt-0.5 text-xs text-muted-foreground">
-            {BROWSER_MODEL.name} runs privately in your browser — no server or API
-            key. Downloads once ({BROWSER_MODEL.sizeLabel}), then works offline.{" "}
+            {model.name} runs privately in your browser — no server or API
+            key. Downloads once ({model.sizeLabel}), then works offline.{" "}
             {gpu
               ? "Uses your GPU (WebGPU) when available."
               : "No WebGPU detected — it will run on CPU (slower)."}
@@ -458,7 +536,7 @@ function GemmaModelPanel() {
           onClick={() => void clear()}
           className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
         >
-          <Trash2 className="h-3 w-3" /> Clear cached model
+          <Trash2 className="h-3 w-3" /> Clear cached model data
         </button>
       )}
     </div>

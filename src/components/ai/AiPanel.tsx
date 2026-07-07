@@ -17,7 +17,12 @@ import { Select } from "../ui/select";
 import { cn, uid } from "../../lib/utils";
 import { extractAllText } from "../../lib/pdf";
 import { checkConnection, streamChat } from "../../lib/ai";
-import { BROWSER_MODEL_LABEL } from "../../lib/modelConfig";
+import {
+  availableBrowserModels,
+  browserModelLabel,
+  effectiveBrowserModel,
+} from "../../lib/modelConfig";
+import { isHandheldDevice } from "../../lib/device";
 import type { ChatMessage } from "../../types";
 
 interface UiMessage {
@@ -648,7 +653,9 @@ function AiPanelImpl() {
             <Select
               value={
                 app.settings.provider === "browser"
-                  ? BROWSER_MODEL_LABEL
+                  ? browserModelLabel(
+                      effectiveBrowserModel(app.settings.browserModelId, isHandheldDevice()),
+                    )
                   : app.settings.model
               }
               onChange={(e) => {
@@ -657,8 +664,16 @@ function AiPanelImpl() {
                   app.setScreen("settings");
                   return;
                 }
-                // Browser provider has no selectable model — ignore.
-                if (app.settings.provider !== "browser") {
+                if (app.settings.provider === "browser") {
+                  // Map the chosen label back to a model id (locked to the
+                  // mobile-safe model on phones/tablets).
+                  const picked = availableBrowserModels(isHandheldDevice()).find(
+                    (m) => browserModelLabel(m) === v,
+                  );
+                  if (picked) {
+                    app.setSettings({ ...app.settings, browserModelId: picked.id });
+                  }
+                } else {
                   app.setSettings({ ...app.settings, model: v });
                 }
               }}
@@ -666,7 +681,7 @@ function AiPanelImpl() {
               className="h-6 w-40 max-w-[60%] border-0 bg-transparent px-1 text-[10px] text-muted-foreground shadow-none"
             >
               {(app.settings.provider === "browser"
-                ? [BROWSER_MODEL_LABEL]
+                ? availableBrowserModels(isHandheldDevice()).map((m) => browserModelLabel(m))
                 : [...new Set([app.settings.model, ...models].filter(Boolean))]
               ).map((m) => (
                 <option key={m} value={m}>
