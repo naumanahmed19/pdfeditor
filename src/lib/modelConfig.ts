@@ -66,10 +66,12 @@ export const BROWSER_MODELS: BrowserModelConfig[] = [
     id: "qwen-0.5b",
     repo: "onnx-community/Qwen2.5-0.5B-Instruct",
     name: "Qwen2.5 0.5B",
-    // q4 (not q4f16) on WebGPU — some mobile GPUs return garbage on the fp16 path.
-    // Small attention head (dim 64) fits within mobile GPU workgroup limits.
-    dtype: { webgpu: "q4", wasm: "q4" },
-    sizeLabel: "~0.8 GB",
+    // Mobile forces the wasm (CPU) path — see isHandheldDevice usage — because
+    // mobile WebGPU has proven unreliable across vendors (garbage output, GPU
+    // crashes). q4f16 on CPU is correct and the smallest download (~0.5 GB),
+    // easing memory pressure on tablets. Desktop still uses WebGPU q4.
+    dtype: { webgpu: "q4", wasm: "q4f16" },
+    sizeLabel: "~0.5 GB",
     mobileSafe: true,
     blurb: "Lightweight — runs on phones and tablets.",
   },

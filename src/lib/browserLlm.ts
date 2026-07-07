@@ -10,6 +10,7 @@
 // automatic CPU (WASM) fallback for machines without a GPU.
 import type { ChatMessage } from "../types";
 import type { BrowserModelConfig } from "./modelConfig";
+import { isHandheldDevice } from "./device";
 
 // IndexedDB database that ./modelCache streams the download into. Duplicated here
 // (rather than imported) because importing ./modelCache would run its fetch patch
@@ -229,6 +230,8 @@ export function streamBrowserChat(
     w.postMessage({
       type: "generate",
       model,
+      // Phones/tablets run on CPU — mobile WebGPU has proven unreliable.
+      forceCpu: isHandheldDevice(),
       messages: toChat(messages),
       temperature,
       maxTokens: 512,
@@ -314,7 +317,7 @@ export function preloadBrowserModel(
     if (signal?.aborted) return onAbort();
     w.addEventListener("message", onMessage);
     signal?.addEventListener("abort", onAbort);
-    w.postMessage({ type: "load", model });
+    w.postMessage({ type: "load", model, forceCpu: isHandheldDevice() });
   });
 }
 

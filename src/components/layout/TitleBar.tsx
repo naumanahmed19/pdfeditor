@@ -48,6 +48,7 @@ import { WindowControls } from "./WindowControls";
 import { AboutModal } from "./AboutModal";
 import { PasswordModal } from "./PasswordModal";
 import { PrintModal } from "../viewer/PrintModal";
+import { BrandLogo } from "./BrandLogo";
 
 // Memoized: it has no props, so it ignores parent (Shell) re-renders and only
 // re-renders when its own selected store fields change.
@@ -251,6 +252,12 @@ function TitleBarImpl() {
       >
         <PanelLeft className="h-4 w-4" />
       </Button>
+
+      <BrandLogo
+        className="mr-1 hidden min-w-0 sm:flex"
+        markClassName="h-7 w-7"
+        wordmarkClassName="mt-[5px] text-[24px]"
+      />
 
       {/* File / Tools — icon-only on mobile, text on desktop */}
       <Menu>

@@ -32,6 +32,7 @@ import { FloatingNav } from "./FloatingNav";
 import { PageView } from "./PageView";
 import type { PageDims } from "./types";
 import { Select } from "../ui/select";
+import { BrandLogo } from "../layout/BrandLogo";
 
 
 const PAGE_GAP = 24;
@@ -633,7 +634,11 @@ function EmptyState() {
       }}
     >
       <div className="mx-auto w-full max-w-4xl">
-        <h1 className="text-3xl font-light tracking-tight">PickPDF</h1>
+        <BrandLogo
+          className="flex-wrap gap-3"
+          markClassName="h-20 w-20 sm:h-24 sm:w-24"
+          wordmarkClassName="text-4xl font-semibold sm:text-5xl"
+        />
         <p className="pt-1 text-sm text-muted-foreground">
           Read, annotate, sign &amp; edit PDFs.
         </p>

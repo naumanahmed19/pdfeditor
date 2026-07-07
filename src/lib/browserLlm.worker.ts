@@ -96,14 +96,17 @@ function buildPipeline(dev: "webgpu" | "wasm", model: BrowserModelConfig): Promi
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function loadModel(model: BrowserModelConfig): Promise<any> {
+async function loadModel(model: BrowserModelConfig, forceCpu = false): Promise<any> {
   // A request for a different model than the one cached — drop the old generator.
   if (generatorPromise && loadedModel && loadedModel.id !== model.id) {
     generatorPromise = null;
   }
   if (!generatorPromise) {
     loadedModel = model;
-    const preferred = hasWebGPU ? "webgpu" : "wasm";
+    // Phones/tablets force the CPU path: mobile WebGPU has crashed or produced
+    // garbage across every GPU vendor we've tried, and a GPU crash kills the tab
+    // before any fallback can run. CPU is slower but reliable.
+    const preferred = !forceCpu && hasWebGPU ? "webgpu" : "wasm";
     generatorPromise = buildPipeline(preferred, model).catch(async (err) => {
       // WebGPU can be present but fail to init / run out of memory — fall back to CPU.
       if (preferred === "webgpu") {
@@ -163,8 +166,9 @@ async function generate(
   messages: Msg[],
   temperature: number,
   maxTokens: number,
+  forceCpu = false,
 ) {
-  let generator = await loadModel(model);
+  let generator = await loadModel(model, forceCpu);
   isGenerating = true;
   wasInterrupted = false;
   streamedThisRun = false;
@@ -202,7 +206,7 @@ self.addEventListener("message", async (event: MessageEvent) => {
   const data = event.data || {};
   try {
     if (data.type === "load") {
-      await loadModel(data.model);
+      await loadModel(data.model, data.forceCpu);
       return;
     }
     if (data.type === "stop") {
@@ -218,6 +222,7 @@ self.addEventListener("message", async (event: MessageEvent) => {
         data.messages || [],
         typeof data.temperature === "number" ? data.temperature : 0.7,
         typeof data.maxTokens === "number" ? data.maxTokens : 512,
+        data.forceCpu,
       );
     }
   } catch (error) {
