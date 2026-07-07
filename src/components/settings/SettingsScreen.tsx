@@ -391,7 +391,7 @@ function BrowserModelSection({ handheld }: { handheld: boolean }) {
             {selected.name}
           </span>
         ) : (
-          <div className="inline-flex rounded-md bg-muted p-0.5">
+          <div className="flex flex-wrap justify-end gap-0.5 rounded-md bg-muted p-0.5">
             {models.map((m) => (
               <button
                 key={m.id}

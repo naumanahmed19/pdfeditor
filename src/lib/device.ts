@@ -13,15 +13,29 @@ export function isHandheldDevice(): boolean {
   if (cached !== null) return cached;
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent || "";
+  const touchPoints = typeof navigator.maxTouchPoints === "number" ? navigator.maxTouchPoints : 0;
+
+  // Primary signal: the user-agent names a phone/tablet.
+  const uaMatch =
+    /Android|iPhone|iPad|iPod|IEMobile|BlackBerry|Opera Mini|Mobile|Silk|Kindle/i.test(ua);
+
   // iPadOS 13+ masquerades as desktop Safari on macOS; its touch points give it
   // away (a real Mac reports 0).
-  const iPadOS =
-    /Macintosh/.test(ua) &&
-    typeof navigator.maxTouchPoints === "number" &&
-    navigator.maxTouchPoints > 1;
-  cached =
-    /Android|iPhone|iPad|iPod|IEMobile|BlackBerry|Opera Mini|Mobile|Silk|Kindle/i.test(
-      ua,
-    ) || iPadOS;
+  const iPadOS = /Macintosh/.test(ua) && touchPoints > 1;
+
+  // Fallback for devices whose UA doesn't advertise mobile: a touch screen whose
+  // *primary* pointer is coarse (a finger, not a mouse). Desktops and touch
+  // laptops report a fine primary pointer, so they stay classified as desktop.
+  let touchCoarse = false;
+  try {
+    touchCoarse =
+      touchPoints > 0 &&
+      typeof matchMedia === "function" &&
+      matchMedia("(pointer: coarse)").matches;
+  } catch {
+    /* matchMedia unavailable — rely on the UA signals above */
+  }
+
+  cached = uaMatch || iPadOS || touchCoarse;
   return cached;
 }
