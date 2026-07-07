@@ -1,10 +1,15 @@
 // Single source of truth for the built-in, in-browser AI models.
 //
 // The assistant can run more than one fully-local model. Desktop defaults to the
-// higher-quality Gemma 4; phones and tablets are pinned to the lightweight
-// Qwen2.5 0.5B, which fits a mobile memory budget. (Gemma 4's ~3 GB weights are
-// dominated by a 1.3 GB, 256K-token embedding table that doesn't shrink with
-// quantization, so it OOM-crashes mobile tabs — hence a small-vocab model there.)
+// higher-quality Gemma 4; phones and tablets are pinned to a small model that
+// fits a mobile memory budget. (Gemma 4's ~3 GB weights are dominated by a 1.3 GB,
+// 256K-token embedding table that doesn't shrink with quantization, so it
+// OOM-crashes mobile tabs — hence a small model there.)
+//
+// dtype note: mobile models use plain `q4` (not `q4f16`) on WebGPU. The fp16
+// path has produced garbage output on some mobile GPUs (and Gemma 3 specifically
+// has a known fp16/q4f16 WebGPU overflow bug); q4 uses fp32 compute and stays
+// correct, at a small size/speed cost that's worth it for a usable answer.
 //
 // Everything downstream keys off these configs: the worker's download +
 // quantization, the Settings model picker + download panel, the assistant's
@@ -45,20 +50,31 @@ export const BROWSER_MODELS: BrowserModelConfig[] = [
     blurb: "Higher quality. Needs a desktop with ~8 GB RAM.",
   },
   {
+    id: "gemma-3-1b",
+    repo: "onnx-community/gemma-3-1b-it-ONNX",
+    name: "Gemma 3 1B",
+    // q4 (not q4f16) on WebGPU — avoids the fp16 overflow that garbles output.
+    dtype: { webgpu: "q4", wasm: "q4" },
+    sizeLabel: "~0.9 GB",
+    mobileSafe: true,
+    blurb: "Lightweight — runs on phones and tablets.",
+  },
+  {
     id: "qwen-0.5b",
     repo: "onnx-community/Qwen2.5-0.5B-Instruct",
     name: "Qwen2.5 0.5B",
-    dtype: { webgpu: "q4f16", wasm: "q4" },
-    sizeLabel: "~0.5 GB",
+    // q4 (not q4f16) on WebGPU — some mobile GPUs return garbage on the fp16 path.
+    dtype: { webgpu: "q4", wasm: "q4" },
+    sizeLabel: "~0.8 GB",
     mobileSafe: true,
-    blurb: "Lightweight — runs on phones and tablets.",
+    blurb: "Smaller alternative if Gemma 3 is too heavy.",
   },
 ];
 
 /** Default in-browser model on desktop/web (the user can switch). */
 export const DEFAULT_DESKTOP_MODEL_ID = "gemma-4";
-/** The only in-browser model offered on phones/tablets. */
-export const MOBILE_MODEL_ID = "qwen-0.5b";
+/** The model phones/tablets are pinned to. */
+export const MOBILE_MODEL_ID = "gemma-3-1b";
 
 /** Look up a model by id, falling back to the first (desktop default). */
 export function getBrowserModel(id: string | undefined): BrowserModelConfig {
@@ -78,10 +94,10 @@ export function effectiveBrowserModel(
   return getBrowserModel(browserModelId ?? DEFAULT_DESKTOP_MODEL_ID);
 }
 
-/** Browser models this device may run — every model on desktop, just the
- *  mobile-safe one on phones/tablets. */
+/** Browser models this device may run — every model on desktop, just the pinned
+ *  mobile model on phones/tablets (matching effectiveBrowserModel's hard pin). */
 export function availableBrowserModels(handheld: boolean): BrowserModelConfig[] {
-  return handheld ? BROWSER_MODELS.filter((m) => m.mobileSafe) : BROWSER_MODELS;
+  return handheld ? [getBrowserModel(MOBILE_MODEL_ID)] : BROWSER_MODELS;
 }
 
 /** Picker/status label, e.g. "Gemma 4 (in-browser)". */
