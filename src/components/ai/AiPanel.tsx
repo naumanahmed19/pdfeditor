@@ -494,6 +494,14 @@ function AiPanelImpl() {
       needsDoc: true,
     },
     {
+      icon: ScrollText,
+      label: "Summarize page",
+      // Says "page N" so buildContext scopes to just this page — a small
+      // prompt the local model can prefill fast, unlike the whole document.
+      prompt: `Summarize page ${app.currentPage + 1} in a few short paragraphs.`,
+      needsDoc: true,
+    },
+    {
       icon: ListChecks,
       label: "Key points",
       prompt: "Extract the key points of this document as a bullet list.",
