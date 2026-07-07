@@ -7,12 +7,27 @@ import {
   useRef,
   useState,
 } from "react";
-import { FilePlus2, FileText } from "lucide-react";
+import {
+  ChevronDown,
+  Combine,
+  Crop,
+  Droplets,
+  FileOutput,
+  FilePlus2,
+  FileText,
+  FolderOpen,
+  GitCompare,
+  Heading,
+  LayoutGrid,
+  type LucideIcon,
+  Minimize2,
+  Scissors,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAppSelector, shallowEqual } from "../../store";
 import { cn, uid } from "../../lib/utils";
 import { MARKUP_LABEL } from "../../lib/markup";
-import type { Annotation, MarkupStyle } from "../../types";
+import type { Annotation, MarkupStyle, Screen } from "../../types";
 import { FloatingNav } from "./FloatingNav";
 import { PageView } from "./PageView";
 import type { PageDims } from "./types";
@@ -503,22 +518,91 @@ function ViewerImpl() {
 }
 
 
+// The document tools, mirroring the Tools menu (label + icon + target screen)
+// so the empty-state grid stays in sync with it. Each opens its screen just like
+// the menu does — screens that need an open document show their own prompt. The
+// per-tool colour is a literal class string so Tailwind's scanner keeps it.
+const QUICK_TOOLS: Array<{
+  screen: Screen;
+  label: string;
+  desc: string;
+  icon: LucideIcon;
+  color: string;
+}> = [
+  // The first four are the most-used and show by default; the rest reveal via
+  // "Show more" on the welcome screen.
+  { screen: "organize", label: "Organize", desc: "Reorder, rotate, delete or add pages", icon: LayoutGrid, color: "text-violet-500" },
+  { screen: "merge", label: "Merge", desc: "Combine multiple PDFs into one", icon: Combine, color: "text-blue-500" },
+  { screen: "split", label: "Split & extract", desc: "Extract pages or split into files", icon: Scissors, color: "text-emerald-500" },
+  { screen: "compress", label: "Compress", desc: "Reduce file size without quality loss", icon: Minimize2, color: "text-red-500" },
+  { screen: "watermark", label: "Watermark", desc: "Add text or image watermarks", icon: Droplets, color: "text-amber-500" },
+  { screen: "headerfooter", label: "Headers & footers", desc: "Add page numbers, headers & footers", icon: Heading, color: "text-sky-500" },
+  { screen: "crop", label: "Crop", desc: "Crop pages and adjust page size", icon: Crop, color: "text-purple-500" },
+  { screen: "export", label: "Export", desc: "Convert to text, HTML or images", icon: FileOutput, color: "text-indigo-500" },
+  { screen: "compare", label: "Compare", desc: "Compare two PDFs side by side", icon: GitCompare, color: "text-teal-500" },
+];
+
+/** How many tools show before the "Show more" toggle on the welcome screen. */
+const PRIMARY_TOOL_COUNT = 4;
+
+/** Relative "opened N ago" label for the Recent list. */
+function relTime(ts: number): string {
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 604800) return `${Math.floor(s / 86400)}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+/** A VS Code-style "Start" link: coloured icon + text, underline on hover. */
+function StartAction({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} className="group flex items-center gap-2 text-left">
+      <Icon className="h-4 w-4 shrink-0 text-primary" />
+      <span className="text-sm text-foreground transition-colors group-hover:text-primary group-hover:underline">
+        {label}
+      </span>
+    </button>
+  );
+}
+
+// Welcome screen shown when no document is open — a VS Code-style landing with a
+// "Start" column (open / create), a "Recent" list, and the tools as a
+// walkthrough-like column. A PDF can still be dropped anywhere on the page.
 function EmptyState() {
   const app = useAppSelector(
     (s) => ({
       openBytes: s.openBytes,
-      openFile: s.openFile,
       registerFileHandle: s.registerFileHandle,
+      requestOpen: s.requestOpen,
+      openFolder: s.openFolder,
+      openRecent: s.openRecent,
+      recentFiles: s.recentFiles,
       setScreen: s.setScreen,
     }),
     shallowEqual,
   );
-  const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [showAllTools, setShowAllTools] = useState(false);
+  const recent = app.recentFiles.slice(0, 6);
+  const shownTools = showAllTools ? QUICK_TOOLS : QUICK_TOOLS.slice(0, PRIMARY_TOOL_COUNT);
+  const hiddenToolCount = QUICK_TOOLS.length - PRIMARY_TOOL_COUNT;
 
   return (
     <div
-      className="flex h-full items-center justify-center p-8"
+      className={cn(
+        "scrollbar-soft h-full overflow-auto px-8 py-12 md:px-14 md:py-16",
+        dragOver && "bg-accent/40",
+      )}
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -548,44 +632,87 @@ function EmptyState() {
         })();
       }}
     >
-      <div
-        className={cn(
-          "flex w-full max-w-lg cursor-pointer flex-col items-center gap-3 rounded-2xl border-2 border-dashed bg-card px-10 py-16 text-center shadow-shell transition-colors",
-          dragOver ? "border-foreground/50 bg-accent" : "border-border",
-        )}
-        onClick={() => fileRef.current?.click()}
-      >
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
-          <FileText className="h-6 w-6 text-muted-foreground" />
-        </div>
-        <p className="text-sm font-medium">Drop a PDF here, or click to browse</p>
-        <p className="max-w-sm text-xs text-muted-foreground">
-          Read, annotate, sign and edit PDFs. Use the tools in the sidebar to
-          merge, split, organize and watermark documents — or ask the AI
-          assistant about the content.
+      <div className="mx-auto w-full max-w-4xl">
+        <h1 className="text-3xl font-light tracking-tight">PickPDF</h1>
+        <p className="pt-1 text-sm text-muted-foreground">
+          Read, annotate, sign &amp; edit PDFs.
         </p>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            app.setScreen("templates");
-          }}
-          className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
-        >
-          <FilePlus2 className="h-3.5 w-3.5" />
-          Create a blank PDF
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/pdf"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void app.openFile(f);
-            e.target.value = "";
-          }}
-        />
+        <p className="pt-0.5 text-xs text-muted-foreground/70">
+          Tip: drag a PDF anywhere onto this page to open it.
+        </p>
+
+        <div className="grid gap-10 pt-10 md:grid-cols-2">
+          {/* Left: Start actions + Recent files */}
+          <div>
+            <h2 className="text-sm font-medium text-muted-foreground">Start</h2>
+            <div className="flex flex-col items-start gap-2.5 pt-3">
+              <StartAction icon={FileText} label="Open a PDF…" onClick={() => void app.requestOpen()} />
+              <StartAction icon={FolderOpen} label="Open a folder of PDFs…" onClick={() => void app.openFolder()} />
+              <StartAction icon={FilePlus2} label="Create a blank PDF" onClick={() => app.setScreen("templates")} />
+            </div>
+
+            <h2 className="pt-8 text-sm font-medium text-muted-foreground">Recent</h2>
+            <div className="flex flex-col items-start gap-2 pt-3">
+              {recent.length === 0 ? (
+                <p className="text-sm text-muted-foreground/70">
+                  No recent files yet — open a PDF to get started.
+                </p>
+              ) : (
+                recent.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    title={r.name}
+                    onClick={() => void app.openRecent(r.id)}
+                    className="group flex max-w-full items-center gap-2 text-left"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                    <span className="truncate text-sm text-foreground transition-colors group-hover:text-primary group-hover:underline">
+                      {r.name}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground/60">
+                      {relTime(r.lastOpened)}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Right: tools, presented like VS Code's walkthroughs column */}
+          <div>
+            <h2 className="text-sm font-medium text-muted-foreground">Tools</h2>
+            <div className="flex flex-col gap-2 pt-3">
+              {shownTools.map((t) => (
+                <button
+                  key={t.screen}
+                  type="button"
+                  onClick={() => app.setScreen(t.screen)}
+                  className="flex items-center gap-3 rounded-lg border border-border bg-card p-3 text-left shadow-sm transition-colors hover:border-foreground/30 hover:bg-accent"
+                >
+                  <t.icon className={cn("h-5 w-5 shrink-0", t.color)} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium leading-tight">{t.label}</p>
+                    <p className="pt-0.5 text-xs text-muted-foreground">{t.desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+            {hiddenToolCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAllTools((v) => !v)}
+                aria-expanded={showAllTools}
+                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ChevronDown
+                  className={cn("h-3.5 w-3.5 transition-transform", showAllTools && "rotate-180")}
+                />
+                {showAllTools ? "Show fewer tools" : `Show ${hiddenToolCount} more tools`}
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
