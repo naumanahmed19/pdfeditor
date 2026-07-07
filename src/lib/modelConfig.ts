@@ -56,25 +56,29 @@ export const BROWSER_MODELS: BrowserModelConfig[] = [
     // q4 (not q4f16) on WebGPU — avoids the fp16 overflow that garbles output.
     dtype: { webgpu: "q4", wasm: "q4" },
     sizeLabel: "~0.9 GB",
-    mobileSafe: true,
-    blurb: "Lightweight — runs on phones and tablets.",
+    // Desktop only: Gemma 3's large attention head (dim 256) needs 64 KB of GPU
+    // workgroup storage, over the 32 KB most mobile GPUs allow, so its attention
+    // compute pipeline can't be built on a phone. Runs great on desktop GPUs.
+    mobileSafe: false,
+    blurb: "Compact and capable — best on desktop.",
   },
   {
     id: "qwen-0.5b",
     repo: "onnx-community/Qwen2.5-0.5B-Instruct",
     name: "Qwen2.5 0.5B",
     // q4 (not q4f16) on WebGPU — some mobile GPUs return garbage on the fp16 path.
+    // Small attention head (dim 64) fits within mobile GPU workgroup limits.
     dtype: { webgpu: "q4", wasm: "q4" },
     sizeLabel: "~0.8 GB",
     mobileSafe: true,
-    blurb: "Smaller alternative if Gemma 3 is too heavy.",
+    blurb: "Lightweight — runs on phones and tablets.",
   },
 ];
 
 /** Default in-browser model on desktop/web (the user can switch). */
 export const DEFAULT_DESKTOP_MODEL_ID = "gemma-4";
-/** The model phones/tablets are pinned to. */
-export const MOBILE_MODEL_ID = "gemma-3-1b";
+/** The model phones/tablets are pinned to (small enough head dim for mobile GPUs). */
+export const MOBILE_MODEL_ID = "qwen-0.5b";
 
 /** Look up a model by id, falling back to the first (desktop default). */
 export function getBrowserModel(id: string | undefined): BrowserModelConfig {
