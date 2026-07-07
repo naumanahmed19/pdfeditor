@@ -1,38 +1,38 @@
-// Zero-config, fully local AI: Google's Gemma 4 (E2B) running in the browser via
-// Transformers.js. No Ollama / LM Studio / API key needed. The model (ONNX)
-// downloads once from the Hugging Face hub and is cached; it then works offline.
+// Zero-config, fully local AI running in the browser via Transformers.js. No
+// Ollama / LM Studio / API key needed. The chosen model (ONNX) downloads once
+// from the Hugging Face hub and is cached; it then works offline. Which model
+// runs is decided by the caller (see ./modelConfig) — desktop can pick the
+// higher-quality Gemma 4, while phones/tablets are pinned to the lightweight
+// Qwen2.5 that fits a mobile memory budget.
 //
 // Generation runs in a dedicated Web Worker (browserLlm.worker.ts) so the heavy
 // GPU/CPU work never blocks the UI, and it picks WebGPU when available with an
 // automatic CPU (WASM) fallback for machines without a GPU.
 import type { ChatMessage } from "../types";
-import { BROWSER_MODEL, BROWSER_MODEL_LABEL } from "./modelConfig";
-
-// Re-export so existing importers (ai.ts, etc.) keep working; the model identity
-// itself lives in ./modelConfig — change it there to swap models.
-export { BROWSER_MODEL_LABEL };
-export const BROWSER_MODEL_ID = BROWSER_MODEL.id;
+import type { BrowserModelConfig } from "./modelConfig";
 
 // IndexedDB database that ./modelCache streams the download into. Duplicated here
 // (rather than imported) because importing ./modelCache would run its fetch patch
 // on the main thread — it must only patch the worker.
 const MODEL_CACHE_DB = "pickpdf-model-cache";
-// Sticky flag: the model finished downloading at least once, so it's on disk and
-// loads offline. Survives reloads (unlike the in-session `ready` flag below).
-const DOWNLOADED_KEY = "pickpdf-gemma-downloaded";
+// Sticky per-model flag: this model finished downloading at least once, so it's
+// on disk and loads offline. Keyed by model id so each model tracks separately
+// (both can be cached at once). Survives reloads, unlike the session state below.
+const DOWNLOADED_PREFIX = "pickpdf-model-downloaded:";
+const downloadedKey = (id: string) => `${DOWNLOADED_PREFIX}${id}`;
 
-function markDownloaded(): void {
+function markDownloaded(id: string): void {
   try {
-    localStorage.setItem(DOWNLOADED_KEY, "1");
+    localStorage.setItem(downloadedKey(id), "1");
   } catch {
     /* storage unavailable — status just won't persist across reloads */
   }
 }
 
-/** Has the model been fully downloaded before (so it should load without network)? */
-export function isBrowserModelDownloaded(): boolean {
+/** Has this model been fully downloaded before (so it should load without network)? */
+export function isBrowserModelDownloaded(id: string): boolean {
   try {
-    return localStorage.getItem(DOWNLOADED_KEY) === "1";
+    return localStorage.getItem(downloadedKey(id)) === "1";
   } catch {
     return false;
   }
@@ -44,16 +44,20 @@ export function webgpuAvailable(): boolean {
 }
 
 let worker: Worker | null = null;
-let ready = false;
+// The model the worker is currently serving, so we know when to reload.
+let activeModel: BrowserModelConfig | null = null;
+// Which model finished loading this session (in-memory, ready to generate now).
+let readyModelId: string | null = null;
 
-export function browserModelReady(): boolean {
-  return ready;
+/** Is the given model loaded and ready to generate in this session? */
+export function browserModelReady(id: string): boolean {
+  return readyModelId === id;
 }
 
 // Ask the browser to keep the cached model on disk. Best-effort storage can be
 // evicted under disk pressure (and Safari wipes it after 7 idle days); a granted
-// persistence request exempts the origin from both, so the ~2 GB download stays
-// put between visits. Fire once, and never block on it.
+// persistence request exempts the origin from both, so the download stays put
+// between visits. Fire once, and never block on it.
 let persistenceRequested = false;
 function requestPersistentStorage(): void {
   if (persistenceRequested) return;
@@ -73,13 +77,23 @@ function getWorker(): Worker {
   return worker;
 }
 
-/** Drop the worker so the next call reloads (after a GPU crash / OOM). */
+/** Drop the worker so the next call reloads (after a GPU crash / OOM / model switch). */
 export function resetBrowserEngine(): void {
   if (worker) {
     worker.terminate();
     worker = null;
   }
-  ready = false;
+  readyModelId = null;
+}
+
+/** Point the engine at a model, dropping the worker if it was running a different one. */
+function ensureModel(model: BrowserModelConfig): void {
+  if (activeModel && activeModel.id !== model.id) resetBrowserEngine();
+  activeModel = model;
+}
+
+function modelName(): string {
+  return activeModel?.name ?? "the model";
 }
 
 /** Turn a raw WebGPU/ORT failure into an actionable message. */
@@ -87,13 +101,13 @@ function friendlyError(err: unknown): Error {
   const raw = err instanceof Error ? err.message : String(err);
   if (/device is lost|out of memory|mapasync|failed to allocate|oom/i.test(raw)) {
     return new Error(
-      `The GPU ran out of memory running ${BROWSER_MODEL.name}. Try again — it should fall back to CPU — or use a local server (Ollama, LM Studio) in Settings.`,
+      `The GPU ran out of memory running ${modelName()}. Try again — it should fall back to CPU — pick a lighter model, or connect a local/remote server in Settings.`,
     );
   }
   return err instanceof Error ? err : new Error(raw);
 }
 
-/** Gemma's chat template accepts system/user/assistant turns directly. */
+/** The chat template accepts system/user/assistant turns directly. */
 function toChat(messages: ChatMessage[]) {
   return messages.map((m) => ({ role: m.role, content: m.content }));
 }
@@ -110,21 +124,23 @@ function pctOf(loaded: number, total: number): number | null {
 function downloadStatusText(loaded: number, total: number): string {
   const pct = pctOf(loaded, total);
   return pct !== null
-    ? `Downloading ${BROWSER_MODEL.name} — ${pct}% (${fmtBytes(loaded)} of ${fmtBytes(total)})`
-    : `Downloading ${BROWSER_MODEL.name} — ${fmtBytes(loaded)}…`;
+    ? `Downloading ${modelName()} — ${pct}% (${fmtBytes(loaded)} of ${fmtBytes(total)})`
+    : `Downloading ${modelName()} — ${fmtBytes(loaded)}…`;
 }
 
 /** How long without a progress event before we call the download stalled. */
 const STALL_MS = 25_000;
 
-/** Stream a chat completion from the in-browser Gemma 4 model (via the worker). */
+/** Stream a chat completion from the given in-browser model (via the worker). */
 export function streamBrowserChat(
+  model: BrowserModelConfig,
   messages: ChatMessage[],
   temperature: number,
   onToken: (text: string) => void,
   signal?: AbortSignal,
   onStatus?: (status: string) => void,
 ): Promise<string> {
+  ensureModel(model);
   const w = getWorker();
 
   return new Promise<string>((resolve, reject) => {
@@ -163,8 +179,8 @@ export function streamBrowserChat(
           break;
         case "ready":
           clearTimeout(stallTimer);
-          ready = true;
-          markDownloaded();
+          readyModelId = model.id;
+          markDownloaded(model.id);
           // Back to the typing dots; if the first token is slow (prefill /
           // shader warm-up), explain rather than sit silent.
           onStatus?.("");
@@ -212,6 +228,7 @@ export function streamBrowserChat(
     signal?.addEventListener("abort", onAbort);
     w.postMessage({
       type: "generate",
+      model,
       messages: toChat(messages),
       temperature,
       maxTokens: 512,
@@ -228,15 +245,17 @@ export interface ModelLoadProgress {
 }
 
 /**
- * Download and load the model without sending a chat message, reporting progress
+ * Download and load a model without sending a chat message, reporting progress
  * — so Settings can offer a "Download" button with a real progress bar. Resolves
  * once the model is ready; rejects on failure or when `signal` aborts. Aborting
  * terminates the worker, but finished chunks stay cached so a later run resumes.
  */
 export function preloadBrowserModel(
+  model: BrowserModelConfig,
   onProgress: (p: ModelLoadProgress) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  ensureModel(model);
   const w = getWorker();
 
   return new Promise<void>((resolve, reject) => {
@@ -280,8 +299,8 @@ export function preloadBrowserModel(
           break;
         case "ready":
           cleanup();
-          ready = true;
-          markDownloaded();
+          readyModelId = model.id;
+          markDownloaded(model.id);
           resolve();
           break;
         case "error":
@@ -295,19 +314,24 @@ export function preloadBrowserModel(
     if (signal?.aborted) return onAbort();
     w.addEventListener("message", onMessage);
     signal?.addEventListener("abort", onAbort);
-    w.postMessage({ type: "load" });
+    w.postMessage({ type: "load", model });
   });
 }
 
 /**
- * Wipe the cached model so the next run downloads it fresh — the escape hatch for
- * a corrupted or unwanted download. Terminates the worker first to release its
- * IndexedDB handle so the delete isn't blocked.
+ * Wipe the cached model weights so the next run downloads fresh — the escape
+ * hatch for a corrupted or unwanted download. The cache is a single shared
+ * IndexedDB store keyed by URL, so this clears every downloaded model at once;
+ * we also reset all per-model "downloaded" flags to match. Terminates the worker
+ * first to release its IndexedDB handle so the delete isn't blocked.
  */
 export function clearBrowserModelCache(): Promise<void> {
   resetBrowserEngine();
   try {
-    localStorage.removeItem(DOWNLOADED_KEY);
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(DOWNLOADED_PREFIX)) localStorage.removeItem(k);
+    }
   } catch {
     /* ignore */
   }

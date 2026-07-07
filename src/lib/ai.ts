@@ -1,4 +1,10 @@
 import type { AppSettings, ChatMessage, ProviderKind } from "../types";
+import {
+  browserModelLabel,
+  DEFAULT_DESKTOP_MODEL_ID,
+  effectiveBrowserModel,
+} from "./modelConfig";
+import { isHandheldDevice } from "./device";
 
 export const OLLAMA_DEFAULT_URL = "http://localhost:11434";
 export const LMSTUDIO_DEFAULT_URL = "http://localhost:1234";
@@ -9,6 +15,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // server (Ollama / LM Studio) can use the assistant with no setup.
   provider: "browser",
   model: DEFAULT_MODEL,
+  browserModelId: DEFAULT_DESKTOP_MODEL_ID,
   ollamaBaseUrl: OLLAMA_DEFAULT_URL,
   lmStudioBaseUrl: LMSTUDIO_DEFAULT_URL,
   customBaseUrl: "",
@@ -58,8 +65,8 @@ async function fetchWithFallback(
 
 export async function listModels(settings: AppSettings): Promise<string[]> {
   if (settings.provider === "browser") {
-    const { BROWSER_MODEL_LABEL } = await import("./browserLlm");
-    return [BROWSER_MODEL_LABEL];
+    const model = effectiveBrowserModel(settings.browserModelId, isHandheldDevice());
+    return [browserModelLabel(model)];
   }
   const base = providerBaseUrl(settings);
   if (!base) return [];
@@ -100,12 +107,13 @@ export async function checkConnection(settings: AppSettings): Promise<{
   error?: string;
 }> {
   if (settings.provider === "browser") {
-    const { webgpuAvailable, BROWSER_MODEL_LABEL, browserModelReady } =
-      await import("./browserLlm");
+    const { webgpuAvailable, browserModelReady } = await import("./browserLlm");
+    const model = effectiveBrowserModel(settings.browserModelId, isHandheldDevice());
+    const base = browserModelLabel(model);
     const gpu = webgpuAvailable();
-    const label = browserModelReady()
-      ? BROWSER_MODEL_LABEL
-      : `${BROWSER_MODEL_LABEL} — downloads on first use`;
+    const label = browserModelReady(model.id)
+      ? base
+      : `${base} — downloads on first use`;
     return {
       ok: true,
       models: [gpu ? label : `${label} (CPU mode — slower, no WebGPU)`],
@@ -142,7 +150,8 @@ export async function streamChat(
 ): Promise<string> {
   if (settings.provider === "browser") {
     const { streamBrowserChat } = await import("./browserLlm");
-    return streamBrowserChat(messages, settings.temperature, onToken, signal, onStatus);
+    const model = effectiveBrowserModel(settings.browserModelId, isHandheldDevice());
+    return streamBrowserChat(model, messages, settings.temperature, onToken, signal, onStatus);
   }
 
   const base = providerBaseUrl(settings);
