@@ -428,6 +428,7 @@ function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
   const [progress, setProgress] = useState<ModelLoadProgress | null>(null);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const handheld = isHandheldDevice();
   const gpu = webgpuAvailable();
 
   const start = async () => {
@@ -478,9 +479,11 @@ function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
           <p className="pt-0.5 text-xs text-muted-foreground">
             {model.name} runs privately in your browser — no server or API
             key. Downloads once ({model.sizeLabel}), then works offline.{" "}
-            {gpu
-              ? "Uses your GPU (WebGPU) when available."
-              : "No WebGPU detected — it will run on CPU (slower)."}
+            {handheld
+              ? "On phones and tablets it runs on the CPU (slower, but avoids mobile-GPU crashes)."
+              : gpu
+                ? "Uses your GPU (WebGPU) when available."
+                : "No WebGPU detected — it will run on CPU (slower)."}
           </p>
         </div>
         <div className="shrink-0">
