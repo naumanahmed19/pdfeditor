@@ -43,21 +43,6 @@ export const FONT_OPTIONS: Array<{ v: FontFamilyKind; label: string }> = [
   { v: "courier", label: "Courier" },
 ];
 
-/** Sentinel value for the "Request a font…" picker entry (not a real family). */
-export const REQUEST_FONT_VALUE = "__request_font__";
-
-// Where "Request a font…" sends users. Change this to your support inbox/form.
-const FONT_REQUEST_EMAIL = "naumanahmed19@gmail.com";
-
-/** Open the user's mail client with a prefilled font request. */
-function requestFont() {
-  const subject = encodeURIComponent("PickPDF — font request");
-  const body = encodeURIComponent(
-    "Which font would you like added to PickPDF?\n\nFont name:\nLink (optional):\n",
-  );
-  window.open(`mailto:${FONT_REQUEST_EMAIL}?subject=${subject}&body=${body}`, "_blank");
-}
-
 export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
 export const MIN_FONT_SIZE = 1;
 export const MAX_FONT_SIZE = 400;
@@ -258,13 +243,7 @@ export function TextStyleControls({
     <>
       <Select
         value={value.fontFamily}
-        onChange={(e) => {
-          if (e.target.value === REQUEST_FONT_VALUE) {
-            requestFont();
-            return;
-          }
-          onPatch({ fontFamily: e.target.value as FontFamilyKind });
-        }}
+        onChange={(e) => onPatch({ fontFamily: e.target.value as FontFamilyKind })}
         aria-label="Font family"
         className="h-8 w-24 px-2 text-xs"
       >
@@ -273,7 +252,6 @@ export function TextStyleControls({
             {f.label}
           </option>
         ))}
-        <option value={REQUEST_FONT_VALUE}>Request a font…</option>
       </Select>
       <NumberComboField
         value={value.fontSize}
