@@ -30,7 +30,7 @@ import type {
 import type { OcrPage } from "./ocr";
 import type { RedactRect } from "./pdfium";
 import { hexToRgb01 } from "./utils";
-import { getRuns, resolveRun, type ResolvedStyle } from "./richtext";
+import { DEFAULT_LINE_HEIGHT, getRuns, resolveRun, type ResolvedStyle } from "./richtext";
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
   return PDFDocument.load(bytes, { ignoreEncryption: true });
@@ -525,6 +525,10 @@ const FONT_VARIANTS: Record<string, [StandardFonts, StandardFonts, StandardFonts
 const STANDARD_FALLBACK: Record<string, string> = {
   carlito: "helvetica",
   caladea: "times",
+  roboto: "helvetica",
+  opensans: "helvetica",
+  montserrat: "helvetica",
+  lora: "times",
 };
 
 function fontVariantFor(ann: TextAnnotation): StandardFonts {
@@ -549,6 +553,30 @@ const BUNDLED_FONT_URLS: Record<string, [string, string, string, string]> = {
     "/fonts/Caladea-Bold.ttf",
     "/fonts/Caladea-Italic.ttf",
     "/fonts/Caladea-BoldItalic.ttf",
+  ],
+  roboto: [
+    "/fonts/Roboto-Regular.ttf",
+    "/fonts/Roboto-Bold.ttf",
+    "/fonts/Roboto-Italic.ttf",
+    "/fonts/Roboto-BoldItalic.ttf",
+  ],
+  opensans: [
+    "/fonts/OpenSans-Regular.ttf",
+    "/fonts/OpenSans-Bold.ttf",
+    "/fonts/OpenSans-Italic.ttf",
+    "/fonts/OpenSans-BoldItalic.ttf",
+  ],
+  montserrat: [
+    "/fonts/Montserrat-Regular.ttf",
+    "/fonts/Montserrat-Bold.ttf",
+    "/fonts/Montserrat-Italic.ttf",
+    "/fonts/Montserrat-BoldItalic.ttf",
+  ],
+  lora: [
+    "/fonts/Lora-Regular.ttf",
+    "/fonts/Lora-Bold.ttf",
+    "/fonts/Lora-Italic.ttf",
+    "/fonts/Lora-BoldItalic.ttf",
   ],
 };
 
@@ -1267,6 +1295,8 @@ async function drawRichText(
   ) => Promise<PDFFont>,
 ) {
   const runs = getRuns(ann);
+  const lh = ann.lineHeight ?? DEFAULT_LINE_HEIGHT;
+  const ls = ann.letterSpacing ?? 0;
   const key = (s: ResolvedStyle) => `${s.fontFamily}|${s.bold}|${s.italic}`;
   const fonts = new Map<string, PDFFont>();
   for (const run of runs) {
@@ -1307,7 +1337,7 @@ async function drawRichText(
           space: /^\s+$/.test(w),
           style: s,
           font,
-          width: widthOf(font, w, s.fontSize),
+          width: widthOf(font, w, s.fontSize) + ls * w.length,
         });
       }
     }
@@ -1343,7 +1373,7 @@ async function drawRichText(
   const align = ann.align ?? "left";
   let yTop = 0;
   for (const line of lines) {
-    yTop += line.maxSize * 1.25;
+    yTop += line.maxSize * lh;
     const baseline = r.y + r.h - yTop + line.maxSize * 0.25;
     const startX =
       r.x +
@@ -1361,18 +1391,31 @@ async function drawRichText(
     for (const t of line.toks) {
       positions.push(x);
       const c = hexToRgb01(t.style.color);
-      const opts = {
-        x,
-        y: baseline,
-        size: t.style.fontSize,
-        font: t.font,
-        color: rgb(c.r, c.g, c.b),
-        rotate: degrees(rotation),
+      const draw = (text: string, atX: number) => {
+        const opts = {
+          x: atX,
+          y: baseline,
+          size: t.style.fontSize,
+          font: t.font,
+          color: rgb(c.r, c.g, c.b),
+          rotate: degrees(rotation),
+        };
+        try {
+          page.drawText(text, opts);
+        } catch {
+          page.drawText(sanitizeWinAnsi(text), opts);
+        }
       };
-      try {
-        page.drawText(t.text, opts);
-      } catch {
-        page.drawText(sanitizeWinAnsi(t.text), opts);
+      if (ls) {
+        // Advance glyph-by-glyph so the extra tracking matches the token width
+        // (which already includes `ls * length`) and the measured layout.
+        let cx = x;
+        for (const ch of t.text) {
+          draw(ch, cx);
+          cx += widthOf(t.font, ch, t.style.fontSize) + ls;
+        }
+      } else {
+        draw(t.text, x);
       }
       x += t.width;
     }

@@ -333,6 +333,9 @@ interface AppStore {
   markupColor: string;
   setMarkupColor: (c: string) => void;
   setToolColor: (c: string) => void;
+  /** Text boxes have their own color memory, defaulting to black. */
+  fontColor: string;
+  setFontColor: (c: string) => void;
   /** Fill color for new rect/ellipse shapes; null = no fill. */
   toolFill: string | null;
   setToolFill: (c: string | null) => void;
@@ -352,6 +355,12 @@ interface AppStore {
   setFontStrike: (v: boolean) => void;
   textAlign: "left" | "center" | "right";
   setTextAlign: (a: "left" | "center" | "right") => void;
+  /** Line-height multiplier for new text boxes. */
+  lineHeight: number;
+  setLineHeight: (v: number) => void;
+  /** Letter spacing (PDF points) for new text boxes. */
+  letterSpacing: number;
+  setLetterSpacing: (v: number) => void;
 
   annotations: AnnotationMap;
   hasAnnotations: boolean;
@@ -726,6 +735,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTool((t) => (v ? (t === "read" || t === "pan" ? "select" : t) : "read"));
   }, []);
   const [toolColor, setToolColor] = useState("#e11d48");
+  const [fontColor, setFontColor] = useState("#000000");
   const [highlightColor, setHighlightColor] = useState("#facc15");
   const [highlightMode, setHighlightMode] = useState<"text" | "area">("text");
   const [markupColor, setMarkupColor] = useState("#dc2626");
@@ -739,6 +749,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [fontUnderline, setFontUnderline] = useState(false);
   const [fontStrike, setFontStrike] = useState(false);
   const [textAlign, setTextAlign] = useState<"left" | "center" | "right">("left");
+  const [lineHeight, setLineHeight] = useState(1.25);
+  const [letterSpacing, setLetterSpacing] = useState(0);
 
   const [selected, setSelected] = useState<{ page: number; id: string } | null>(null);
   const [selectedField, setSelectedField] = useState<Pick<
@@ -2808,6 +2820,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     markupColor,
     setMarkupColor,
     setToolColor,
+    fontColor,
+    setFontColor,
     toolFill,
     setToolFill,
     strokeWidth,
@@ -2826,6 +2840,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFontStrike,
     textAlign,
     setTextAlign,
+    lineHeight,
+    setLineHeight,
+    letterSpacing,
+    setLetterSpacing,
     annotations,
     hasAnnotations,
     addAnnotation,

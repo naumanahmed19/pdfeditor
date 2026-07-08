@@ -13,6 +13,7 @@ import {
 } from "../../lib/formbuilder";
 import { RichTextEditor, type RichTextHandle } from "./RichTextEditor";
 import {
+  DEFAULT_LINE_HEIGHT,
   getRuns,
   measureRichText,
   mergeRuns,
@@ -49,9 +50,15 @@ function warnWhiteoutOnce() {
   });
 }
 
-/** CSS font properties for displaying a text annotation on screen. */
-/** Single source of truth for text line spacing (editor, display, sizing). */
-const TEXT_LINE_HEIGHT = 1.25;
+/** CSS style for a text box's line spacing / tracking, shared by the editor,
+ *  the on-screen display and the empty-box placeholder. `scale` converts the
+ *  point-based letter-spacing to on-screen pixels. */
+function textSpacingStyle(ann: TextAnnotation, scale: number): React.CSSProperties {
+  return {
+    lineHeight: ann.lineHeight ?? DEFAULT_LINE_HEIGHT,
+    letterSpacing: (ann.letterSpacing ?? 0) * scale,
+  };
+}
 
 /** Pencil cursor for the freehand tool (lucide pencil with a white halo so it
  *  reads on any page color); hotspot at the pencil tip, crosshair fallback. */
@@ -154,13 +161,15 @@ export function AnnotationLayer({
         h: app.fontSize * 2,
         text: "",
         fontSize: app.fontSize,
-        color: app.toolColor,
+        color: app.fontColor,
         fontFamily: app.fontFamily,
         bold: app.fontBold,
         italic: app.fontItalic,
         underline: app.fontUnderline,
         strike: app.fontStrike,
         align: app.textAlign,
+        lineHeight: app.lineHeight,
+        letterSpacing: app.letterSpacing,
       };
       app.addAnnotation(pageIndex, ann);
       app.setSelected({ page: pageIndex, id: ann.id });
@@ -319,9 +328,11 @@ export function AnnotationLayer({
             h: app.fontSize * 2,
             text: "",
             fontSize: app.fontSize,
-            color: app.toolColor,
+            color: app.fontColor,
             fontFamily: app.fontFamily,
             align: app.textAlign,
+            lineHeight: app.lineHeight,
+            letterSpacing: app.letterSpacing,
           };
           app.addAnnotations(pageIndex, [arrow, text]);
           app.setSelected({ page: pageIndex, id: text.id });
@@ -767,18 +778,24 @@ function AnnotationItem({
       app.multiSelected.ids.length > 1
         ? app.multiSelected.ids
         : null;
-    const snapOthers =
-      isField && app.formBuilder
-        ? (app.annotations[pageIndex] ?? []).filter(
-            (a) =>
-              a.kind === "formfield" &&
-              a.id !== ann.id &&
-              !groupIds?.includes(a.id),
-          )
-        : [];
+    // Text blocks snap to other annotations (their edges/centres and the page
+    // centre) so they line up easily; form fields keep their existing
+    // form-builder-gated snapping. Alt suspends snapping for fine positioning.
+    const snapText = ann.kind === "text";
+    const snapField = isField && app.formBuilder;
+    const canSnap = snapText || snapField;
+    const snapOthers = !canSnap
+      ? []
+      : (app.annotations[pageIndex] ?? []).filter(
+          (a) =>
+            a.id !== ann.id &&
+            !groupIds?.includes(a.id) &&
+            a.kind !== "note" && // point markers, not alignable blocks
+            (snapField ? a.kind === "formfield" : true),
+        );
     const snapOpts = {
-      snap: app.formBuilder && app.snapEnabled,
-      grid: app.formBuilder && app.gridEnabled,
+      snap: snapText || (snapField && app.snapEnabled),
+      grid: snapField && app.gridEnabled,
       gridSize: app.gridSize,
       threshold: 6 / scale,
     };
@@ -792,7 +809,7 @@ function AnnotationItem({
       if (d.mode === "move") {
         let next = { ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy };
         // Alt suspends snapping for fine positioning.
-        if (isField && app.formBuilder && !ev.altKey) {
+        if (canSnap && !ev.altKey) {
           const s = snapMovingRect(next, snapOthers, pageBox, snapOpts);
           next = { ...next, x: s.x, y: s.y };
           app.setSnapGuides(
@@ -818,7 +835,7 @@ function AnnotationItem({
           w: Math.max(8, d.orig.w + dx),
           h: Math.max(8, d.orig.h + dy),
         };
-        if (isField && app.formBuilder && !ev.altKey) {
+        if (canSnap && !ev.altKey) {
           const s = snapResizingRect(next, snapOthers, pageBox, snapOpts);
           next = { ...next, w: s.w, h: s.h };
           app.setSnapGuides(
@@ -849,10 +866,8 @@ function AnnotationItem({
           app.updateAnnotation(pageIndex, { ...ann, ...finalBox });
         }
       }
-      if (isField) {
-        app.setGroupDrag(null);
-        app.setSnapGuides(null);
-      }
+      if (isField) app.setGroupDrag(null);
+      if (canSnap) app.setSnapGuides(null);
       setLive(null);
       dragRef.current = null;
     };
@@ -1205,7 +1220,7 @@ function AnnotationItem({
           ann={textAnn}
           scale={scale}
           maxWidth={maxTextWidth}
-          style={{ lineHeight: TEXT_LINE_HEIGHT, textAlign: textAnn.align ?? "left" }}
+          style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
           onRunsChange={(runs) => {
             setEditSize(measureRichText(textAnn, runs, maxTextWidth));
             setHasContent(!!runsText(runs).trim());
@@ -1239,7 +1254,7 @@ function AnnotationItem({
       ) : (
         <div
           className="h-full w-full whitespace-pre-wrap"
-          style={{ lineHeight: TEXT_LINE_HEIGHT, textAlign: textAnn.align ?? "left" }}
+          style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
           dangerouslySetInnerHTML={{ __html: runsToHtml(getRuns(textAnn), textAnn, scale) }}
         />
       );
@@ -1295,6 +1310,7 @@ function AnnotationItem({
             fontFamily: ann.displayFontCss || FONT_CSS[ann.fontFamily ?? "helvetica"],
             fontWeight: ann.bold ? 700 : 400,
             fontStyle: ann.italic ? "italic" : "normal",
+            letterSpacing: (ann.letterSpacing ?? 0) * scale,
             textDecoration:
               [ann.underline && "underline", ann.strike && "line-through"]
                 .filter(Boolean)
