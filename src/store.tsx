@@ -43,6 +43,7 @@ import type {
   TextRunEdit,
 } from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
+import { isHandheldDevice } from "./lib/device";
 import { downloadBytes, uid } from "./lib/utils";
 import {
   getStoredDoc,
@@ -927,9 +928,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }, [requestPassword]);
 
-  const [settings, setSettingsState] = useState<AppSettings>(() =>
-    loadJson(SETTINGS_KEY, DEFAULT_SETTINGS),
-  );
+  const [settings, setSettingsState] = useState<AppSettings>(() => {
+    const loaded = loadJson(SETTINGS_KEY, DEFAULT_SETTINGS);
+    // The built-in (in-browser) model is desktop-only — its weights OOM-crash a
+    // mobile tab. On phones/tablets, fall back to a remote Custom API so a fresh
+    // user (who defaults to "browser") isn't left pointing at an unusable model.
+    if (isHandheldDevice() && loaded.provider === "browser") {
+      return { ...loaded, provider: "openai_compatible" };
+    }
+    return loaded;
+  });
   const setSettings = useCallback((s: AppSettings) => {
     setSettingsState(s);
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));

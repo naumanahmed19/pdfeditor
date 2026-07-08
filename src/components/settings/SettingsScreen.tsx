@@ -52,10 +52,10 @@ const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   { value: "openai_compatible", label: "Custom API", hint: "Any OpenAI-compatible endpoint" },
 ];
 
-/** Ollama & LM Studio speak to localhost, which on a phone/tablet is the device
- *  itself — unreachable — so they're hidden there, leaving the built-in model
- *  and a remote Custom API. */
-const HANDHELD_PROVIDERS: ProviderKind[] = ["browser", "openai_compatible"];
+/** On a phone/tablet only a remote Custom API works: Ollama & LM Studio speak to
+ *  localhost (the device itself — unreachable), and the built-in in-browser model
+ *  is desktop-only because its weights OOM-crash a mobile tab. */
+const HANDHELD_PROVIDERS: ProviderKind[] = ["openai_compatible"];
 
 const CUSTOM_API_PRESETS = [
   {
@@ -108,11 +108,11 @@ export function SettingsScreen() {
   };
 
   // A provider persisted on another device (or before this build) could be one
-  // we now hide on handhelds — fall back to the built-in model so the assistant
-  // stays usable rather than pointing at an unreachable localhost server.
+  // we now hide on handhelds — fall back to Custom API, the only provider a
+  // phone/tablet can actually reach.
   useEffect(() => {
     if (handheld && !HANDHELD_PROVIDERS.includes(s.provider)) {
-      app.setSettings({ ...s, provider: "browser" });
+      app.setSettings({ ...s, provider: "openai_compatible" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handheld]);
@@ -138,7 +138,7 @@ export function SettingsScreen() {
   }, [s.provider, s.ollamaBaseUrl, s.lmStudioBaseUrl, s.customBaseUrl, s.customApiKey]);
 
   return (
-    <div className="scrollbar-soft h-full overflow-y-auto p-6">
+    <div className="scrollbar-soft h-full overflow-y-auto p-4 sm:p-6">
       <div className="mx-auto max-w-2xl">
         <h1 className="text-lg font-semibold">Settings</h1>
         <p className="pb-5 pt-1 text-sm text-muted-foreground">
@@ -235,7 +235,7 @@ export function SettingsScreen() {
           {s.provider === "ollama" && (
             <Row title="Ollama URL" description="Base URL of the Ollama server.">
               <Input
-                className="w-64"
+                className="w-full sm:w-64"
                 value={s.ollamaBaseUrl}
                 onChange={(e) => app.setSettings({ ...s, ollamaBaseUrl: e.target.value })}
               />
@@ -244,7 +244,7 @@ export function SettingsScreen() {
           {s.provider === "lmstudio" && (
             <Row title="LM Studio URL" description="Base URL of the LM Studio local server.">
               <Input
-                className="w-64"
+                className="w-full sm:w-64"
                 value={s.lmStudioBaseUrl}
                 onChange={(e) => app.setSettings({ ...s, lmStudioBaseUrl: e.target.value })}
               />
@@ -265,7 +265,7 @@ export function SettingsScreen() {
                   emptyText="No matching URL."
                   allowCustom
                   aria-label="API base URL"
-                  className="w-80"
+                  className="w-full sm:w-80"
                 />
               </Row>
               <Row
@@ -273,7 +273,7 @@ export function SettingsScreen() {
                 description={usesGoogleApi ? "Sent as x-goog-api-key." : "Sent as a Bearer token."}
               >
                 <Input
-                  className="w-64"
+                  className="w-full sm:w-64"
                   type="password"
                   value={s.customApiKey}
                   onChange={(e) => app.setSettings({ ...s, customApiKey: e.target.value })}
@@ -302,7 +302,7 @@ export function SettingsScreen() {
                 emptyText="No matching model."
                 allowCustom
                 aria-label="Model"
-                className="w-80"
+                className="w-full sm:w-80"
               />
             </Row>
           )}
@@ -392,7 +392,7 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-6 border-t px-4 py-3 first:border-t-0">
+    <div className="flex flex-col gap-2 border-t px-4 py-3 first:border-t-0 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
       <div className="min-w-0">
         <p className="text-sm">{title}</p>
         {description && (
@@ -517,7 +517,7 @@ function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
 
   return (
     <div className="border-t px-4 py-3">
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div className="min-w-0">
           <p className="text-sm">Download</p>
           <p className="pt-0.5 text-xs text-muted-foreground">

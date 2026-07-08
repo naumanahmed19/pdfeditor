@@ -221,6 +221,76 @@
       display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:12px;color:rgba(251,251,250,0.45)}
     @media(max-width:720px){.foot{grid-template-columns:1fr 1fr}.foot .brand{grid-column:1/-1}}
 
+    /* ---- pricing ---- */
+    .price-grid{max-width:var(--max);margin:0 auto;padding:44px 28px 0;display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:stretch}
+    .ptier{background:#fff;border:1px solid var(--line);border-radius:16px;padding:28px 26px;display:flex;flex-direction:column;position:relative}
+    .ptier.feature{border-color:var(--ink);box-shadow:0 30px 60px -36px rgba(17,19,33,0.5)}
+    .ptier .badge{position:absolute;top:-11px;left:26px;font-family:'JetBrains Mono';font-size:9.5px;letter-spacing:.16em;
+      text-transform:uppercase;background:var(--accent);color:#fff;padding:5px 11px;border-radius:99px}
+    .ptier .tname{font-family:'Inter Tight';font-weight:600;font-size:16px}
+    .ptier .tsub{font-size:12.5px;line-height:1.5;color:var(--muted);margin:5px 0 18px;min-height:36px}
+    .ptier .price{display:flex;align-items:baseline;gap:7px;margin-bottom:3px}
+    .ptier .price b{font-family:'Inter Tight';font-weight:600;font-size:40px;letter-spacing:-0.02em}
+    .ptier .price em{font-style:normal;font-size:13px;color:var(--muted)}
+    .ptier .once{font-family:'JetBrains Mono';font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin:2px 0 20px}
+    .ptier>.btn{width:100%;justify-content:center;margin-bottom:22px}
+    .ptier .cap{font-family:'JetBrains Mono';font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin:0 0 12px}
+    .ptier ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+    .ptier li{display:flex;align-items:flex-start;gap:9px;font-size:13px;color:rgba(17,19,33,0.74);line-height:1.42}
+    .ptier li::before{content:"✓";color:var(--accent);font-weight:600;font-size:12px;flex:none;line-height:1.5}
+    .ptier li.no{color:var(--faint)}
+    .ptier li.no::before{content:"–";color:var(--faint)}
+    @media(max-width:820px){.price-grid{grid-template-columns:1fr;max-width:420px}}
+    .price-note{max-width:660px;margin:26px auto 0;padding:0 28px;text-align:center;font-size:12.5px;line-height:1.6;color:var(--muted)}
+    .price-note b{color:var(--ink);font-weight:600}
+
+    /* ---- comparison table ---- */
+    .cmp{max-width:var(--max);margin:56px auto 0;padding:0 28px}
+    .cmp .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff}
+    .cmp table{width:100%;min-width:560px;border-collapse:collapse}
+    .cmp th,.cmp td{text-align:center;padding:13px 18px;font-size:13px;border-bottom:1px solid var(--hair)}
+    .cmp thead th{font-family:'Inter Tight';font-weight:600;font-size:13.5px;background:#fbfbfa;position:sticky;top:0}
+    .cmp thead th .p{font-family:'JetBrains Mono';font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);display:block;font-weight:400;margin-top:2px}
+    .cmp td:first-child,.cmp th:first-child{text-align:left;color:var(--ink);font-weight:500}
+    .cmp td{color:var(--muted)}
+    .cmp .yes{color:var(--accent);font-weight:700}
+    .cmp .dash{color:var(--faint)}
+    .cmp tbody tr:last-child td{border-bottom:none}
+    .cmp .grp td{font-family:'JetBrains Mono';font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);background:#fbfbfa}
+    .cmp .feat-col{background:rgba(229,72,77,0.03)}
+
+    /* ---- why pay ---- */
+    .whypay{max-width:var(--max);margin:66px auto 0;padding:0 28px;text-align:center}
+    .whypay .mono-cap{display:block}
+    .whypay h3{font-weight:600;font-size:clamp(22px,2.8vw,28px);letter-spacing:-0.02em;margin:12px auto 0;max-width:520px}
+    .whypay .wp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:34px;text-align:left}
+    .whypay .wp-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px 24px;position:relative}
+    .whypay .wp-card::before{content:"";position:absolute;top:26px;left:24px;width:22px;height:2px;border-radius:2px;background:var(--accent)}
+    .whypay .wp-card b{font-family:'Inter Tight';font-weight:600;font-size:15px;display:block;margin:16px 0 9px}
+    .whypay .wp-card p{font-size:13px;line-height:1.6;color:var(--muted);margin:0}
+    @media(max-width:820px){.whypay .wp-grid{grid-template-columns:1fr}}
+
+    /* ---- teams ---- */
+    .teams{max-width:var(--max);margin:96px auto 0;padding:0 28px}
+    .teams .box{background:var(--dark);color:var(--paper);border-radius:20px;padding:52px 48px;
+      display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:start;
+      background-image:radial-gradient(circle at 12% -10%,rgba(229,72,77,0.16),transparent 46%)}
+    .teams .eyebrow{color:rgba(251,251,250,0.6)}
+    .teams h2{color:var(--paper);font-weight:600;font-size:clamp(26px,3.2vw,34px);line-height:1.14;margin:22px 0 16px}
+    .teams .lead{font-size:14px;line-height:1.65;color:rgba(251,251,250,0.62);margin:0 0 20px;max-width:390px}
+    .teams .tags{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}
+    .teams .tags span{font-size:12px;padding:7px 14px;border:1px solid rgba(251,251,250,0.16);border-radius:99px;color:rgba(251,251,250,0.8)}
+    .teams .lic{display:flex;flex-direction:column;gap:12px}
+    .teams .lcard{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:18px 20px}
+    .teams .lcard b{font-family:'Inter Tight';font-weight:600;font-size:14px;display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;color:var(--paper)}
+    .teams .lcard b em{font-style:normal;font-family:'JetBrains Mono';font-size:9px;letter-spacing:.11em;text-transform:uppercase;
+      color:var(--accent);border:1px solid rgba(229,72,77,0.42);padding:3px 8px;border-radius:99px}
+    .teams .lcard ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+    .teams .lcard li{font-size:12.5px;line-height:1.5;color:rgba(251,251,250,0.62);padding-left:15px;position:relative}
+    .teams .lcard li::before{content:"–";position:absolute;left:0;color:rgba(251,251,250,0.4)}
+    .teams .contact{margin-top:8px}
+    @media(max-width:820px){.teams .box{grid-template-columns:1fr;padding:40px 28px;gap:28px}}
+
     /* ---- scroll reveal ----
        Uses the independent `translate` property (not `transform`) so it never
        clobbers the hero fan's full-bleed transform or the tiles' hover lift. */
@@ -242,6 +312,7 @@
     <div class="nav-links">
       <a href="#how">How it works</a>
       <a href="#tools">Tools</a>
+      <a href="#pricing">Pricing</a>
       <a href="#privacy">Privacy</a>
       <a class="nav-cta" href="#get">Download for Windows <span class="arrow">→</span></a>
     </div>
@@ -476,6 +547,167 @@
       <div class="pcard"><b>Nothing is uploaded</b><p>Files are read, edited and saved on your machine. No cloud storage, no telemetry on your content, nothing to leak or subpoena.</p></div>
       <div class="pcard"><b>No account, no tracking</b><p>No sign-up, no email, no profile — handling your documents shouldn't require handing over your identity.</p></div>
       <div class="pcard"><b>Works offline</b><p>Once loaded, everything works with the network cable pulled — the strongest privacy guarantee there is.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section id="pricing" class="sec">
+  <div class="sec-head">
+    <div class="eyebrow reveal"><span class="dot"></span>Pricing</div>
+    <h2 class="reveal">Pay once. Own it. No subscription.</h2>
+    <p class="reveal">Every tool is free in your browser. Pro is the same workbench as a native desktop app — faster, offline, built into Windows. Team rolls it out across your organization.</p>
+  </div>
+
+  <div class="price-grid">
+    <!-- Free -->
+    <div class="ptier reveal">
+      <div class="tname">Free</div>
+      <div class="tsub">The complete editor, right in your browser. Every tool, no account.</div>
+      <div class="price"><b>$0</b></div>
+      <div class="once">Forever · no sign-up</div>
+      <a class="btn btn-ghost" href="https://pickpdf.app/" rel="noopener">Open in browser</a>
+      <div class="cap">The full workbench</div>
+      <ul>
+        <li>In-place text editing, real redaction &amp; OCR</li>
+        <li>Fill &amp; design forms</li>
+        <li>On-device AI assistant</li>
+        <li>Organize, merge, split, compress, watermark</li>
+        <li>Runs locally — nothing uploaded, works offline</li>
+        <li class="no">Re-opens files each session — no disk sync</li>
+        <li class="no">No batch processing or desktop integration</li>
+      </ul>
+    </div>
+
+    <!-- Pro -->
+    <div class="ptier feature reveal">
+      <div class="badge">Most popular</div>
+      <div class="tname">Pro</div>
+      <div class="tsub">The same workbench as a native Windows app — faster, offline, built into your desktop.</div>
+      <div class="price"><b>$49</b><em>one-time</em></div>
+      <div class="once">Perpetual license · 1 user</div>
+      <a class="btn btn-primary" href="#get">Get Pro <span class="arrow">→</span></a>
+      <div class="cap">Everything in Free, delivered natively</div>
+      <ul>
+        <li>Native Windows app — instant launch, no browser tab</li>
+        <li>Open &amp; save straight to disk</li>
+        <li>Double-click any PDF to open in PickPDF</li>
+        <li>Batch-process many files at once</li>
+        <li>Handles very large files without slowing down</li>
+        <li>Always offline · automatic updates</li>
+        <li>Back the project with a one-time purchase</li>
+      </ul>
+    </div>
+
+    <!-- Team -->
+    <div class="ptier reveal">
+      <div class="tname">Team</div>
+      <div class="tsub">Volume licensing and deployment for regulated workplaces.</div>
+      <div class="price"><b>$39</b><em>/ seat</em></div>
+      <div class="once">Annual per-seat · support &amp; updates included</div>
+      <a class="btn btn-ghost" href="#teams">Talk to us <span class="arrow">→</span></a>
+      <div class="cap">Everything in Pro, plus</div>
+      <ul>
+        <li>Centrally managed, reassignable seats</li>
+        <li>Silent MSI / MSIX deployment</li>
+        <li>On-prem &amp; air-gapped install rights</li>
+        <li>Invoice / purchase-order billing</li>
+        <li>Priority support</li>
+        <li>Signed data-handling statement (DPA)</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="price-note reveal">Individuals never pay a subscription — Free is free, Pro is a one-time purchase you own for good. <b>Team</b> is an annual per-seat plan for organizations, where the fee covers ongoing support, updates, deployment and compliance.</p>
+
+  <!-- comparison table -->
+  <div class="cmp reveal">
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Free<span class="p">browser</span></th>
+            <th class="feat-col">Pro<span class="p">$49 once</span></th>
+            <th>Team<span class="p">$39 / seat</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="grp"><td colspan="4">The full editor — free everywhere</td></tr>
+          <tr><td>In-place editing, redaction &amp; OCR</td><td class="yes">✓</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Fill &amp; design forms</td><td class="yes">✓</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>On-device AI assistant</td><td class="yes">✓</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Organize, merge, split, compress, watermark</td><td class="yes">✓</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Runs locally — nothing uploaded</td><td class="yes">✓</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+
+          <tr class="grp"><td colspan="4">Native desktop app</td></tr>
+          <tr><td>Instant launch, no browser tab</td><td class="dash">–</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Open &amp; save directly to disk</td><td class="dash">–</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Double-click to open (file associations)</td><td class="dash">–</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Batch-process many files</td><td class="dash">–</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Large-file performance</td><td class="dash">–</td><td class="feat-col yes">✓</td><td class="yes">✓</td></tr>
+
+          <tr class="grp"><td colspan="4">Licensing &amp; support</td></tr>
+          <tr><td>License type</td><td class="dash">—</td><td class="feat-col">Perpetual, 1 user</td><td>Per-seat, annual</td></tr>
+          <tr><td>Silent MSI / MSIX deployment</td><td class="dash">–</td><td class="feat-col dash">–</td><td class="yes">✓</td></tr>
+          <tr><td>On-prem &amp; air-gapped rights</td><td class="dash">–</td><td class="feat-col dash">–</td><td class="yes">✓</td></tr>
+          <tr><td>Invoice / PO billing</td><td class="dash">–</td><td class="feat-col dash">–</td><td class="yes">✓</td></tr>
+          <tr><td>Priority support + DPA</td><td class="dash">–</td><td class="feat-col dash">–</td><td class="yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- why pay when it's free in the browser -->
+  <div class="whypay reveal">
+    <span class="mono-cap">It's free in the browser — so why go Pro?</span>
+    <h3>Paying keeps PickPDF independent.</h3>
+    <div class="wp-grid">
+      <div class="wp-card">
+        <b>You're the customer, not the product</b>
+        <p>Free tools funded by investors have to monetize you eventually — ads, cloud upsells, or selling the user base. A one-time purchase keeps PickPDF free of ads, tracking and that pressure.</p>
+      </div>
+      <div class="wp-card">
+        <b>It funds the free version</b>
+        <p>Pro licenses pay for development — which keeps the browser app fully free, updated and unrestricted for everyone else.</p>
+      </div>
+      <div class="wp-card">
+        <b>Own it once, for good</b>
+        <p>$49 one time, perpetual. No subscription creeping onto your card, and nothing you rely on today gets locked away tomorrow.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOR TEAMS -->
+<section id="teams" class="teams">
+  <div class="box reveal">
+    <div>
+      <div class="eyebrow"><span class="dot"></span>For teams</div>
+      <h2>A separate license, built for the workplace.</h2>
+      <p class="lead">Pro is a personal license for one individual. The Team license is different — per-seat and centrally managed, written for how organizations actually buy, deploy and audit software. Same app, different terms.</p>
+      <div class="tags"><span>Legal</span><span>Finance</span><span>Healthcare</span><span>Public sector</span></div>
+      <a class="btn btn-ghost contact" href="mailto:teams@pickpdf.app?subject=PickPDF%20for%20Teams">Talk to sales <span class="arrow">→</span></a>
+    </div>
+    <div class="lic">
+      <div class="lcard">
+        <b>Personal <em>Pro · 1 user</em></b>
+        <ul>
+          <li>Perpetual license for one named person</li>
+          <li>Install on your own devices</li>
+          <li>Personal &amp; non-transferable</li>
+          <li>Card checkout, instant delivery</li>
+        </ul>
+      </div>
+      <div class="lcard">
+        <b>Team <em>per seat</em></b>
+        <ul>
+          <li>Seats assigned &amp; reassigned from one console</li>
+          <li>Silent MSI / MSIX rollout &amp; on-prem rights</li>
+          <li>Invoice / PO billing, annual renewal</li>
+          <li>Priority support + signed data-handling (DPA)</li>
+        </ul>
+      </div>
     </div>
   </div>
 </section>
