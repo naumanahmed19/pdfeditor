@@ -778,18 +778,24 @@ function AnnotationItem({
       app.multiSelected.ids.length > 1
         ? app.multiSelected.ids
         : null;
-    const snapOthers =
-      isField && app.formBuilder
-        ? (app.annotations[pageIndex] ?? []).filter(
-            (a) =>
-              a.kind === "formfield" &&
-              a.id !== ann.id &&
-              !groupIds?.includes(a.id),
-          )
-        : [];
+    // Text blocks snap to other annotations (their edges/centres and the page
+    // centre) so they line up easily; form fields keep their existing
+    // form-builder-gated snapping. Alt suspends snapping for fine positioning.
+    const snapText = ann.kind === "text";
+    const snapField = isField && app.formBuilder;
+    const canSnap = snapText || snapField;
+    const snapOthers = !canSnap
+      ? []
+      : (app.annotations[pageIndex] ?? []).filter(
+          (a) =>
+            a.id !== ann.id &&
+            !groupIds?.includes(a.id) &&
+            a.kind !== "note" && // point markers, not alignable blocks
+            (snapField ? a.kind === "formfield" : true),
+        );
     const snapOpts = {
-      snap: app.formBuilder && app.snapEnabled,
-      grid: app.formBuilder && app.gridEnabled,
+      snap: snapText || (snapField && app.snapEnabled),
+      grid: snapField && app.gridEnabled,
       gridSize: app.gridSize,
       threshold: 6 / scale,
     };
@@ -803,7 +809,7 @@ function AnnotationItem({
       if (d.mode === "move") {
         let next = { ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy };
         // Alt suspends snapping for fine positioning.
-        if (isField && app.formBuilder && !ev.altKey) {
+        if (canSnap && !ev.altKey) {
           const s = snapMovingRect(next, snapOthers, pageBox, snapOpts);
           next = { ...next, x: s.x, y: s.y };
           app.setSnapGuides(
@@ -829,7 +835,7 @@ function AnnotationItem({
           w: Math.max(8, d.orig.w + dx),
           h: Math.max(8, d.orig.h + dy),
         };
-        if (isField && app.formBuilder && !ev.altKey) {
+        if (canSnap && !ev.altKey) {
           const s = snapResizingRect(next, snapOthers, pageBox, snapOpts);
           next = { ...next, w: s.w, h: s.h };
           app.setSnapGuides(
@@ -860,10 +866,8 @@ function AnnotationItem({
           app.updateAnnotation(pageIndex, { ...ann, ...finalBox });
         }
       }
-      if (isField) {
-        app.setGroupDrag(null);
-        app.setSnapGuides(null);
-      }
+      if (isField) app.setGroupDrag(null);
+      if (canSnap) app.setSnapGuides(null);
       setLive(null);
       dragRef.current = null;
     };
