@@ -9,11 +9,16 @@ import {
   Baseline,
   Bold,
   ChevronDown,
+  IndentDecrease,
+  IndentIncrease,
   Italic,
+  List,
+  ListOrdered,
   Plus,
   Strikethrough,
   Underline,
 } from "lucide-react";
+import type { BlockKind } from "../../types";
 import { ColorPopover } from "../ui/color-popover";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Input } from "../ui/input";
@@ -216,6 +221,9 @@ export function StyleToggle({
         aria-label={label}
         pressed={pressed}
         disabled={disabled}
+        // Keep the text-editor's focus/selection so B/I/U/S and list toggles
+        // act on the current selection instead of blurring (and losing) it.
+        onMouseDown={(e) => e.preventDefault()}
         onPressedChange={onPressedChange}
         className="h-8 w-8 rounded-md data-[pressed]:!bg-primary data-[pressed]:!text-primary-foreground"
       >
@@ -350,6 +358,54 @@ export function TextStyleControls({
         value={value.color}
         onChange={(c) => c && onPatch({ color: c })}
       />
+    </>
+  );
+}
+
+/** Paragraph-format row (headings + lists + indent), shown while a text box is
+ *  being edited. Reflects the caret's block; actions call the block editor. */
+export function BlockFormatControls({
+  state,
+  setKind,
+  toggleList,
+  indent,
+  outdent,
+}: {
+  state: { kind: BlockKind; list?: "bullet" | "numbered" };
+  setKind: (k: "p" | "h1" | "h2" | "h3") => void;
+  toggleList: (l: "bullet" | "numbered") => void;
+  indent: () => void;
+  outdent: () => void;
+}) {
+  const kindVal =
+    state.kind === "h1" || state.kind === "h2" || state.kind === "h3" ? state.kind : "p";
+  return (
+    <>
+      <Select
+        value={kindVal}
+        onChange={(e) => setKind(e.target.value as "p" | "h1" | "h2" | "h3")}
+        aria-label="Paragraph format"
+        className="h-8 w-[6.5rem] px-2 text-xs"
+      >
+        <option value="p">Normal</option>
+        <option value="h1">Heading 1</option>
+        <option value="h2">Heading 2</option>
+        <option value="h3">Heading 3</option>
+      </Select>
+      <StyleToggle
+        label="Bullet list"
+        icon={List}
+        pressed={state.list === "bullet"}
+        onPressedChange={() => toggleList("bullet")}
+      />
+      <StyleToggle
+        label="Numbered list"
+        icon={ListOrdered}
+        pressed={state.list === "numbered"}
+        onPressedChange={() => toggleList("numbered")}
+      />
+      <StyleToggle label="Decrease indent" icon={IndentDecrease} pressed={false} onPressedChange={outdent} />
+      <StyleToggle label="Increase indent" icon={IndentIncrease} pressed={false} onPressedChange={indent} />
     </>
   );
 }

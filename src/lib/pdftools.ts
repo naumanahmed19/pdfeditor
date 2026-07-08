@@ -30,7 +30,16 @@ import type {
 import type { OcrPage } from "./ocr";
 import type { RedactRect } from "./pdfium";
 import { hexToRgb01 } from "./utils";
-import { DEFAULT_LINE_HEIGHT, getRuns, resolveRun, type ResolvedStyle } from "./richtext";
+import {
+  DEFAULT_LINE_HEIGHT,
+  LIST_INDENT_PTS,
+  LIST_MARKER_GAP_PTS,
+  blockFontSize,
+  computeMarkers,
+  getBlocks,
+  resolveBlockRun,
+  type ResolvedStyle,
+} from "./richtext";
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
   return PDFDocument.load(bytes, { ignoreEncryption: true });
@@ -1294,15 +1303,23 @@ async function drawRichText(
     italic: boolean,
   ) => Promise<PDFFont>,
 ) {
-  const runs = getRuns(ann);
+  const blocks = getBlocks(ann);
   const lh = ann.lineHeight ?? DEFAULT_LINE_HEIGHT;
   const ls = ann.letterSpacing ?? 0;
+  const markers = computeMarkers(blocks);
+  const align = ann.align ?? "left";
+  const family = ann.fontFamily ?? "helvetica";
+
   const key = (s: ResolvedStyle) => `${s.fontFamily}|${s.bold}|${s.italic}`;
   const fonts = new Map<string, PDFFont>();
-  for (const run of runs) {
-    const s = resolveRun(run, ann);
+  const fontFor = async (s: ResolvedStyle): Promise<PDFFont> => {
     if (!fonts.has(key(s))) fonts.set(key(s), await getStyledFont(s.fontFamily, s.bold, s.italic));
-  }
+    return fonts.get(key(s))!;
+  };
+  // Preload every run font plus a bold marker font (list bullets/numbers).
+  for (const b of blocks) for (const run of b.runs) await fontFor(resolveBlockRun(run, b, ann));
+  const markerFont = await getStyledFont(family, true, false);
+
   const widthOf = (font: PDFFont, text: string, size: number) => {
     try {
       return font.widthOfTextAtSize(text, size);
@@ -1313,80 +1330,29 @@ async function drawRichText(
 
   interface Tok {
     text: string;
-    nl: boolean;
     space: boolean;
     style: ResolvedStyle;
     font: PDFFont;
     width: number;
   }
-  const toks: Tok[] = [];
-  for (const run of runs) {
-    const s = resolveRun(run, ann);
-    const font = fonts.get(key(s))!;
-    for (const piece of run.text.split(/(\n)/)) {
-      if (piece === "") continue;
-      if (piece === "\n") {
-        toks.push({ text: "", nl: true, space: false, style: s, font, width: 0 });
-        continue;
-      }
-      for (const w of piece.split(/(\s+)/)) {
-        if (!w) continue;
-        toks.push({
-          text: w,
-          nl: false,
-          space: /^\s+$/.test(w),
-          style: s,
-          font,
-          width: widthOf(font, w, s.fontSize) + ls * w.length,
-        });
-      }
-    }
+  interface Line {
+    toks: Tok[];
+    maxSize: number;
+    width: number;
   }
 
   const maxWidth = Math.max(20, r.w - 4);
-  const lines: Array<{ toks: Tok[]; maxSize: number; width: number }> = [];
-  let cur: Tok[] = [];
-  let curW = 0;
-  let curMax = 0;
-  const flush = () => {
-    // Trailing spaces don't count toward visible width (matters for center/right align).
-    let w = curW;
-    for (let i = cur.length - 1; i >= 0 && cur[i].space; i--) w -= cur[i].width;
-    lines.push({ toks: cur, maxSize: curMax || ann.fontSize, width: w });
-    cur = [];
-    curW = 0;
-    curMax = 0;
-  };
-  for (const t of toks) {
-    if (t.nl) {
-      flush();
-      continue;
-    }
-    if (curW > 0 && curW + t.width > maxWidth && !t.space) flush();
-    if (curW === 0 && t.space) continue; // no leading space on a wrapped line
-    cur.push(t);
-    curW += t.width;
-    curMax = Math.max(curMax, t.style.fontSize);
-  }
-  if (cur.length || lines.length === 0) flush();
-
-  const align = ann.align ?? "left";
   let yTop = 0;
-  for (const line of lines) {
-    yTop += line.maxSize * lh;
-    const baseline = r.y + r.h - yTop + line.maxSize * 0.25;
-    const startX =
-      r.x +
-      2 +
-      (align === "center"
-        ? Math.max(0, (maxWidth - line.width) / 2)
+
+  const drawLine = (line: Line, textX: number, baseline: number) => {
+    const usable = Math.max(20, maxWidth - textX);
+    const alignOff =
+      align === "center"
+        ? Math.max(0, (usable - line.width) / 2)
         : align === "right"
-          ? Math.max(0, maxWidth - line.width)
-          : 0);
-    let x = startX;
-    // Positions recorded alongside each token so underline/strike segments
-    // (drawn in a second pass, merging adjacent same-style tokens) know
-    // exactly where to start/end.
+          ? Math.max(0, usable - line.width)
+          : 0;
+    let x = r.x + 2 + textX + alignOff;
     const positions: number[] = [];
     for (const t of line.toks) {
       positions.push(x);
@@ -1407,8 +1373,6 @@ async function drawRichText(
         }
       };
       if (ls) {
-        // Advance glyph-by-glyph so the extra tracking matches the token width
-        // (which already includes `ls * length`) and the measured layout.
         let cx = x;
         for (const ch of t.text) {
           draw(ch, cx);
@@ -1419,7 +1383,7 @@ async function drawRichText(
       }
       x += t.width;
     }
-    positions.push(x); // sentinel end position for the last token
+    positions.push(x);
 
     const drawSegments = (
       pick: (s: ResolvedStyle) => boolean,
@@ -1441,13 +1405,11 @@ async function drawRichText(
         ) {
           j++;
         }
-        const segStart = positions[i];
-        const segEnd = positions[j + 1];
         const c = hexToRgb01(t.style.color);
         const y = baseline + offsetFor(t.style.fontSize);
         page.drawLine({
-          start: { x: segStart, y },
-          end: { x: segEnd, y },
+          start: { x: positions[i], y },
+          end: { x: positions[j + 1], y },
           thickness: Math.max(0.5, t.style.fontSize * 0.06),
           color: rgb(c.r, c.g, c.b),
         });
@@ -1462,6 +1424,82 @@ async function drawRichText(
       (s) => s.strike,
       (size) => size * 0.3,
     );
+  };
+
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const b = blocks[bi];
+    const isHeading = b.kind === "h1" || b.kind === "h2" || b.kind === "h3";
+    const bfs = blockFontSize(b, ann);
+    const indentX = b.kind === "li" ? (b.indent ?? 0) * LIST_INDENT_PTS : 0;
+    const marker = markers[bi];
+    const markerW =
+      b.kind === "li" && marker ? widthOf(markerFont, marker, bfs) + LIST_MARKER_GAP_PTS : 0;
+    const textX = indentX + markerW;
+    const usable = Math.max(20, maxWidth - textX);
+
+    // Tokenise the block's runs (heading runs resolve to a scaled, bold style).
+    const toks: Tok[] = [];
+    for (const run of b.runs) {
+      const s = resolveBlockRun(run, b, ann);
+      const font = fonts.get(key(s))!;
+      for (const w of run.text.split(/(\s+)/)) {
+        if (!w) continue;
+        toks.push({
+          text: w,
+          space: /^\s+$/.test(w),
+          style: s,
+          font,
+          width: widthOf(font, w, s.fontSize) + ls * w.length,
+        });
+      }
+    }
+    // Wrap into lines.
+    const lines: Line[] = [];
+    let cur: Tok[] = [];
+    let curW = 0;
+    let curMax = 0;
+    const flush = () => {
+      let w = curW;
+      for (let i = cur.length - 1; i >= 0 && cur[i].space; i--) w -= cur[i].width;
+      lines.push({ toks: cur, maxSize: curMax || bfs, width: w });
+      cur = [];
+      curW = 0;
+      curMax = 0;
+    };
+    for (const t of toks) {
+      if (curW > 0 && curW + t.width > usable && !t.space) flush();
+      if (curW === 0 && t.space) continue;
+      cur.push(t);
+      curW += t.width;
+      curMax = Math.max(curMax, t.style.fontSize);
+    }
+    if (cur.length || !lines.length) flush();
+
+    // Breathing room above a heading (not the very first block).
+    if (isHeading && bi > 0) yTop += bfs * 0.3;
+
+    lines.forEach((line, li) => {
+      yTop += line.maxSize * lh;
+      const baseline = r.y + r.h - yTop + line.maxSize * 0.25;
+      // List marker on the first wrapped line, at the item's indent column.
+      if (b.kind === "li" && li === 0 && marker) {
+        const c = hexToRgb01(resolveBlockRun(b.runs[0] ?? { text: "" }, b, ann).color);
+        const opts = {
+          x: r.x + 2 + indentX,
+          y: baseline,
+          size: bfs,
+          font: markerFont,
+          color: rgb(c.r, c.g, c.b),
+          rotate: degrees(rotation),
+        };
+        try {
+          page.drawText(marker, opts);
+        } catch {
+          page.drawText(sanitizeWinAnsi(marker), opts);
+        }
+      }
+      drawLine(line, textX, baseline);
+    });
   }
 }
 

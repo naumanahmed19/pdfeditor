@@ -55,6 +55,20 @@ export type FontFamilyKind =
   | "montserrat" // bundled (OFL)
   | "lora"; // bundled serif (OFL)
 
+/** A paragraph-level block in a text box: a heading, a plain paragraph, or a
+ *  list item. Block structure (headings + nested lists) layers on top of the
+ *  inline `runs` model. */
+export type BlockKind = "p" | "h1" | "h2" | "h3" | "li";
+export interface TextBlock {
+  kind: BlockKind;
+  /** For `li`: bullet or numbered list style. */
+  list?: "bullet" | "numbered";
+  /** For `li`: 0-based nesting depth. */
+  indent?: number;
+  /** Inline content of this block. */
+  runs: TextRun[];
+}
+
 /** A styled span of a rich text box. Unset style fields inherit the box's. */
 export interface TextRun {
   text: string;
@@ -73,6 +87,9 @@ export interface TextAnnotation extends BaseAnnotation {
   text: string;
   /** Rich runs; when absent the whole `text` uses the box-level style below. */
   runs?: TextRun[];
+  /** Paragraph blocks (headings, lists). When present this is the source of
+   *  truth for structure; `runs`/`text` remain the flat fallback. */
+  blocks?: TextBlock[];
   fontSize: number;
   color: string;
   fontFamily?: FontFamilyKind;

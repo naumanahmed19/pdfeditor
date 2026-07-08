@@ -346,6 +346,47 @@ body {
   font-family: "Brush Script MT", "Segoe Script", cursive;
 }
 
+/* ---------- block rich-text (headings + nested lists) ---------- */
+.richtext-blocks:focus,
+.richtext-blocks:focus-visible {
+  outline: none;
+}
+.richtext-blocks > * {
+  margin: 0;
+}
+.richtext-blocks > * + * {
+  margin-top: 0.3em;
+}
+.richtext-blocks h1 {
+  font-size: 1.7em;
+  font-weight: 700;
+}
+.richtext-blocks h2 {
+  font-size: 1.4em;
+  font-weight: 700;
+}
+.richtext-blocks h3 {
+  font-size: 1.15em;
+  font-weight: 700;
+}
+.richtext-blocks ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.richtext-blocks ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.richtext-blocks ul ul {
+  list-style: circle;
+}
+.richtext-blocks ul ul ul {
+  list-style: square;
+}
+.richtext-blocks li {
+  margin: 0;
+}
+
 @media print {
   body * {
     visibility: hidden;

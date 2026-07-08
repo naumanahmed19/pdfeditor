@@ -1,3 +1,6 @@
+import { streamText } from "ai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenAI } from "@ai-sdk/openai";
 import type { AppSettings, ChatMessage, ProviderKind } from "../types";
 import {
   browserModelLabel,
@@ -9,6 +12,11 @@ import { isHandheldDevice } from "./device";
 export const OLLAMA_DEFAULT_URL = "http://localhost:11434";
 export const LMSTUDIO_DEFAULT_URL = "http://localhost:1234";
 export const DEFAULT_MODEL = "gemma3";
+export const OPENAI_DEFAULT_URL = "https://api.openai.com/v1";
+export const GEMINI_OPENAI_DEFAULT_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+export const GOOGLE_GENERATIVE_AI_DEFAULT_URL = "https://generativelanguage.googleapis.com/v1beta";
+export const OPENROUTER_DEFAULT_URL = "https://openrouter.ai/api/v1";
+export const VERCEL_AI_GATEWAY_DEFAULT_URL = "https://ai-gateway.vercel.sh/v1";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   // Default to the zero-config in-browser model, so users without a local model
@@ -27,12 +35,68 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export function providerBaseUrl(settings: AppSettings): string {
   switch (settings.provider) {
     case "ollama":
-      return settings.ollamaBaseUrl || OLLAMA_DEFAULT_URL;
+      return trimTrailingSlash(settings.ollamaBaseUrl || OLLAMA_DEFAULT_URL);
     case "lmstudio":
-      return settings.lmStudioBaseUrl || LMSTUDIO_DEFAULT_URL;
+      return trimTrailingSlash(settings.lmStudioBaseUrl || LMSTUDIO_DEFAULT_URL);
     default:
-      return settings.customBaseUrl;
+      return normalizeOpenAiCompatibleBaseUrl(settings.customBaseUrl);
   }
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function joinUrl(base: string, path: string): string {
+  return `${trimTrailingSlash(base)}/${path.replace(/^\/+/, "")}`;
+}
+
+function normalizeOpenAiCompatibleBaseUrl(value: string): string {
+  const base = trimTrailingSlash(value);
+  if (!base) return "";
+
+  // Older PickPDF builds asked users for a host without "/v1" and appended it
+  // internally. Keep those saved URLs working while allowing exact API roots
+  // such as Gemini's "/v1beta/openai" and OpenRouter's "/api/v1".
+  try {
+    const url = new URL(base);
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/v1";
+      return trimTrailingSlash(url.toString());
+    }
+  } catch {
+    // If it is not a full URL, use it as written; fetch will surface the error.
+  }
+
+  return base;
+}
+
+function openAiCompatibleEndpoint(settings: AppSettings, path: string): string {
+  return joinUrl(providerBaseUrl(settings), path);
+}
+
+function localOpenAiEndpoint(settings: AppSettings, path: string): string {
+  return joinUrl(providerBaseUrl(settings), `v1/${path}`);
+}
+
+function isSameApiRoot(base: string, expected: string): boolean {
+  return trimTrailingSlash(base).toLowerCase() === trimTrailingSlash(expected).toLowerCase();
+}
+
+function isGoogleGenerativeAiBaseUrl(base: string): boolean {
+  return isSameApiRoot(base, GOOGLE_GENERATIVE_AI_DEFAULT_URL);
+}
+
+function shouldUseAiSdkForCustomApi(base: string): boolean {
+  return isSameApiRoot(base, OPENAI_DEFAULT_URL) || isGoogleGenerativeAiBaseUrl(base);
+}
+
+function bearerHeaders(apiKey: string): Record<string, string> {
+  return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+}
+
+function googleHeaders(apiKey: string): Record<string, string> {
+  return apiKey ? { "x-goog-api-key": apiKey } : {};
 }
 
 /**
@@ -69,10 +133,15 @@ export async function listModels(settings: AppSettings): Promise<string[]> {
     return [browserModelLabel(model)];
   }
   const base = providerBaseUrl(settings);
-  if (!base) return [];
+  if (!base) throw new Error("No API base URL configured.");
   const headers: Record<string, string> = {};
   if (settings.provider === "openai_compatible" && settings.customApiKey) {
-    headers.Authorization = `Bearer ${settings.customApiKey}`;
+    Object.assign(
+      headers,
+      isGoogleGenerativeAiBaseUrl(base)
+        ? googleHeaders(settings.customApiKey)
+        : bearerHeaders(settings.customApiKey),
+    );
   }
 
   // Ollama native endpoint gives the richest listing.
@@ -91,11 +160,21 @@ export async function listModels(settings: AppSettings): Promise<string[]> {
     }
   }
 
-  const res = await fetchWithFallback(`${base}/v1/models`, settings.provider, {
+  const modelsUrl =
+    settings.provider === "openai_compatible"
+      ? openAiCompatibleEndpoint(settings, "models")
+      : localOpenAiEndpoint(settings, "models");
+  const res = await fetchWithFallback(modelsUrl, settings.provider, {
     headers,
   });
   if (!res.ok) throw new Error(`Model listing failed (${res.status})`);
   const json = await res.json();
+  if (settings.provider === "openai_compatible" && isGoogleGenerativeAiBaseUrl(base)) {
+    return (json.models ?? [])
+      .filter((m: any) => (m?.supportedGenerationMethods ?? []).includes("generateContent"))
+      .map((m: any) => String(m?.name ?? "").replace(/^models\//, ""))
+      .filter(Boolean);
+  }
   return (json.data ?? json.models ?? [])
     .map((m: any) => m?.id ?? m?.key ?? m?.name)
     .filter(Boolean);
@@ -171,7 +250,15 @@ export async function streamChat(
     /* use configured name as-is */
   }
 
-  const res = await fetchWithFallback(`${base}/v1/chat/completions`, settings.provider, {
+  if (settings.provider === "openai_compatible" && shouldUseAiSdkForCustomApi(base)) {
+    return streamAiSdkChat(settings, model, messages, onToken, signal);
+  }
+
+  const chatUrl =
+    settings.provider === "openai_compatible"
+      ? openAiCompatibleEndpoint(settings, "chat/completions")
+      : localOpenAiEndpoint(settings, "chat/completions");
+  const res = await fetchWithFallback(chatUrl, settings.provider, {
     method: "POST",
     headers,
     signal,
@@ -221,6 +308,39 @@ export async function streamChat(
         /* ignore malformed keep-alive lines */
       }
     }
+  }
+  return full;
+}
+
+async function streamAiSdkChat(
+  settings: AppSettings,
+  model: string,
+  messages: ChatMessage[],
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  const base = providerBaseUrl(settings);
+  const languageModel = isGoogleGenerativeAiBaseUrl(base)
+    ? createGoogleGenerativeAI({
+        apiKey: settings.customApiKey,
+        baseURL: base,
+      })(model)
+    : createOpenAI({
+        apiKey: settings.customApiKey,
+        baseURL: base,
+      }).chat(model);
+
+  const result = streamText({
+    model: languageModel,
+    messages,
+    temperature: settings.temperature,
+    abortSignal: signal,
+  });
+
+  let full = "";
+  for await (const delta of result.textStream) {
+    full += delta;
+    onToken(delta);
   }
   return full;
 }
