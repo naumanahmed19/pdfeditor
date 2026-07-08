@@ -11,11 +11,19 @@ import {
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
+import { Combobox } from "../ui/combobox";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Slider } from "../ui/slider";
 import { cn } from "../../lib/utils";
-import { checkConnection, DEFAULT_MODEL } from "../../lib/ai";
+import {
+  checkConnection,
+  DEFAULT_MODEL,
+  GOOGLE_GENERATIVE_AI_DEFAULT_URL,
+  OPENAI_DEFAULT_URL,
+  OPENROUTER_DEFAULT_URL,
+  VERCEL_AI_GATEWAY_DEFAULT_URL,
+} from "../../lib/ai";
 import {
   clearBrowserModelCache,
   isBrowserModelDownloaded,
@@ -49,6 +57,29 @@ const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
  *  and a remote Custom API. */
 const HANDHELD_PROVIDERS: ProviderKind[] = ["browser", "openai_compatible"];
 
+const CUSTOM_API_PRESETS = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    baseUrl: OPENAI_DEFAULT_URL,
+  },
+  {
+    id: "gemini",
+    label: "Gemini",
+    baseUrl: GOOGLE_GENERATIVE_AI_DEFAULT_URL,
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    baseUrl: OPENROUTER_DEFAULT_URL,
+  },
+  {
+    id: "vercel",
+    label: "Vercel AI Gateway",
+    baseUrl: VERCEL_AI_GATEWAY_DEFAULT_URL,
+  },
+] as const;
+
 export function SettingsScreen() {
   const app = useApp();
   const s = app.settings;
@@ -61,6 +92,20 @@ export function SettingsScreen() {
   const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [ok, setOk] = useState<boolean | null>(null);
+  const modelOptions = [...new Set(models.filter(Boolean))];
+  const baseUrlOptions = CUSTOM_API_PRESETS.map((preset) => ({
+    value: preset.baseUrl,
+    label: preset.label,
+  }));
+  const usesGoogleApi =
+    s.customBaseUrl.trim().replace(/\/+$/, "") === GOOGLE_GENERATIVE_AI_DEFAULT_URL;
+
+  const setCustomBaseUrl = (value: string) => {
+    app.setSettings({
+      ...s,
+      customBaseUrl: value,
+    });
+  };
 
   // A provider persisted on another device (or before this build) could be one
   // we now hide on handhelds — fall back to the built-in model so the assistant
@@ -75,6 +120,7 @@ export function SettingsScreen() {
   const refresh = async () => {
     setChecking(true);
     setStatus(null);
+    setModels([]);
     const r = await checkConnection(app.settings);
     setChecking(false);
     setOk(r.ok);
@@ -89,7 +135,7 @@ export function SettingsScreen() {
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.provider, s.ollamaBaseUrl, s.lmStudioBaseUrl, s.customBaseUrl]);
+  }, [s.provider, s.ollamaBaseUrl, s.lmStudioBaseUrl, s.customBaseUrl, s.customApiKey]);
 
   return (
     <div className="scrollbar-soft h-full overflow-y-auto p-6">
@@ -206,15 +252,26 @@ export function SettingsScreen() {
           )}
           {s.provider === "openai_compatible" && (
             <>
-              <Row title="Base URL" description="e.g. https://api.example.com (without /v1).">
-                <Input
-                  className="w-64"
+              <Row
+                title="API base URL"
+                description="Choose a preset or type the exact OpenAI-compatible root."
+              >
+                <Combobox
                   value={s.customBaseUrl}
-                  placeholder="https://…"
-                  onChange={(e) => app.setSettings({ ...s, customBaseUrl: e.target.value })}
+                  options={baseUrlOptions}
+                  onValueChange={setCustomBaseUrl}
+                  placeholder="https://api.example.com/v1"
+                  searchPlaceholder="Search or paste a base URL..."
+                  emptyText="No matching URL."
+                  allowCustom
+                  aria-label="API base URL"
+                  className="w-80"
                 />
               </Row>
-              <Row title="API key" description="Sent as a Bearer token.">
+              <Row
+                title="API key"
+                description={usesGoogleApi ? "Sent as x-goog-api-key." : "Sent as a Bearer token."}
+              >
                 <Input
                   className="w-64"
                   type="password"
@@ -230,12 +287,22 @@ export function SettingsScreen() {
           ) : (
             <Row
               title="Model"
-              description={`Default is “${DEFAULT_MODEL}”. If the exact name isn't installed, the closest installed match is used.`}
+              description={
+                s.provider === "openai_compatible"
+                  ? "Choose a discovered model, or enter any model ID supported by the endpoint."
+                  : `Choose a discovered model or enter one manually. Default is "${DEFAULT_MODEL}".`
+              }
             >
-              <Input
-                className="w-64"
+              <Combobox
                 value={s.model}
-                onChange={(e) => app.setSettings({ ...s, model: e.target.value })}
+                options={modelOptions.map((m) => ({ value: m }))}
+                onValueChange={(model) => app.setSettings({ ...s, model })}
+                placeholder="Enter model ID"
+                searchPlaceholder="Search or enter a model ID..."
+                emptyText="No matching model."
+                allowCustom
+                aria-label="Model"
+                className="w-80"
               />
             </Row>
           )}
@@ -257,29 +324,6 @@ export function SettingsScreen() {
             </Row>
           )}
 
-          {s.provider !== "browser" && models.length > 0 && (
-            <div className="border-t px-4 py-3">
-              <p className="pb-2 text-xs font-medium text-muted-foreground">
-                Installed models — click to use
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {models.map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => app.setSettings({ ...s, model: m })}
-                    className={cn(
-                      "rounded-md border px-2 py-1 text-xs transition-colors",
-                      s.model === m
-                        ? "border-foreground/60 bg-accent font-medium"
-                        : "border-input hover:bg-accent",
-                    )}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </Panel>
 
         <Panel title="Generation">

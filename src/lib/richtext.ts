@@ -2,7 +2,7 @@
 // (box-level style applies to all of `ann.text`) or rich (`ann.runs` holds
 // styled spans). These pure helpers are shared by the editor, the on-screen
 // display, size measurement and PDF baking — no React or DOM-framework deps.
-import type { FontFamilyKind, TextAnnotation, TextRun } from "../types";
+import type { BlockKind, FontFamilyKind, TextAnnotation, TextBlock, TextRun } from "../types";
 
 export interface ResolvedStyle {
   color: string;
@@ -385,5 +385,371 @@ export function measureRichText(
     lineMax = Math.max(lineMax, t.s.fontSize);
   }
   flush();
+  return { w: Math.min(maxWidthPts, Math.max(ann.fontSize * 2, widest + pad)), h: totalH + 3 };
+}
+
+/* ------------------------------------------------------------------ */
+/* Block layer: headings + nested lists on top of the inline run model */
+/* ------------------------------------------------------------------ */
+
+/** Heading font-size multipliers (× box fontSize); all headings render bold. */
+export const HEADING_SCALE: Record<string, number> = { h1: 1.7, h2: 1.4, h3: 1.15 };
+/** Indent added per list nesting level, in PDF points. */
+export const LIST_INDENT_PTS = 22;
+/** Gap between a list marker and its text, in PDF points. */
+export const LIST_MARKER_GAP_PTS = 5;
+const BULLET_GLYPHS = ["•", "◦", "▪"];
+
+/** Blocks for a text box: `ann.blocks` when present, else plain paragraphs
+ *  derived from the flat runs (splitting on "\n"). */
+export function getBlocks(ann: TextAnnotation): TextBlock[] {
+  if (ann.blocks && ann.blocks.length) return ann.blocks;
+  const runs = getRuns(ann);
+  const lines: TextRun[][] = [[]];
+  for (const run of runs) {
+    const parts = run.text.split("\n");
+    parts.forEach((part, i) => {
+      if (i > 0) lines.push([]);
+      if (part) lines[lines.length - 1].push({ ...run, text: part });
+    });
+  }
+  return lines.map((r) => ({ kind: "p" as const, runs: r }));
+}
+
+/** Plain text of all blocks (newline-separated), for search/extract/bake fallback. */
+export function blocksPlainText(blocks: TextBlock[]): string {
+  return blocks.map((b) => runsText(b.runs)).join("\n");
+}
+
+/** Whether a text box has any real content across its blocks. */
+export function blocksHaveText(blocks: TextBlock[]): boolean {
+  return blocks.some((b) => runsText(b.runs).trim() !== "");
+}
+
+const HEADING_KINDS: BlockKind[] = ["h1", "h2", "h3"];
+
+/** Resolve a run's style within a block — headings force a scaled, bold size. */
+export function resolveBlockRun(
+  run: Partial<TextRun>,
+  block: TextBlock,
+  ann: TextAnnotation,
+): ResolvedStyle {
+  const base = resolveRun(run, ann);
+  if (HEADING_KINDS.includes(block.kind)) {
+    return { ...base, fontSize: ann.fontSize * HEADING_SCALE[block.kind], bold: true };
+  }
+  return base;
+}
+
+/** The base font size a block renders at (drives spacing & marker sizing). */
+export function blockFontSize(block: TextBlock, ann: TextAnnotation): number {
+  return HEADING_KINDS.includes(block.kind)
+    ? ann.fontSize * HEADING_SCALE[block.kind]
+    : ann.fontSize;
+}
+
+/** List markers per block ("" for non-list); nested numbering restarts per
+ *  sublist. Used by the PDF bake and by measurement (marker width). */
+export function computeMarkers(blocks: TextBlock[]): string[] {
+  const counters: number[] = []; // decimal counter per indent level
+  const out: string[] = [];
+  for (const b of blocks) {
+    if (b.kind !== "li") {
+      out.push("");
+      counters.length = 0; // any non-list block breaks numbering
+      continue;
+    }
+    const indent = Math.max(0, b.indent ?? 0);
+    counters.length = indent + 1; // drop deeper counters when we come back out
+    if (b.list === "numbered") {
+      counters[indent] = (counters[indent] ?? 0) + 1;
+      out.push(`${counters[indent]}.`);
+    } else {
+      counters[indent] = 0;
+      out.push(BULLET_GLYPHS[indent % BULLET_GLYPHS.length]);
+    }
+  }
+  return out;
+}
+
+/** A structural change applied to the blocks spanned by the selection. */
+export type BlockOp =
+  | { type: "kind"; kind: "p" | "h1" | "h2" | "h3" }
+  | { type: "list"; list: "bullet" | "numbered" }
+  | { type: "indent"; delta: 1 | -1 };
+
+const MAX_LIST_INDENT = 5;
+
+/**
+ * Apply a structural op to blocks [start, end] (pure — no DOM). Toggling a list
+ * off when all selected items already use it converts them back to paragraphs;
+ * out-denting a top-level item likewise drops it to a paragraph. Run content is
+ * always preserved (this is what makes "convert to bullets" non-destructive).
+ */
+export function applyBlockOp(
+  blocks: TextBlock[],
+  start: number,
+  end: number,
+  op: BlockOp,
+): TextBlock[] {
+  const selected = blocks.slice(start, end + 1);
+  return blocks.map((b, i) => {
+    if (i < start || i > end) return b;
+    if (op.type === "kind") return { kind: op.kind, runs: b.runs };
+    if (op.type === "list") {
+      const allThisList = selected.every((x) => x.kind === "li" && x.list === op.list);
+      return allThisList
+        ? { kind: "p", runs: b.runs }
+        : { kind: "li", list: op.list, indent: b.indent ?? 0, runs: b.runs };
+    }
+    if (b.kind !== "li") return b;
+    if (op.delta === 1) return { ...b, indent: Math.min(MAX_LIST_INDENT, (b.indent ?? 0) + 1) };
+    const next = (b.indent ?? 0) - 1;
+    return next < 0 ? { kind: "p", runs: b.runs } : { ...b, indent: next };
+  });
+}
+
+/** Inline spans for a block's runs. In `semantic` mode the base font-size is
+ *  omitted (so the block tag / container controls it — headings inherit their
+ *  size, list items inherit the base); only run-level overrides are emitted. */
+function blockInlineHtml(
+  block: TextBlock,
+  ann: TextAnnotation,
+  scale: number,
+  semantic: boolean,
+): string {
+  if (!block.runs.length) return "<br>";
+  const parts: string[] = [];
+  for (const run of block.runs) {
+    const s = resolveBlockRun(run, block, ann);
+    const deco =
+      [s.underline && "underline", s.strike && "line-through"].filter(Boolean).join(" ") || "none";
+    // In semantic mode, only emit font-size when this run overrides the box size
+    // and the block isn't a heading (headings size via their tag).
+    const emitSize = !semantic || (!HEADING_KINDS.includes(block.kind) && run.fontSize !== undefined);
+    const css =
+      `color:${s.color};` +
+      (emitSize ? `font-size:${s.fontSize * scale}px;` : "") +
+      `font-family:${ann.displayFontCss || FONT_CSS[s.fontFamily]};` +
+      `font-weight:${s.bold ? 700 : 400};` +
+      `font-style:${s.italic ? "italic" : "normal"};` +
+      `text-decoration:${deco};`;
+    const data =
+      `data-c="${s.color}" data-s="${s.fontSize}" data-f="${s.fontFamily}"` +
+      ` data-b="${s.bold ? 1 : 0}" data-i="${s.italic ? 1 : 0}"` +
+      ` data-u="${s.underline ? 1 : 0}" data-st="${s.strike ? 1 : 0}"`;
+    parts.push(`<span style="${css}" ${data}>${esc(run.text) || "​"}</span>`);
+  }
+  return parts.join("");
+}
+
+/**
+ * Render blocks to semantic HTML (`<h1>`, nested `<ul>/<ol>` with `<li>`) used
+ * for BOTH the contentEditable editor and the on-screen display — the browser
+ * draws list markers, nesting and numbering natively. `fontSize` on the wrapper
+ * (set by the caller) scales headings (em-based) and list markers with zoom.
+ */
+export function blocksToSemanticHtml(blocks: TextBlock[], ann: TextAnnotation, scale: number): string {
+  const out: string[] = [];
+  // Stack of open list contexts: { tag, indent }.
+  const stack: Array<{ tag: "ul" | "ol"; indent: number }> = [];
+  const closeTo = (indent: number, sameTag?: "ul" | "ol") => {
+    while (
+      stack.length &&
+      (stack[stack.length - 1].indent > indent ||
+        (stack[stack.length - 1].indent === indent && sameTag && stack[stack.length - 1].tag !== sameTag))
+    ) {
+      out.push(`</li></${stack.pop()!.tag}>`);
+    }
+  };
+  const closeAll = () => {
+    while (stack.length) out.push(`</li></${stack.pop()!.tag}>`);
+  };
+
+  for (const b of blocks) {
+    if (b.kind === "li") {
+      const indent = Math.max(0, b.indent ?? 0);
+      const tag = b.list === "numbered" ? "ol" : "ul";
+      closeTo(indent, tag);
+      const top = stack[stack.length - 1];
+      if (top && top.indent === indent && top.tag === tag) {
+        out.push(`</li><li>`);
+      } else {
+        // Open deeper (or first) list level.
+        out.push(`<${tag}><li>`);
+        stack.push({ tag, indent });
+      }
+      out.push(blockInlineHtml(b, ann, scale, true));
+    } else {
+      closeAll();
+      const tag = b.kind === "p" ? "p" : b.kind; // h1/h2/h3/p
+      out.push(`<${tag}>${blockInlineHtml(b, ann, scale, true)}</${tag}>`);
+    }
+  }
+  closeAll();
+  return out.join("");
+}
+
+function readSpanStyleBlock(el: HTMLElement): Partial<TextRun> {
+  return readSpanStyle(el);
+}
+
+/**
+ * Parse a contentEditable root (semantic HTML from native editing) back into
+ * blocks. Recurses `<ul>/<ol>` for nesting/indent, reads `<h1..3>` as headings,
+ * everything else as paragraphs. Inline styling comes from the run spans.
+ */
+export function parseEditorBlocks(root: HTMLElement, ann: TextAnnotation): TextBlock[] {
+  const blocks: TextBlock[] = [];
+
+  const readRuns = (el: HTMLElement): TextRun[] => {
+    const runs: TextRun[] = [];
+    const walk = (node: Node, inherited: Partial<TextRun>) => {
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const t = (child.textContent ?? "").replace(/​/g, "");
+          if (t) runs.push({ ...inherited, text: t });
+        } else if (child instanceof HTMLElement) {
+          const tag = child.tagName;
+          if (tag === "BR") {
+            /* placeholder <br> in an empty/last line — carries no content */
+          } else if (tag === "UL" || tag === "OL" || tag === "LI") {
+            /* nested list handled by the block walker, skip here */
+          } else {
+            const style = { ...inherited, ...readSpanStyleBlock(child) };
+            // Bare <b>/<i>/<u>/<s> from execCommand carry semantics too.
+            if (tag === "B" || tag === "STRONG") style.bold = true;
+            if (tag === "I" || tag === "EM") style.italic = true;
+            if (tag === "U") style.underline = true;
+            if (tag === "S" || tag === "STRIKE" || tag === "DEL") style.strike = true;
+            walk(child, style);
+          }
+        }
+      }
+    };
+    walk(el, {});
+    return runs;
+  };
+
+  const clean = (runs: TextRun[], heading: boolean): TextRun[] =>
+    mergeRuns(
+      runs.map((r) => {
+        const o: TextRun = { text: r.text };
+        if (r.color !== undefined && r.color !== ann.color) o.color = r.color;
+        // Heading size/bold come from the block; don't persist them per-run.
+        if (!heading) {
+          if (r.fontSize !== undefined && r.fontSize !== ann.fontSize) o.fontSize = r.fontSize;
+          if (r.bold !== undefined && r.bold !== !!ann.bold) o.bold = r.bold;
+        }
+        if (r.fontFamily !== undefined && r.fontFamily !== (ann.fontFamily ?? "helvetica"))
+          o.fontFamily = r.fontFamily;
+        if (r.italic !== undefined && r.italic !== !!ann.italic) o.italic = r.italic;
+        if (r.underline !== undefined && r.underline !== !!ann.underline) o.underline = r.underline;
+        if (r.strike !== undefined && r.strike !== !!ann.strike) o.strike = r.strike;
+        return o;
+      }),
+    );
+
+  const walkList = (listEl: HTMLElement, list: "bullet" | "numbered", indent: number) => {
+    for (const li of Array.from(listEl.children)) {
+      if (!(li instanceof HTMLElement) || li.tagName !== "LI") continue;
+      blocks.push({ kind: "li", list, indent, runs: clean(readRuns(li), false) });
+      // Nested lists inside this <li>.
+      for (const child of Array.from(li.children)) {
+        if (child instanceof HTMLElement && (child.tagName === "UL" || child.tagName === "OL")) {
+          walkList(child, child.tagName === "OL" ? "numbered" : "bullet", indent + 1);
+        }
+      }
+    }
+  };
+
+  for (const node of Array.from(root.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = (node.textContent ?? "").replace(/​/g, "");
+      if (t.trim()) blocks.push({ kind: "p", runs: clean([{ text: t }], false) });
+      continue;
+    }
+    if (!(node instanceof HTMLElement)) continue;
+    const tag = node.tagName;
+    if (tag === "UL" || tag === "OL") {
+      walkList(node, tag === "OL" ? "numbered" : "bullet", 0);
+    } else if (tag === "H1" || tag === "H2" || tag === "H3") {
+      blocks.push({ kind: tag.toLowerCase() as BlockKind, runs: clean(readRuns(node), true) });
+    } else {
+      // <p>, <div>, or bare inline content → a paragraph.
+      blocks.push({ kind: "p", runs: clean(readRuns(node), false) });
+    }
+  }
+  // Never return zero blocks (keeps an empty box editable).
+  return blocks.length ? blocks : [{ kind: "p", runs: [] }];
+}
+
+/**
+ * Lay blocks out into lines (headings scaled, list items indented with a
+ * hanging marker column) and return the box width/height in PDF points.
+ */
+export function measureBlocks(
+  ann: TextAnnotation,
+  blocks: TextBlock[],
+  maxWidthPts: number,
+): { w: number; h: number } {
+  const ctx = (measureCtx ??= document.createElement("canvas").getContext("2d"));
+  if (!ctx) return { w: ann.w, h: ann.h };
+  const pad = ann.fontSize * 0.3 + 3;
+  const lh = ann.lineHeight ?? DEFAULT_LINE_HEIGHT;
+  const ls = ann.letterSpacing ?? 0;
+  const markers = computeMarkers(blocks);
+
+  if (!blocksHaveText(blocks)) {
+    return {
+      w: Math.min(maxWidthPts, Math.max(ann.fontSize * 2, ann.w, pad)),
+      h: ann.fontSize * lh + 3,
+    };
+  }
+
+  let widest = 0;
+  let totalH = 0;
+  blocks.forEach((b, bi) => {
+    const isHeading = HEADING_KINDS.includes(b.kind);
+    const bfs = blockFontSize(b, ann);
+    const indentX = b.kind === "li" ? (b.indent ?? 0) * LIST_INDENT_PTS : 0;
+    let markerW = 0;
+    if (b.kind === "li") {
+      ctx.font = `700 ${bfs}px ${ann.displayFontCss || FONT_CSS[ann.fontFamily ?? "helvetica"]}`;
+      markerW = ctx.measureText(markers[bi]).width + LIST_MARKER_GAP_PTS;
+    }
+    const textX = indentX + markerW;
+    const usable = maxWidthPts - pad - textX;
+
+    // Tokenise this block's runs.
+    type Tok = { text: string; s: ResolvedStyle };
+    const toks: Tok[] = [];
+    for (const run of b.runs) {
+      const s = resolveBlockRun(run, b, ann);
+      for (const w of run.text.split(/(\s+)/)) if (w) toks.push({ text: w, s });
+    }
+    let lineW = 0;
+    let lineMax = 0;
+    let lines = 0;
+    const flush = () => {
+      widest = Math.max(widest, textX + lineW);
+      totalH += (lineMax || bfs) * lh;
+      lineW = 0;
+      lineMax = 0;
+      lines++;
+    };
+    for (const t of toks) {
+      ctx.font = ctxFont(t.s, ann);
+      const w = ctx.measureText(t.text).width + ls * t.text.length;
+      if (lineW > 0 && lineW + w > usable) flush();
+      lineW += w;
+      lineMax = Math.max(lineMax, t.s.fontSize);
+    }
+    flush();
+    if (lines === 0) totalH += bfs * lh;
+    // Extra breathing room above headings (except the first block).
+    if (isHeading && bi > 0) totalH += bfs * 0.3;
+  });
+
   return { w: Math.min(maxWidthPts, Math.max(ann.fontSize * 2, widest + pad)), h: totalH + 3 };
 }

@@ -11,14 +11,14 @@ import {
   snapMovingRect,
   snapResizingRect,
 } from "../../lib/formbuilder";
-import { RichTextEditor, type RichTextHandle } from "./RichTextEditor";
+import { BlockTextEditor } from "./BlockTextEditor";
 import {
   DEFAULT_LINE_HEIGHT,
-  getRuns,
-  measureRichText,
-  mergeRuns,
-  runsText,
-  runsToHtml,
+  blocksHaveText,
+  blocksPlainText,
+  blocksToSemanticHtml,
+  getBlocks,
+  measureBlocks,
 } from "../../lib/richtext";
 import type { PageDims } from "./types";
 import { FONT_CSS } from "./textedit";
@@ -636,9 +636,8 @@ function AnnotationItem({
   const [editing, setEditing] = useState(
     ann.kind === "text" && ann.text === "",
   );
-  const richRef = useRef<RichTextHandle | null>(null);
-  // Tracks whether the box has any typed content, updated live from
-  // RichTextEditor's onRunsChange (ann.text itself only updates on commit) —
+  // Tracks whether the box has any typed content, updated live from the
+  // editor's onChange (ann.text itself only updates on commit) —
   // drives the "empty placeholder" look (dashed border, hint text, handles).
   const [hasContent, setHasContent] = useState(
     ann.kind !== "text" || !!ann.text.trim(),
@@ -697,7 +696,7 @@ function AnnotationItem({
   // Seed / clear the auto-grow size as editing toggles.
   useEffect(() => {
     if (editing && ann.kind === "text") {
-      setEditSize(measureRichText(ann, getRuns(ann), maxTextWidth));
+      setEditSize(measureBlocks(ann, getBlocks(ann), maxTextWidth));
     } else {
       setEditSize(null);
     }
@@ -1215,36 +1214,31 @@ function AnnotationItem({
     case "text": {
       const textAnn = ann;
       body = editing ? (
-        <RichTextEditor
-          ref={richRef}
+        <BlockTextEditor
           ann={textAnn}
           scale={scale}
-          maxWidth={maxTextWidth}
           style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
-          onRunsChange={(runs) => {
-            setEditSize(measureRichText(textAnn, runs, maxTextWidth));
-            setHasContent(!!runsText(runs).trim());
-          }}
-          onCommit={(runs, focusTo) => {
+          onChange={(blocks) => setHasContent(blocksHaveText(blocks))}
+          onSize={(h) => setEditSize({ w: textAnn.w, h })}
+          onCommit={(blocks, focusTo) => {
             // Focus moving to a style control (popover or toolbar) means the
             // user is styling, not finishing — commit text, keep editing.
             const toControls =
               focusTo?.closest?.("[data-ann-controls]") ??
               document.activeElement?.closest("[data-ann-controls]");
-            const plain = runsText(runs);
-            if (!plain.trim()) {
+            if (!blocksHaveText(blocks)) {
               if (!toControls) {
                 setEditing(false);
                 app.removeAnnotation(pageIndex, ann.id);
               }
               return;
             }
-            const size = measureRichText(textAnn, runs, maxTextWidth);
-            const rich = mergeRuns(runs);
+            const size = measureBlocks(textAnn, blocks, maxTextWidth);
             app.updateAnnotation(pageIndex, {
               ...textAnn,
-              text: plain,
-              runs: rich.length > 1 || (rich[0] && Object.keys(rich[0]).length > 1) ? rich : undefined,
+              text: blocksPlainText(blocks),
+              blocks,
+              runs: undefined,
               w: size.w,
               h: size.h,
             });
@@ -1253,9 +1247,11 @@ function AnnotationItem({
         />
       ) : (
         <div
-          className="h-full w-full whitespace-pre-wrap"
+          className="richtext-blocks h-full w-full break-words"
           style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
-          dangerouslySetInnerHTML={{ __html: runsToHtml(getRuns(textAnn), textAnn, scale) }}
+          dangerouslySetInnerHTML={{
+            __html: blocksToSemanticHtml(getBlocks(textAnn), textAnn, scale),
+          }}
         />
       );
       break;

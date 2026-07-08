@@ -47,6 +47,7 @@ import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
 import {
+  BlockFormatControls,
   ColorPresets,
   FillControl,
   FONT_OPTIONS,
@@ -59,6 +60,7 @@ import {
   TextStyleControls,
 } from "./StyleControls";
 import { activeTextEditor } from "../../lib/activeTextEditor";
+import { activeBlockEditor } from "../../lib/activeBlockEditor";
 import { activeInlineEdit } from "../../lib/activeInlineEdit";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
@@ -411,6 +413,11 @@ export function EditorToolbar() {
   const liveEditor =
     selectedText && activeTextEditor.current?.annId === selectedText.id
       ? activeTextEditor.current
+      : null;
+  // Block-format controls (headings/lists) are live only while editing the box.
+  const liveBlockEditor =
+    selectedText && activeBlockEditor.current?.annId === selectedText.id
+      ? activeBlockEditor.current
       : null;
   const sel = <K extends "bold" | "italic" | "underline" | "strike">(
     key: K,
@@ -839,6 +846,7 @@ export function EditorToolbar() {
             </div>
           )
         ) : showFontControls ? (
+          <>
           <TextStyleControls
             value={{
               color:
@@ -894,6 +902,31 @@ export function EditorToolbar() {
               });
             }}
           />
+          {liveBlockEditor && (
+            <>
+              <Separator orientation="vertical" className="mx-0.5 h-6 shrink-0" />
+              <BlockFormatControls
+                state={liveBlockEditor.state()}
+                setKind={(k) => {
+                  liveBlockEditor.setKind(k);
+                  bumpSel();
+                }}
+                toggleList={(l) => {
+                  liveBlockEditor.toggleList(l);
+                  bumpSel();
+                }}
+                indent={() => {
+                  liveBlockEditor.indent();
+                  bumpSel();
+                }}
+                outdent={() => {
+                  liveBlockEditor.outdent();
+                  bumpSel();
+                }}
+              />
+            </>
+          )}
+          </>
         ) : styleAnn ? (
           // A selected shape / drawing / highlight / whiteout — edit it directly.
           <>
