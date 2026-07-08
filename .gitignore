@@ -6,3 +6,6 @@ src-tauri/target/
 
 # Unrelated project files that live alongside this repo
 landing/
+
+# Use bun.lock only; npm lock (esp. Windows-generated) breaks Linux rollup native deps
+package-lock.json

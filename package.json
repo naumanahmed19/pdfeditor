@@ -10,7 +10,8 @@
     "test:watch": "vitest",
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "msix": "powershell -ExecutionPolicy Bypass -File scripts/build-msix.ps1"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.9",
