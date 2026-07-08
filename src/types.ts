@@ -49,7 +49,11 @@ export type FontFamilyKind =
   | "times"
   | "courier"
   | "carlito" // metric-compatible with Calibri (bundled)
-  | "caladea"; // metric-compatible with Cambria (bundled)
+  | "caladea" // metric-compatible with Cambria (bundled)
+  | "roboto" // bundled (OFL)
+  | "opensans" // bundled (OFL)
+  | "montserrat" // bundled (OFL)
+  | "lora"; // bundled serif (OFL)
 
 /** A styled span of a rich text box. Unset style fields inherit the box's. */
 export interface TextRun {
@@ -78,6 +82,10 @@ export interface TextAnnotation extends BaseAnnotation {
   strike?: boolean;
   /** Paragraph alignment for the whole box. */
   align?: "left" | "center" | "right";
+  /** Line-height multiplier for the whole box (defaults to DEFAULT_LINE_HEIGHT). */
+  lineHeight?: number;
+  /** Extra spacing between characters, in PDF points (defaults to 0). */
+  letterSpacing?: number;
   /** Exact CSS font-family for on-screen display (e.g. the embedded PDF font). */
   displayFontCss?: string;
 }

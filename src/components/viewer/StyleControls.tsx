@@ -1,11 +1,14 @@
 // Shared annotation style controls — ONE implementation used by both the
 // editor toolbar (tool defaults / selected annotation) and the selection
 // popover, so the two always look and behave identically.
+import { useEffect, useState } from "react";
 import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  Baseline,
   Bold,
+  ChevronDown,
   Italic,
   Plus,
   Strikethrough,
@@ -13,11 +16,13 @@ import {
 } from "lucide-react";
 import { ColorPopover } from "../ui/color-popover";
 import { ColorSwatch } from "../ui/color-swatch";
+import { Input } from "../ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Select } from "../ui/select";
 import { Separator } from "../ui/separator";
 import { Tip } from "../ui/tooltip";
 import { ToggleGroupItem } from "../ui/toggle-group";
-import { hexToRgb01 } from "../../lib/utils";
+import { cn, hexToRgb01 } from "../../lib/utils";
 import type { FontFamilyKind } from "../../types";
 
 /** Perceived-luminance check so overlay icons stay readable on any color. */
@@ -28,13 +33,163 @@ function isDarkColor(hex: string): boolean {
 
 export const FONT_OPTIONS: Array<{ v: FontFamilyKind; label: string }> = [
   { v: "helvetica", label: "Helvetica" },
-  { v: "times", label: "Times" },
-  { v: "courier", label: "Courier" },
+  { v: "roboto", label: "Roboto" },
+  { v: "opensans", label: "Open Sans" },
+  { v: "montserrat", label: "Montserrat" },
   { v: "carlito", label: "Carlito (Calibri)" },
+  { v: "times", label: "Times" },
+  { v: "lora", label: "Lora" },
   { v: "caladea", label: "Caladea (Cambria)" },
+  { v: "courier", label: "Courier" },
 ];
 
-export const FONT_SIZES = [10, 12, 14, 16, 18, 22, 28, 36];
+/** Sentinel value for the "Request a font…" picker entry (not a real family). */
+export const REQUEST_FONT_VALUE = "__request_font__";
+
+// Where "Request a font…" sends users. Change this to your support inbox/form.
+const FONT_REQUEST_EMAIL = "naumanahmed19@gmail.com";
+
+/** Open the user's mail client with a prefilled font request. */
+function requestFont() {
+  const subject = encodeURIComponent("PickPDF — font request");
+  const body = encodeURIComponent(
+    "Which font would you like added to PickPDF?\n\nFont name:\nLink (optional):\n",
+  );
+  window.open(`mailto:${FONT_REQUEST_EMAIL}?subject=${subject}&body=${body}`, "_blank");
+}
+
+export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
+export const MIN_FONT_SIZE = 1;
+export const MAX_FONT_SIZE = 400;
+
+/** Format a number for display: fixed decimals, trailing zeros trimmed. */
+function fmtNum(n: number, decimals: number): string {
+  const s = n.toFixed(decimals);
+  return decimals > 0 ? s.replace(/\.?0+$/, "") : s;
+}
+
+/**
+ * Editable numeric combobox — type any value (clamped to [min, max] and rounded
+ * to `decimals`) OR pick a preset from the chevron dropdown. Reused for font
+ * size, line height and letter spacing. `↑/↓` nudge by `step`.
+ */
+export function NumberComboField({
+  value,
+  onChange,
+  presets,
+  min,
+  max,
+  step,
+  decimals = 0,
+  suffix = "",
+  formatOption,
+  ariaLabel,
+  fieldClassName = "w-[4.5rem]",
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  presets: number[];
+  min: number;
+  max: number;
+  step: number;
+  decimals?: number;
+  /** Small adornment shown inside the input, e.g. "pt" or "×". */
+  suffix?: string;
+  /** Dropdown label for a preset (defaults to formatted value + suffix). */
+  formatOption?: (n: number) => string;
+  ariaLabel: string;
+  /** Width utility for the input (defaults to w-[4.5rem]). */
+  fieldClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(fmtNum(value, decimals));
+  // Follow the external value (selection change, preset pick, arrow keys).
+  useEffect(() => setDraft(fmtNum(value, decimals)), [value, decimals]);
+
+  const roundClamp = (n: number) =>
+    Number(Math.min(max, Math.max(min, n)).toFixed(decimals));
+
+  const commit = () => {
+    const n = Number(draft);
+    if (draft.trim() !== "" && Number.isFinite(n)) {
+      const v = roundClamp(n);
+      onChange(v);
+      setDraft(fmtNum(v, decimals));
+    } else {
+      setDraft(fmtNum(value, decimals)); // revert empty / invalid entry
+    }
+  };
+
+  // Digits only when integer; allow a single decimal point otherwise.
+  const filter = (raw: string) =>
+    (decimals > 0 ? raw.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1") : raw.replace(/[^\d]/g, "")).slice(0, 6);
+
+  const optionLabel = formatOption ?? ((n: number) => `${fmtNum(n, decimals)}${suffix}`);
+
+  return (
+    <div className="relative flex items-center">
+      <Input
+        inputMode={decimals > 0 ? "decimal" : "numeric"}
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(e) => setDraft(filter(e.target.value))}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+            e.currentTarget.blur();
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            onChange(roundClamp(value + step));
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            onChange(roundClamp(value - step));
+          }
+        }}
+        className={cn("h-8 pr-9 text-xs", fieldClassName)}
+      />
+      {suffix && (
+        <span className="pointer-events-none absolute right-6 text-[10px] text-muted-foreground">
+          {suffix}
+        </span>
+      )}
+      <Popover open={open} onOpenChange={setOpen}>
+        <Tip label="Presets">
+          <PopoverTrigger
+            aria-label={`${ariaLabel} presets`}
+            className="absolute right-0 flex h-8 w-6 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </PopoverTrigger>
+        </Tip>
+        {/* data-ann-controls: picking a preset must not end the text-editing session. */}
+        <PopoverContent data-ann-controls align="end" className="max-h-64 w-24 overflow-y-auto p-1">
+          <div className="flex flex-col">
+            {presets.map((s) => (
+              <button
+                key={s}
+                type="button"
+                // Keep focus/selection where it is, then apply.
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onChange(roundClamp(s));
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex h-8 items-center rounded-sm px-2 text-sm hover:bg-muted",
+                  s === value && "bg-muted font-medium",
+                )}
+              >
+                {optionLabel(s)}
+              </button>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
 
 export interface TextStyleValue {
   color: string;
@@ -46,7 +201,14 @@ export interface TextStyleValue {
   strike: boolean;
   /** Box-level paragraph alignment. */
   align: "left" | "center" | "right";
+  /** Box-level line-height multiplier. */
+  lineHeight: number;
+  /** Box-level letter spacing, in PDF points. */
+  letterSpacing: number;
 }
+
+export const LINE_HEIGHT_OPTIONS = [1, 1.15, 1.25, 1.5, 1.75, 2];
+export const LETTER_SPACING_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
 
 /** shadcn-style toggle: 32px square, primary fill when pressed. */
 export function StyleToggle({
@@ -96,7 +258,13 @@ export function TextStyleControls({
     <>
       <Select
         value={value.fontFamily}
-        onChange={(e) => onPatch({ fontFamily: e.target.value as FontFamilyKind })}
+        onChange={(e) => {
+          if (e.target.value === REQUEST_FONT_VALUE) {
+            requestFont();
+            return;
+          }
+          onPatch({ fontFamily: e.target.value as FontFamilyKind });
+        }}
         aria-label="Font family"
         className="h-8 w-24 px-2 text-xs"
       >
@@ -105,21 +273,18 @@ export function TextStyleControls({
             {f.label}
           </option>
         ))}
+        <option value={REQUEST_FONT_VALUE}>Request a font…</option>
       </Select>
-      <Select
-        value={String(value.fontSize)}
-        onChange={(e) => onPatch({ fontSize: Number(e.target.value) })}
-        aria-label="Font size"
-        className="h-8 w-[4.75rem] px-2 text-xs"
-      >
-        {[...new Set([...FONT_SIZES, value.fontSize])]
-          .sort((a, b) => a - b)
-          .map((s) => (
-            <option key={s} value={s}>
-              {s}pt
-            </option>
-          ))}
-      </Select>
+      <NumberComboField
+        value={value.fontSize}
+        onChange={(fontSize) => onPatch({ fontSize })}
+        presets={FONT_SIZES}
+        min={MIN_FONT_SIZE}
+        max={MAX_FONT_SIZE}
+        step={1}
+        suffix="pt"
+        ariaLabel="Font size"
+      />
       <Separator orientation="vertical" className="mx-0.5 h-6" />
       <StyleToggle
         label="Bold"
@@ -155,6 +320,52 @@ export function TextStyleControls({
           onPressedChange={() => onPatch({ align: a.v })}
         />
       ))}
+      <Separator orientation="vertical" className="mx-0.5 h-6" />
+      <Popover>
+        <Tip label="Line & letter spacing">
+          <PopoverTrigger
+            aria-label="Line & letter spacing"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent data-[popup-open]:bg-accent"
+          >
+            <Baseline className="h-4 w-4" />
+          </PopoverTrigger>
+        </Tip>
+        {/* data-ann-controls: adjusting spacing must not end the text-editing
+            session (see Viewer's onOpenChange / the editor's onCommit). */}
+        <PopoverContent data-ann-controls align="start" className="w-56 p-3">
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2 text-xs font-medium">
+              <span className="text-muted-foreground">Line height</span>
+              <NumberComboField
+                value={value.lineHeight}
+                onChange={(lineHeight) => onPatch({ lineHeight })}
+                presets={LINE_HEIGHT_OPTIONS}
+                min={0.5}
+                max={4}
+                step={0.05}
+                decimals={2}
+                suffix="×"
+                ariaLabel="Line height"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2 text-xs font-medium">
+              <span className="text-muted-foreground">Letter spacing</span>
+              <NumberComboField
+                value={value.letterSpacing}
+                onChange={(letterSpacing) => onPatch({ letterSpacing })}
+                presets={LETTER_SPACING_OPTIONS}
+                min={0}
+                max={20}
+                step={0.5}
+                decimals={1}
+                suffix="pt"
+                formatOption={(n) => (n === 0 ? "None" : `${fmtNum(n, 1)}pt`)}
+                ariaLabel="Letter spacing"
+              />
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
       <Separator orientation="vertical" className="mx-0.5 h-6" />
       <ColorPopover
         label="Text color"

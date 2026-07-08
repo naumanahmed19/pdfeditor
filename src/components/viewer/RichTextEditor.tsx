@@ -166,9 +166,12 @@ export const RichTextEditor = forwardRef<
       onInput={() => onRunsChange(readRuns())}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
-          // Insert a plain newline rather than the browser's <div>/<br> soup.
+          // `insertLineBreak` reliably yields a real "\n" in the flat run model.
+          // A bare `insertText("\n")` gets turned into <div>/<p> block soup by
+          // the browser — especially a trailing Enter — which drops the newline
+          // entirely when parseEditorRuns walks the DOM back into runs.
           e.preventDefault();
-          document.execCommand("insertText", false, "\n");
+          document.execCommand("insertLineBreak");
         }
       }}
       onPaste={(e) => {

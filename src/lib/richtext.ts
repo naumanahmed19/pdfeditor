@@ -14,12 +14,19 @@ export interface ResolvedStyle {
   strike: boolean;
 }
 
+/** Default line-height multiplier for a text box when `lineHeight` is unset. */
+export const DEFAULT_LINE_HEIGHT = 1.25;
+
 export const FONT_CSS: Record<FontFamilyKind, string> = {
   helvetica: "Helvetica, Arial, sans-serif",
   times: "'Times New Roman', Times, serif",
   courier: "'Courier New', Courier, monospace",
   carlito: "Carlito, Calibri, sans-serif",
   caladea: "Caladea, Cambria, serif",
+  roboto: "Roboto, Arial, sans-serif",
+  opensans: "'Open Sans', Arial, sans-serif",
+  montserrat: "Montserrat, Arial, sans-serif",
+  lora: "Lora, Georgia, serif",
 };
 
 /** A run's style with the box-level defaults filled in. */
@@ -328,6 +335,8 @@ export function measureRichText(
   const ctx = (measureCtx ??= document.createElement("canvas").getContext("2d"));
   if (!ctx) return { w: ann.w, h: ann.h };
   const pad = ann.fontSize * 0.3 + 3;
+  const lh = ann.lineHeight ?? DEFAULT_LINE_HEIGHT;
+  const ls = ann.letterSpacing ?? 0;
 
   // Flatten runs into styled words split on spaces and newlines.
   type Tok = { text: string; nl: boolean; s: ResolvedStyle };
@@ -348,7 +357,7 @@ export function measureRichText(
   if (!toks.length) {
     return {
       w: Math.min(maxWidthPts, Math.max(ann.fontSize * 2, ann.w, pad)),
-      h: ann.fontSize * 1.25 + 3,
+      h: ann.fontSize * lh + 3,
     };
   }
 
@@ -359,7 +368,7 @@ export function measureRichText(
   let totalH = 0;
   const flush = () => {
     widest = Math.max(widest, lineW);
-    totalH += (lineMax || ann.fontSize) * 1.25;
+    totalH += (lineMax || ann.fontSize) * lh;
     lineW = 0;
     lineMax = 0;
   };
@@ -369,7 +378,8 @@ export function measureRichText(
       continue;
     }
     ctx.font = ctxFont(t.s, ann);
-    const w = ctx.measureText(t.text).width;
+    // Letter-spacing adds `ls` after every glyph (CSS applies it per char).
+    const w = ctx.measureText(t.text).width + ls * t.text.length;
     if (lineW > 0 && lineW + w > usable) flush();
     lineW += w;
     lineMax = Math.max(lineMax, t.s.fontSize);

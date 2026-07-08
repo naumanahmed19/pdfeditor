@@ -844,7 +844,7 @@ export function EditorToolbar() {
               color:
                 liveEditor?.styleValue("color") ??
                 selectedText?.color ??
-                app.toolColor,
+                app.fontColor,
               fontFamily,
               fontSize:
                 liveEditor?.styleValue("fontSize") ??
@@ -855,10 +855,12 @@ export function EditorToolbar() {
               underline: isUnderline,
               strike: isStrike,
               align: alignValue,
+              lineHeight: selectedText?.lineHeight ?? app.lineHeight,
+              letterSpacing: selectedText?.letterSpacing ?? app.letterSpacing,
             }}
             onPatch={(p) => {
               // Tool defaults follow the last choice so new boxes match.
-              if (p.color !== undefined) app.setToolColor(p.color);
+              if (p.color !== undefined) app.setFontColor(p.color);
               if (p.fontFamily !== undefined) app.setFontFamily(p.fontFamily);
               if (p.fontSize !== undefined) app.setFontSize(p.fontSize);
               if (p.bold !== undefined) app.setFontBold(p.bold);
@@ -866,9 +868,14 @@ export function EditorToolbar() {
               if (p.underline !== undefined) app.setFontUnderline(p.underline);
               if (p.strike !== undefined) app.setFontStrike(p.strike);
               if (p.align !== undefined) app.setTextAlign(p.align);
-              // Alignment is a box property — always patch the annotation directly.
-              const { align, ...runPatch } = p;
+              if (p.lineHeight !== undefined) app.setLineHeight(p.lineHeight);
+              if (p.letterSpacing !== undefined) app.setLetterSpacing(p.letterSpacing);
+              // Alignment, line-height & letter-spacing are whole-box properties —
+              // always patch the annotation directly, never the run selection.
+              const { align, lineHeight, letterSpacing, ...runPatch } = p;
               if (align !== undefined) patchSelectedText({ align });
+              if (lineHeight !== undefined) patchSelectedText({ lineHeight });
+              if (letterSpacing !== undefined) patchSelectedText({ letterSpacing });
               if (!Object.keys(runPatch).length) return;
               // Editing a box → style its current selection; an empty box has
               // nothing to style yet (returns false) → patch the box itself.

@@ -172,6 +172,30 @@ export const BUNDLED_FONT_FILES: Record<string, [string, string, string, string]
     "/fonts/Caladea-Italic.ttf",
     "/fonts/Caladea-BoldItalic.ttf",
   ],
+  roboto: [
+    "/fonts/Roboto-Regular.ttf",
+    "/fonts/Roboto-Bold.ttf",
+    "/fonts/Roboto-Italic.ttf",
+    "/fonts/Roboto-BoldItalic.ttf",
+  ],
+  opensans: [
+    "/fonts/OpenSans-Regular.ttf",
+    "/fonts/OpenSans-Bold.ttf",
+    "/fonts/OpenSans-Italic.ttf",
+    "/fonts/OpenSans-BoldItalic.ttf",
+  ],
+  montserrat: [
+    "/fonts/Montserrat-Regular.ttf",
+    "/fonts/Montserrat-Bold.ttf",
+    "/fonts/Montserrat-Italic.ttf",
+    "/fonts/Montserrat-BoldItalic.ttf",
+  ],
+  lora: [
+    "/fonts/Lora-Regular.ttf",
+    "/fonts/Lora-Bold.ttf",
+    "/fonts/Lora-Italic.ttf",
+    "/fonts/Lora-BoldItalic.ttf",
+  ],
 };
 export const FONT_CSS: Record<string, string> = {
   helvetica: "Helvetica, Arial, sans-serif",
@@ -179,6 +203,10 @@ export const FONT_CSS: Record<string, string> = {
   courier: '"Courier New", Courier, monospace',
   carlito: "Carlito, Calibri, sans-serif",
   caladea: "Caladea, Cambria, serif",
+  roboto: "Roboto, Arial, sans-serif",
+  opensans: "'Open Sans', Arial, sans-serif",
+  montserrat: "Montserrat, Arial, sans-serif",
+  lora: "Lora, Georgia, serif",
 };
 
 /** Best-effort family/weight/slant from a PDF base font name. */
@@ -213,6 +241,6 @@ export async function resolveTextFont(
       /* fall back to the metric-compatible standard font */
     }
   }
-  const sub = family === "caladea" ? "times" : "helvetica";
+  const sub = family === "caladea" || family === "lora" ? "times" : "helvetica";
   return { standardName: STD_FONT_NAMES[sub][idx] };
 }

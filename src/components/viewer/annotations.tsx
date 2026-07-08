@@ -13,6 +13,7 @@ import {
 } from "../../lib/formbuilder";
 import { RichTextEditor, type RichTextHandle } from "./RichTextEditor";
 import {
+  DEFAULT_LINE_HEIGHT,
   getRuns,
   measureRichText,
   mergeRuns,
@@ -49,9 +50,15 @@ function warnWhiteoutOnce() {
   });
 }
 
-/** CSS font properties for displaying a text annotation on screen. */
-/** Single source of truth for text line spacing (editor, display, sizing). */
-const TEXT_LINE_HEIGHT = 1.25;
+/** CSS style for a text box's line spacing / tracking, shared by the editor,
+ *  the on-screen display and the empty-box placeholder. `scale` converts the
+ *  point-based letter-spacing to on-screen pixels. */
+function textSpacingStyle(ann: TextAnnotation, scale: number): React.CSSProperties {
+  return {
+    lineHeight: ann.lineHeight ?? DEFAULT_LINE_HEIGHT,
+    letterSpacing: (ann.letterSpacing ?? 0) * scale,
+  };
+}
 
 /** Pencil cursor for the freehand tool (lucide pencil with a white halo so it
  *  reads on any page color); hotspot at the pencil tip, crosshair fallback. */
@@ -154,13 +161,15 @@ export function AnnotationLayer({
         h: app.fontSize * 2,
         text: "",
         fontSize: app.fontSize,
-        color: app.toolColor,
+        color: app.fontColor,
         fontFamily: app.fontFamily,
         bold: app.fontBold,
         italic: app.fontItalic,
         underline: app.fontUnderline,
         strike: app.fontStrike,
         align: app.textAlign,
+        lineHeight: app.lineHeight,
+        letterSpacing: app.letterSpacing,
       };
       app.addAnnotation(pageIndex, ann);
       app.setSelected({ page: pageIndex, id: ann.id });
@@ -319,9 +328,11 @@ export function AnnotationLayer({
             h: app.fontSize * 2,
             text: "",
             fontSize: app.fontSize,
-            color: app.toolColor,
+            color: app.fontColor,
             fontFamily: app.fontFamily,
             align: app.textAlign,
+            lineHeight: app.lineHeight,
+            letterSpacing: app.letterSpacing,
           };
           app.addAnnotations(pageIndex, [arrow, text]);
           app.setSelected({ page: pageIndex, id: text.id });
@@ -1205,7 +1216,7 @@ function AnnotationItem({
           ann={textAnn}
           scale={scale}
           maxWidth={maxTextWidth}
-          style={{ lineHeight: TEXT_LINE_HEIGHT, textAlign: textAnn.align ?? "left" }}
+          style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
           onRunsChange={(runs) => {
             setEditSize(measureRichText(textAnn, runs, maxTextWidth));
             setHasContent(!!runsText(runs).trim());
@@ -1239,7 +1250,7 @@ function AnnotationItem({
       ) : (
         <div
           className="h-full w-full whitespace-pre-wrap"
-          style={{ lineHeight: TEXT_LINE_HEIGHT, textAlign: textAnn.align ?? "left" }}
+          style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
           dangerouslySetInnerHTML={{ __html: runsToHtml(getRuns(textAnn), textAnn, scale) }}
         />
       );
@@ -1295,6 +1306,7 @@ function AnnotationItem({
             fontFamily: ann.displayFontCss || FONT_CSS[ann.fontFamily ?? "helvetica"],
             fontWeight: ann.bold ? 700 : 400,
             fontStyle: ann.italic ? "italic" : "normal",
+            letterSpacing: (ann.letterSpacing ?? 0) * scale,
             textDecoration:
               [ann.underline && "underline", ann.strike && "line-through"]
                 .filter(Boolean)
