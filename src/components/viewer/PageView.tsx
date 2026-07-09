@@ -16,6 +16,7 @@ import {
   mapLineEditToRuns,
   detectFontFromName,
   resolveTextFont,
+  trustedStandardFont,
 } from "./textedit";
 import { collectParagraph } from "./paragraph";
 import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
@@ -529,7 +530,16 @@ export function PageView({
           if (!fresh.length) continue;
           const info = await app.getTextFontInfo(pageIndex, run.objectIndex);
           const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
-          const runBad = missing === null ? fresh : missing;
+          // Unverifiable coverage (no parseable program) usually means a
+          // non-embedded standard face — viewers render those with their own
+          // complete font, so Latin text is safe. Anything else stays on the
+          // conservative "treat as missing" path.
+          const runBad =
+            missing === null
+              ? trustedStandardFont(run.fontName, fresh)
+                ? []
+                : fresh
+              : missing;
           if (runBad.length) {
             if (!substitute) badFace = run.fontName.replace(/^[A-Z]{6}\+/, "");
             substitute = true;

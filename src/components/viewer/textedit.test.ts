@@ -6,6 +6,7 @@ import {
   collectLine,
   mapLineEditToRuns,
   resolveTextFont,
+  trustedStandardFont,
   type InlineEdit,
   type InlineEditRun,
 } from "./textedit";
@@ -158,5 +159,29 @@ describe("resolveTextFont", () => {
 
   it("substitutes an unknown family with a metric-compatible standard face", async () => {
     expect(await resolveTextFont("nonesuch", false, false)).toEqual({ standardName: "Helvetica" });
+  });
+});
+
+describe("trustedStandardFont", () => {
+  it("trusts non-subset standard faces with Latin text", () => {
+    expect(trustedStandardFont("Helvetica", ["x", "Z", "é"])).toBe(true);
+    expect(trustedStandardFont("Helvetica-Bold", ["q"])).toBe(true);
+    expect(trustedStandardFont("Times New Roman", ["x"])).toBe(true);
+    expect(trustedStandardFont("Courier-Oblique", ["#"])).toBe(true);
+    expect(trustedStandardFont("Arial,Bold", ["w"])).toBe(true);
+  });
+
+  it("never trusts subset fonts, even standard-named ones", () => {
+    expect(trustedStandardFont("ABCDEF+Helvetica", ["x"])).toBe(false);
+  });
+
+  it("does not trust unknown or symbol faces", () => {
+    expect(trustedStandardFont("Lato-Regular", ["x"])).toBe(false);
+    expect(trustedStandardFont("Symbol", ["x"])).toBe(false);
+  });
+
+  it("does not vouch for characters outside Latin coverage", () => {
+    expect(trustedStandardFont("Helvetica", ["日"])).toBe(false);
+    expect(trustedStandardFont("Helvetica", ["x", "→"])).toBe(false);
   });
 });
