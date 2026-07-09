@@ -545,7 +545,7 @@ const QUICK_TOOLS: Array<{
   { screen: "organize", label: "Organize", desc: "Reorder, rotate, delete or add pages", icon: LayoutGrid, color: "text-violet-500" },
   { screen: "merge", label: "Merge", desc: "Combine multiple PDFs into one", icon: Combine, color: "text-blue-500" },
   { screen: "split", label: "Split & extract", desc: "Extract pages or split into files", icon: Scissors, color: "text-emerald-500" },
-  { screen: "compress", label: "Compress", desc: "Reduce file size without quality loss", icon: Minimize2, color: "text-red-500" },
+  { screen: "compress", label: "Compress", desc: "Shrink images with adjustable quality", icon: Minimize2, color: "text-red-500" },
   { screen: "watermark", label: "Watermark", desc: "Add text or image watermarks", icon: Droplets, color: "text-amber-500" },
   { screen: "headerfooter", label: "Headers & footers", desc: "Add page numbers, headers & footers", icon: Heading, color: "text-sky-500" },
   { screen: "crop", label: "Crop", desc: "Crop pages and adjust page size", icon: Crop, color: "text-purple-500" },

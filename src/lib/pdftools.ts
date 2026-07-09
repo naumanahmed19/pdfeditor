@@ -232,7 +232,10 @@ export async function addWatermark(
  * Crop pages: `rect` is the area to KEEP, in display points of the rotated
  * page as shown in the viewer (top-left origin, scale 1) — the same space
  * annotations use. Sets the CropBox (what viewers show); `permanent` also
- * rewrites the MediaBox so the cropped area is gone for every consumer.
+ * rewrites the MediaBox so every consumer shows only the kept area. Content
+ * streams are untouched either way: whatever lies outside the boxes stays in
+ * the file and is recoverable by enlarging them — this is a view change, not
+ * a redaction.
  */
 export async function cropPages(
   bytes: Uint8Array,

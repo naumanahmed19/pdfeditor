@@ -1109,8 +1109,8 @@ export function CropScreen() {
                 onCheckedChange={(v: boolean) => setPermanent(v)}
               />
               <span>
-                Remove the cropped area permanently (rewrites the page boundaries; otherwise the
-                crop only hides it and can be undone by editing the page boxes later)
+                Rewrite the page boundaries so all viewers show only the cropped area (content
+                outside remains in the file either way — cropping never deletes it)
               </span>
             </label>
             <div className="pt-3">
