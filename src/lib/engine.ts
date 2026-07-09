@@ -13,6 +13,7 @@ import { init, type WrappedPdfiumModule } from "@embedpdf/pdfium";
 import wasmUrl from "@embedpdf/pdfium/pdfium.wasm?url";
 import type { OutlineNode } from "../types";
 import type { Matrix, ObjectStyle, PageObject, Rgba } from "./pdfium";
+import { fixDegenerateBoxes, segmentChars, type CharBox, type SegChar } from "./textselect";
 
 const FPDF_ANNOT = 0x01;
 const FPDF_LCD_TEXT = 0x02;
@@ -133,6 +134,9 @@ export interface TextRunGeom {
   w: number;
   h: number;
   text: string;
+  /** Per-character boxes (display space), aligned 1:1 with UTF-16 indices of
+   *  `text` — the basis of caret hit-testing in the selection layer. */
+  chars?: CharBox[];
 }
 
 export interface LinkGeom {
@@ -595,8 +599,39 @@ export class PdfPage {
   }
 
   /**
-   * Text runs with display-space geometry — the basis of the selectable
-   * text layer. PDFium groups contiguous same-line text into rects.
+   * Affine map from PDF page space (origin bottom-left) to display space at
+   * scale 1 (origin top-left, rotation/crop applied): dx = a·x + b·y + e,
+   * dy = c·x + d·y + f as [a, b, c, d, e, f]. Derived from three
+   * FPDF_PageToDevice samples; device coords are ints, so the large sample
+   * span keeps the coefficients precise.
+   */
+  private displayAffine(): [number, number, number, number, number, number] {
+    const m = this.mod;
+    const r = rt(m);
+    const W = Math.round(this.width);
+    const H = Math.round(this.height);
+    const buf = r.wasmExports.malloc(8);
+    try {
+      const pt = (x: number, y: number): [number, number] => {
+        m.FPDF_PageToDevice(this.handle, 0, 0, W, H, 0, x, y, buf, buf + 4);
+        return [r.getValue(buf, "i32"), r.getValue(buf + 4, "i32")];
+      };
+      const K = 65536;
+      const [ex, ey] = pt(0, 0);
+      const [xx, xy] = pt(K, 0);
+      const [yx, yy] = pt(0, K);
+      return [(xx - ex) / K, (yx - ex) / K, (xy - ey) / K, (yy - ey) / K, ex, ey];
+    } finally {
+      r.wasmExports.free(buf);
+    }
+  }
+
+  /**
+   * Text runs with display-space geometry — the basis of the selectable text
+   * layer. Built char-first: every character's box comes from PDFium and the
+   * run text is assembled from the same walk, so the text the DOM renders and
+   * the geometry the selection hit-tests are aligned by construction
+   * (per-char boxes ride along in `chars`).
    */
   getTextRuns(): TextRunGeom[] {
     const m = this.mod;
@@ -604,36 +639,84 @@ export class PdfPage {
     const total = m.FPDFText_CountChars(tp);
     if (total <= 0) return [];
     const r = rt(m);
-    const runs: TextRunGeom[] = [];
-    const nRects = m.FPDFText_CountRects(tp, 0, total);
-    const rectBuf = r.wasmExports.malloc(32); // 4 doubles
+
+    // Raw walk: code point + tight box in PDF page space. \r\n are PDFium's
+    // generated line markers — they carry no geometry, only a break.
+    const raw: SegChar[] = [];
+    const buf = r.wasmExports.malloc(32); // 4 doubles
+    let br = false;
     try {
-      for (let i = 0; i < nRects; i++) {
-        m.FPDFText_GetRect(tp, i, rectBuf, rectBuf + 8, rectBuf + 16, rectBuf + 24);
-        const left = r.getValue(rectBuf, "double");
-        const top = r.getValue(rectBuf + 8, "double");
-        const right = r.getValue(rectBuf + 16, "double");
-        const bottom = r.getValue(rectBuf + 24, "double");
-        // GetBoundedText counts CHARACTERS with no NUL terminator — don't
-        // reuse the byte-count helper or the last char gets truncated.
-        const charCount = m.FPDFText_GetBoundedText(tp, left, top, right, bottom, 0, 0);
-        if (charCount <= 0) continue;
-        const tptr = r.wasmExports.malloc((charCount + 1) * 2);
-        let text = "";
-        try {
-          const written = m.FPDFText_GetBoundedText(tp, left, top, right, bottom, tptr, charCount);
-          const view = new Uint16Array(r.HEAPU8.buffer, tptr, Math.max(0, written));
-          text = String.fromCharCode(...Array.from(view)).replace(/\0+$/, "");
-        } finally {
-          r.wasmExports.free(tptr);
+      for (let i = 0; i < total; i++) {
+        const uni = m.FPDFText_GetUnicode(tp, i);
+        if (uni === 0x0d || uni === 0x0a) {
+          br = true;
+          continue;
         }
-        if (!text.trim()) continue;
-        const d = this.pageRectToDisplay(left, top, right, bottom);
-        if (d.w <= 0 || d.h <= 0) continue;
-        runs.push({ ...d, text });
+        if (uni === 0) continue; // no unicode mapping — nothing to select/copy
+        let x = 0;
+        let y = 0;
+        let w = 0;
+        let h = 0;
+        if (m.FPDFText_GetCharBox(tp, i, buf, buf + 8, buf + 16, buf + 24)) {
+          const left = r.getValue(buf, "double");
+          const right = r.getValue(buf + 8, "double");
+          const bottom = r.getValue(buf + 16, "double");
+          const top = r.getValue(buf + 24, "double");
+          x = left;
+          y = bottom;
+          w = right - left;
+          h = top - bottom;
+        }
+        raw.push({ s: String.fromCodePoint(uni), x, y, w, h, br });
+        br = false;
       }
     } finally {
-      r.wasmExports.free(rectBuf);
+      r.wasmExports.free(buf);
+    }
+
+    // Generated spaces / zero-width marks get neighbor-synthesized boxes so
+    // segmentation and caret hit-testing see sane geometry.
+    fixDegenerateBoxes(raw);
+
+    const A = this.displayAffine();
+    const toDisplay = (c: SegChar): CharBox => {
+      const x1 = A[0] * c.x + A[1] * c.y + A[4];
+      const y1 = A[2] * c.x + A[3] * c.y + A[5];
+      const x2 = A[0] * (c.x + c.w) + A[1] * (c.y + c.h) + A[4];
+      const y2 = A[2] * (c.x + c.w) + A[3] * (c.y + c.h) + A[5];
+      return {
+        x: Math.min(x1, x2),
+        y: Math.min(y1, y2),
+        w: Math.abs(x2 - x1),
+        h: Math.abs(y2 - y1),
+      };
+    };
+
+    const runs: TextRunGeom[] = [];
+    for (const seg of segmentChars(raw)) {
+      let text = "";
+      const chars: CharBox[] = [];
+      let ux0 = Infinity;
+      let uy0 = Infinity;
+      let ux1 = -Infinity;
+      let uy1 = -Infinity;
+      for (const c of seg) {
+        const d = toDisplay(c);
+        text += c.s;
+        chars.push(d);
+        // Surrogate pair: repeat a zero-width tail so chars[] stays aligned
+        // with UTF-16 indices.
+        if (c.s.length === 2) chars.push({ x: d.x + d.w, y: d.y, w: 0, h: d.h, cont: true });
+        ux0 = Math.min(ux0, d.x);
+        uy0 = Math.min(uy0, d.y);
+        ux1 = Math.max(ux1, d.x + d.w);
+        uy1 = Math.max(uy1, d.y + d.h);
+      }
+      if (!text.trim()) continue;
+      const w = ux1 - ux0;
+      const h = uy1 - uy0;
+      if (!(w > 0) || !(h > 0)) continue;
+      runs.push({ x: ux0, y: uy0, w, h, text, chars });
     }
     return runs;
   }
