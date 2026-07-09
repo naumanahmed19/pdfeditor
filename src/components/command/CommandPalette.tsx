@@ -391,10 +391,15 @@ function CommandRow({
       keywords={command.aliases}
       disabled={disabled}
       onSelect={() => onRun(command)}
-      className="items-center gap-3"
+      className="group items-center gap-3"
       title={command.disabledReason}
     >
-      <Icon className={cn("h-4 w-4", disabled && "opacity-60")} />
+      <Icon
+        className={cn(
+          "h-4 w-4 text-muted-foreground transition-colors group-data-[selected=true]:text-foreground",
+          disabled && "opacity-60",
+        )}
+      />
       <span className="min-w-0 flex-1 truncate text-sm font-medium">
         {command.label}
       </span>
