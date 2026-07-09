@@ -88,6 +88,7 @@ export function OrganizeScreen() {
   const app = useApp();
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const [insertAt, setInsertAt] = useState("end");
   const insertRef = useRef<HTMLInputElement>(null);
 
   if (!app.pdf || !app.docBytes) {
@@ -98,11 +99,83 @@ export function OrganizeScreen() {
     );
   }
 
+  const requestedInsertIndex = insertAt === "end" ? app.numPages : Number(insertAt);
+  const insertIndex = Number.isFinite(requestedInsertIndex)
+    ? Math.max(0, Math.min(Math.floor(requestedInsertIndex), app.numPages))
+    : app.numPages;
+  const insertValue = insertAt === "end" || insertIndex >= app.numPages ? "end" : String(insertIndex);
+  const insertPositionText =
+    insertIndex === 0
+      ? "at beginning"
+      : insertIndex >= app.numPages
+        ? "at end"
+        : `between pages ${insertIndex} and ${insertIndex + 1}`;
+  const insertOptions = [
+    { value: "0", label: "At beginning" },
+    ...Array.from({ length: Math.max(0, app.numPages - 1) }, (_, i) => ({
+      value: String(i + 1),
+      label: `Between pages ${i + 1} and ${i + 2}`,
+    })),
+    { value: "end", label: "At end" },
+  ];
+
   return (
     <ToolShell
       title="Organize pages"
       description="Drag pages to reorder — or use the buttons to rotate, duplicate, delete and insert. Changes apply to the open document."
     >
+      <div className="mb-4 rounded-xl border bg-card p-3 shadow-shell">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-muted-foreground">Insert at</span>
+          <Select
+            value={insertValue}
+            onChange={(e) => setInsertAt(e.target.value)}
+            aria-label="Insertion position"
+            className="h-8 w-56 px-2 text-xs"
+          >
+            {insertOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
+          <Button
+            variant="outline"
+            className="h-8 gap-2"
+            onClick={() =>
+              void app.applyBytesOp(
+                (b) => insertBlankPage(b, insertIndex),
+                `Inserted blank page ${insertPositionText}`,
+              )
+            }
+          >
+            <FilePlus2 className="h-4 w-4" /> Blank page
+          </Button>
+          <Button
+            variant="outline"
+            className="h-8 gap-2"
+            onClick={() => insertRef.current?.click()}
+          >
+            <Import className="h-4 w-4" /> Pages from PDF...
+          </Button>
+          <input
+            ref={insertRef}
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (!f) return;
+              const other = new Uint8Array(await f.arrayBuffer());
+              void app.applyBytesOp(
+                (b) => insertPdfPages(b, other, insertIndex),
+                `Inserted pages from ${f.name} ${insertPositionText}`,
+              );
+            }}
+          />
+        </div>
+      </div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
         {Array.from({ length: app.numPages }, (_, i) => (
           <div
@@ -161,11 +234,11 @@ export function OrganizeScreen() {
                 <RotateCw className="h-3.5 w-3.5" />
               </IconBtn>
               <IconBtn
-                title="Insert blank page after"
+                title={`Insert blank page after page ${i + 1}`}
                 onClick={() =>
                   void app.applyBytesOp(
                     (b) => insertBlankPage(b, i + 1),
-                    "Inserted blank page",
+                    `Inserted blank page after page ${i + 1}`,
                   )
                 }
               >
@@ -208,29 +281,6 @@ export function OrganizeScreen() {
         <Button onClick={() => void app.downloadCurrent()} className="gap-2">
           <Download className="h-4 w-4" /> Save PDF
         </Button>
-        <Button
-          variant="outline"
-          className="gap-2"
-          onClick={() => insertRef.current?.click()}
-        >
-          <Import className="h-4 w-4" /> Insert pages from PDF…
-        </Button>
-        <input
-          ref={insertRef}
-          type="file"
-          accept="application/pdf"
-          className="hidden"
-          onChange={async (e) => {
-            const f = e.target.files?.[0];
-            e.target.value = "";
-            if (!f) return;
-            const other = new Uint8Array(await f.arrayBuffer());
-            void app.applyBytesOp(
-              (b) => insertPdfPages(b, other, app.numPages),
-              `Inserted pages from ${f.name}`,
-            );
-          }}
-        />
       </div>
     </ToolShell>
   );

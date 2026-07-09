@@ -45,7 +45,7 @@ import {
   Waves,
   X,
 } from "lucide-react";
-import { useApp } from "../../store";
+import { useApp, type EditTextScope } from "../../store";
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
 import {
@@ -1072,9 +1072,48 @@ export function EditorToolbar() {
               />
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <TextCursorInput className="h-3.5 w-3.5 shrink-0" />
-              <span>Click a line of text to edit its content, font, size and color.</span>
+            <div className="flex items-center gap-2">
+              {/* Edit scope: what a click opens — one line (styles stay
+                  line-local, the old behavior), the detected paragraph, or
+                  the whole contiguous text block. */}
+              <ToggleGroup
+                value={[app.editTextScope]}
+                onValueChange={(v) =>
+                  v[0] && app.setEditTextScope(v[0] as EditTextScope)
+                }
+                aria-label="Edit scope"
+                className="shrink-0"
+              >
+                <ToggleGroupItem
+                  value="line"
+                  aria-label="Edit one line"
+                  title="Edit a single line at a time"
+                  className="h-7 w-auto px-2.5 text-xs"
+                >
+                  Line
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="paragraph"
+                  aria-label="Edit the paragraph"
+                  title="Edit the whole paragraph around the clicked line"
+                  className="h-7 w-auto px-2.5 text-xs"
+                >
+                  Paragraph
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="block"
+                  aria-label="Edit the text block"
+                  title="Edit the whole contiguous text block, across paragraph breaks"
+                  className="h-7 w-auto px-2.5 text-xs"
+                >
+                  Block
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <Separator orientation="vertical" className="h-6 shrink-0" />
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <TextCursorInput className="h-3.5 w-3.5 shrink-0" />
+                <span>Click text to edit it. Font, size and color apply to the whole scope.</span>
+              </div>
             </div>
           )
         ) : showFontControls ? (

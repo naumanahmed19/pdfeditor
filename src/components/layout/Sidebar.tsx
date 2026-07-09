@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -568,28 +568,79 @@ function TabButton({
 
 function ThumbnailList() {
   const app = useAppSelector(
-    (s) => ({ pdf: s.pdf, numPages: s.numPages, docVersion: s.docVersion, currentPage: s.currentPage, setScreen: s.setScreen, scrollToPage: s.scrollToPage, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen }),
+    (s) => ({ pdf: s.pdf, numPages: s.numPages, docVersion: s.docVersion, currentPage: s.currentPage, setScreen: s.setScreen, scrollToPage: s.scrollToPage, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen, applyBytesOp: s.applyBytesOp }),
     shallowEqual,
   );
   if (!app.pdf) return null;
+
+  const insertBlankPageAt = (atIndex: number) => {
+    const label =
+      atIndex === 0
+        ? "Inserted blank page at beginning"
+        : atIndex >= app.numPages
+          ? "Inserted blank page at end"
+          : `Inserted blank page between pages ${atIndex} and ${atIndex + 1}`;
+    void app.applyBytesOp(async (bytes) => {
+      const { insertBlankPage } = await import("../../lib/pdftools");
+      return insertBlankPage(bytes, atIndex);
+    }, label);
+  };
+
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-3 py-2">
       <div className="flex flex-col gap-2">
+        <PageInsertSlot
+          label="Insert blank page at beginning"
+          onClick={() => insertBlankPageAt(0)}
+        />
         {Array.from({ length: app.numPages }, (_, i) => (
-          <Thumbnail
-            key={`${app.docVersion}-${i}`}
-            pdf={app.pdf!}
-            pageIndex={i}
-            active={app.currentPage === i}
-            onClick={() => {
-              app.setScreen("viewer");
-              app.scrollToPage(i);
-              if (app.isMobile) app.setSidebarOpen(false);
-            }}
-          />
+          <Fragment key={`${app.docVersion}-${i}`}>
+            <Thumbnail
+              pdf={app.pdf!}
+              pageIndex={i}
+              active={app.currentPage === i}
+              onClick={() => {
+                app.setScreen("viewer");
+                app.scrollToPage(i);
+                if (app.isMobile) app.setSidebarOpen(false);
+              }}
+            />
+            <PageInsertSlot
+              label={
+                i === app.numPages - 1
+                  ? "Insert blank page at end"
+                  : `Insert blank page between pages ${i + 1} and ${i + 2}`
+              }
+              onClick={() => insertBlankPageAt(i + 1)}
+            />
+          </Fragment>
         ))}
       </div>
     </div>
+  );
+}
+
+function PageInsertSlot({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className="group mx-auto flex w-[150px] items-center gap-1 py-0.5 text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <span className="h-px flex-1 bg-sidebar-border transition-colors group-hover:bg-primary/50" />
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-sidebar shadow-sm transition-colors group-hover:border-primary/60 group-hover:bg-background">
+        <Plus className="h-3 w-3" />
+      </span>
+      <span className="h-px flex-1 bg-sidebar-border transition-colors group-hover:bg-primary/50" />
+    </button>
   );
 }
 

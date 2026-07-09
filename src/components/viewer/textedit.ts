@@ -153,6 +153,31 @@ export function mapLineEditToRuns(edit: InlineEdit, newJoined: string): TextRunE
   });
 }
 
+/**
+ * True when a font whose glyph coverage could NOT be verified can still be
+ * trusted to render `chars`. Applies only to non-subset standard text faces
+ * (Helvetica/Arial, Times, Courier): those aren't embedded — every viewer
+ * renders them with its own complete face — so plain Latin characters are
+ * covered by definition. Subsets (ABCDEF+…) are never trusted: they carry
+ * only the glyphs the document already uses.
+ */
+export function trustedStandardFont(fontName: string, chars: string[]): boolean {
+  if (/^[A-Z]{6}\+/.test(fontName)) return false;
+  if (!/^(Helvetica|Arial|Times ?New ?Roman|Times|Courier ?New|Courier)([ ,._-].*)?$/i.test(fontName)) {
+    return false;
+  }
+  // Printable Latin-1 plus the common typographic marks of WinAnsi (checked
+  // by code point so no literal special characters live in the source).
+  return chars.every((c) => {
+    const cp = c.codePointAt(0) ?? 0;
+    return (
+      (cp >= 0x20 && cp <= 0x7e) ||
+      (cp >= 0xa0 && cp <= 0xff) ||
+      [0x2013, 0x2014, 0x2018, 0x2019, 0x201c, 0x201d, 0x2026].includes(cp)
+    );
+  });
+}
+
 // Standard-14 font names by [regular, bold, italic, bold-italic].
 export const STD_FONT_NAMES: Record<string, [string, string, string, string]> = {
   helvetica: ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"],

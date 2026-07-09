@@ -73,6 +73,9 @@ export interface PendingStamp {
   aspect: number; // height / width
 }
 
+/** What a click with the edit-text tool opens in the inline editor. */
+export type EditTextScope = "line" | "paragraph" | "block";
+
 /** How a document must be re-protected when its bytes are written to disk. */
 export type ProtectionRecipe =
   | {
@@ -484,6 +487,10 @@ interface AppStore {
    *  free-draws a box over any region. */
   highlightMode: "text" | "area";
   setHighlightMode: (m: "text" | "area") => void;
+  /** Edit-text scope: what a click opens in the inline editor — one visual
+   *  line, the detected paragraph, or the whole contiguous text block. */
+  editTextScope: EditTextScope;
+  setEditTextScope: (s: EditTextScope) => void;
   /** Text-markup (underline / strikeout / squiggly) ink color. */
   markupColor: string;
   setMarkupColor: (c: string) => void;
@@ -903,6 +910,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [fontColor, setFontColor] = useState("#000000");
   const [highlightColor, setHighlightColor] = useState("#facc15");
   const [highlightMode, setHighlightMode] = useState<"text" | "area">("text");
+  const [editTextScope, setEditTextScope] = useState<EditTextScope>("paragraph");
   const [markupColor, setMarkupColor] = useState("#dc2626");
   // Fill color for new rect/ellipse shapes; null = no fill (outline only).
   const [toolFill, setToolFill] = useState<string | null>(null);
@@ -3242,6 +3250,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setHighlightColor,
     highlightMode,
     setHighlightMode,
+    editTextScope,
+    setEditTextScope,
     markupColor,
     setMarkupColor,
     setToolColor,

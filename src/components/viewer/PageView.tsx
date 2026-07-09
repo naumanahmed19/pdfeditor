@@ -17,7 +17,9 @@ import {
   mapLineEditToRuns,
   detectFontFromName,
   resolveTextFont,
+  trustedStandardFont,
 } from "./textedit";
+import { collectParagraph } from "./paragraph";
 import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
 import { InlineTextEditor } from "./InlineTextEditor";
 import { ObjectLayer } from "./objectlayer";
@@ -231,13 +233,19 @@ export function PageView({
     // exists to copy; edittext and marking only annotate, never extract text).
     (app.tool === "edittext" || textMarkTool || app.docPermissions.copy);
 
-  // "Edit existing text": a click selects the whole visual LINE around the
-  // hit run (PDFs fragment lines into many small runs), and the inline editor
-  // shows the joined text. On commit the diff is mapped back onto the
+  // "Edit existing text": a click selects the whole PARAGRAPH around the hit
+  // run (detected from line geometry — see paragraph.ts; a lone line degrades
+  // to single-line editing), and the inline editor shows the joined text with
+  // one row per visual line. On commit the diff is mapped back onto the
   // underlying content-stream objects and rewritten in place — no whiteout
-  // patch, no overlay copy, original text truly gone.
+  // patch, no overlay copy, original text truly gone. Line breaks are fixed
+  // for now: text can't flow between lines until reflow lands.
   const onTextLayerClick = async (e: React.MouseEvent) => {
     if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
+    // A click while an edit is open (or still committing) is the gesture that
+    // dismisses it — never a request to start another edit, and never worth a
+    // "click a line" hint.
+    if (inlineEdit || savingEdit) return;
     const pr = wrapRef.current.getBoundingClientRect();
 
     let objs;
@@ -273,45 +281,56 @@ export function PageView({
           (a.right - a.left) * (a.top - a.bottom) -
           (b.right - b.left) * (b.top - b.bottom),
       )[0];
-    if (!hit) {
-      toast.info("Click directly on a line of text to edit it.");
-      return;
-    }
+    // A miss (margin, image, whitespace) simply does nothing — the tool's
+    // hover affordance already shows what's editable, a toast would only nag.
+    if (!hit) return;
 
-    // Join the visual line's fragments into one editable string, remembering
-    // each run's span so the edit can be mapped back per run.
-    const lineRuns = collectLine(objs, hit);
+    // Join the scoped fragments into one editable string — a "\n" separator
+    // (virtual, like the inferred spaces) closes each visual line —
+    // remembering each run's span so the edit maps back per run. The scope
+    // (line / paragraph / whole block) is the toolbar's edit-text sub-option.
+    const paraLines =
+      app.editTextScope === "line"
+        ? [collectLine(objs, hit)]
+        : collectParagraph(objs, hit, app.editTextScope);
     let joined = "";
     const runs: InlineEditRun[] = [];
-    for (let i = 0; i < lineRuns.length; i++) {
-      const o = lineRuns[i];
-      const next = lineRuns[i + 1];
-      // Infer a visual space where the PDF split words into separate runs.
-      const sep =
-        next &&
-        next.left - o.right > 0.15 * hit.fontSize &&
-        !o.text.endsWith(" ") &&
-        !next.text.startsWith(" ")
-          ? " "
-          : "";
-      runs.push({
-        objectIndex: o.index,
-        text: o.text,
-        start: joined.length,
-        sep,
-        originX: o.originX,
-        originY: o.originY,
-        fontName: o.fontName,
-      });
-      joined += o.text + sep;
+    for (let li = 0; li < paraLines.length; li++) {
+      const lineRuns = paraLines[li];
+      for (let i = 0; i < lineRuns.length; i++) {
+        const o = lineRuns[i];
+        const next = lineRuns[i + 1];
+        // Infer a visual space where the PDF split words into separate runs;
+        // the last run of every line but the final one gets the line break.
+        const sep = next
+          ? next.left - o.right > 0.15 * hit.fontSize &&
+            !o.text.endsWith(" ") &&
+            !next.text.startsWith(" ")
+            ? " "
+            : ""
+          : li < paraLines.length - 1
+            ? "\n"
+            : "";
+        runs.push({
+          objectIndex: o.index,
+          text: o.text,
+          start: joined.length,
+          sep,
+          originX: o.originX,
+          originY: o.originY,
+          fontName: o.fontName,
+        });
+        joined += o.text + sep;
+      }
     }
 
-    // Map the line's PDF-space box to the exact on-screen rectangle.
+    // Map the paragraph's PDF-space box to the exact on-screen rectangle.
+    const allRuns = paraLines.flat();
     const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle([
-      Math.min(...lineRuns.map((o) => o.left)),
-      Math.min(...lineRuns.map((o) => o.bottom)),
-      Math.max(...lineRuns.map((o) => o.right)),
-      Math.max(...lineRuns.map((o) => o.top)),
+      Math.min(...allRuns.map((o) => o.left)),
+      Math.min(...allRuns.map((o) => o.bottom)),
+      Math.max(...allRuns.map((o) => o.right)),
+      Math.max(...allRuns.map((o) => o.top)),
     ]);
     const [r, g, b] = hit.color;
     const hex =
@@ -437,6 +456,15 @@ export function PageView({
   ): Promise<boolean> => {
     const edit = inlineEdit;
     if (!edit) return true;
+    // Line breaks are the document's own layout (no reflow yet): a commit
+    // that adds or removes lines is rejected and the editor stays open. This
+    // also covers pasted text with newlines and Shift+Enter in a single line.
+    if (text.split("\n").length !== edit.original.split("\n").length) {
+      toast.info(
+        "Line breaks can't be added or removed yet — edit the text within its existing lines.",
+      );
+      return false;
+    }
     const textChanged = text !== edit.original && text.trim().length > 0;
     const colorChanged = colorHex.toLowerCase() !== edit.colorHex.toLowerCase();
     const sizeChanged = fontSize > 0 && fontSize !== Math.round(edit.fontSize);
@@ -503,7 +531,16 @@ export function PageView({
           if (!fresh.length) continue;
           const info = await app.getTextFontInfo(pageIndex, run.objectIndex);
           const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
-          const runBad = missing === null ? fresh : missing;
+          // Unverifiable coverage (no parseable program) usually means a
+          // non-embedded standard face — viewers render those with their own
+          // complete font, so Latin text is safe. Anything else stays on the
+          // conservative "treat as missing" path.
+          const runBad =
+            missing === null
+              ? trustedStandardFont(run.fontName, fresh)
+                ? []
+                : fresh
+              : missing;
           if (runBad.length) {
             if (!substitute) badFace = run.fontName.replace(/^[A-Z]{6}\+/, "");
             substitute = true;
@@ -512,13 +549,16 @@ export function PageView({
         }
       }
       if (substitute) {
+        // The substitution changes the visible face — ask before committing,
+        // and keep the editor open (text preserved) when the user declines.
+        const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
+        const ok = window.confirm(
+          `The embedded font "${badFace}" doesn't include ${chars}, so the edited text would be set in a close matching font.\n\nContinue with the substitute font?`,
+        );
+        if (!ok) return false;
         // Recreate only the edited runs with a close bundled/standard face; the
         // untouched neighbors keep their original embedded fonts.
         await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic, true);
-        const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
-        toast.info(
-          `The embedded font "${badFace}" doesn't include ${chars}, so the edited text was set in a close matching font.`,
-        );
         setInlineEdit(null);
         return true;
       }
@@ -526,7 +566,10 @@ export function PageView({
       await app.applyTextRuns(pageIndex, runEdits, {
         fill: newFill,
         fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
-        anchor: edit.anchor,
+        // A shared anchor only makes sense for one line — scaling a whole
+        // paragraph about it would shift the other baselines. Multi-line
+        // edits scale each run about its own origin instead.
+        anchor: edit.original.includes("\n") ? undefined : edit.anchor,
         synthBold: boldOn || undefined,
         synthItalic: italicOn || undefined,
       });

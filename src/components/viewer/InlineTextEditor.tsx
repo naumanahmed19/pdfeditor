@@ -70,12 +70,19 @@ export function InlineTextEditor({
     };
   }, [edit.embeddedFont]);
 
+  // Paragraph mode: the edit spans several visual lines (one textarea row
+  // per document line; the breaks themselves are fixed until reflow lands).
+  const lineCount = edit.original.split("\n").length;
+
   useEffect(() => {
     window.getSelection()?.removeAllRanges();
     const t = ref.current;
     if (t) {
       t.focus({ preventScroll: true });
-      t.select();
+      // Select-all invites replacing the text wholesale — right for a single
+      // line, an accident waiting to happen for a whole paragraph.
+      if (lineCount > 1) t.setSelectionRange(0, 0);
+      else t.select();
     }
   }, []);
 
@@ -116,8 +123,11 @@ export function InlineTextEditor({
   // Live-preview the size change on screen (px per point from the original).
   const pxPerPt = edit.fontPx / (edit.fontSize || 1);
   const fontPx = sizePt * pxPerPt;
-  const boxH = Math.max(edit.height, fontPx * 1.25);
+  const boxH = Math.max(edit.height, fontPx * 1.25 * lineCount);
   const top = edit.top + edit.height / 2 - boxH / 2;
+  // One textarea row per document line: row height = the paragraph's own
+  // leading, so the editor's lines sit on the page's lines.
+  const lineH = lineCount > 1 ? boxH / lineCount : boxH;
 
   return (
     <div
@@ -148,6 +158,10 @@ export function InlineTextEditor({
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             finish();
+          } else if (e.key === "Enter" && lineCount > 1) {
+            // Paragraph mode: the document's line breaks are fixed (no
+            // reflow yet), so Shift+Enter must not insert one.
+            e.preventDefault();
           } else if (e.key === "Escape") {
             e.preventDefault();
             done.current = true;
@@ -159,7 +173,7 @@ export function InlineTextEditor({
           width: Math.max(edit.width + 24, 60),
           height: boxH,
           fontSize: fontPx,
-          lineHeight: `${boxH}px`,
+          lineHeight: `${lineH}px`,
           color: colorHex,
           padding: "0 1px",
           fontFamily:
