@@ -1,9 +1,15 @@
 // PDF utility hub — PDFium-backed (see engine.ts). pdf.js has been removed;
 // the same engine that edits documents now renders them, extracts text,
 // resolves outlines/links and reads form fields.
-import { PdfDoc, PasswordError, type PdfPage } from "./engine";
+import { PdfDoc, PasswordError, type PdfPage, type TextRunGeom } from "./engine";
 import type { OutlineNode, SearchMatch, SearchOptions } from "../types";
 import { buildSearchIndex, findInIndex, snippetAround } from "./search";
+import {
+  buildLines,
+  textLayerSelection,
+  type CharBox,
+  type LayerRun,
+} from "./textselect";
 
 export type { PdfPage };
 export { PdfDoc };
@@ -235,8 +241,11 @@ function orderBlock(items: LayoutItem[]): LayoutItem[] {
   return lines.flat();
 }
 
-function readingOrder(items: LayoutItem[], mh: number, depth = 0): LayoutItem[] {
-  if (items.length <= 1 || depth >= 6) return orderBlock(items);
+/** Reading-ordered runs grouped into leaf blocks (one array per XY-cut leaf).
+ *  Selection uses the block boundaries to keep a column's lines from merging
+ *  with same-row text in the next column. */
+function readingOrder(items: LayoutItem[], mh: number, depth = 0): LayoutItem[][] {
+  if (items.length <= 1 || depth >= 6) return [orderBlock(items)];
   const yGap = widestGap(items, "y"); // full-width horizontal band
   const xGap = widestGap(items, "x"); // vertical column gutter
   const yThresh = mh * 1.2;
@@ -264,7 +273,7 @@ function readingOrder(items: LayoutItem[], mh: number, depth = 0): LayoutItem[] 
         ...readingOrder(right, mh, depth + 1),
       ];
   }
-  return orderBlock(items);
+  return [orderBlock(items)];
 }
 
 /**
@@ -284,32 +293,85 @@ export function renderTextLayer(
 
   const runs = page.getTextRuns();
 
-  // Lay out spans in visual reading order (XY-cut, column-aware) so native
-  // selection tracks the page. Each span keeps its ORIGINAL run index in
-  // `data-run` so search (which indexes by run) stays aligned after reorder.
+  // Lay out spans in visual reading order (XY-cut, column-aware) so selection
+  // between two carets covers reading-order text. Each span keeps its
+  // ORIGINAL run index in `data-run` so search (which indexes by run) stays
+  // aligned after reorder.
   const heights = runs.map((r) => r.h).sort((a, b) => a - b);
   const mh = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
-  const ordered = readingOrder(
+  const blocks = readingOrder(
     runs.map((r, i) => ({ r, i })),
     mh,
   );
 
-  for (const { r: run, i } of ordered) {
-    const span = document.createElement("span");
-    span.textContent = run.text;
-    span.dataset.run = String(i);
-    const h = run.h * scale;
-    const w = run.w * scale;
-    const fontPx = Math.max(1, h * 0.85);
-    const measured = measure(run.text, fontPx);
-    span.style.left = `${run.x * scale}px`;
-    span.style.top = `${run.y * scale}px`;
-    span.style.fontSize = `${fontPx}px`;
-    span.style.fontFamily = "sans-serif";
-    span.style.lineHeight = `${h}px`;
-    if (measured > 0) {
-      span.style.transform = `scaleX(${w / measured})`;
+  const layerRuns: LayerRun[] = [];
+  blocks.forEach((block, blockIndex) => {
+    for (const { r: run, i } of block) {
+      const span = document.createElement("span");
+      span.textContent = run.text;
+      span.dataset.run = String(i);
+      const h = run.h * scale;
+      const w = run.w * scale;
+      const fontPx = Math.max(1, h * 0.85);
+      const measured = measure(run.text, fontPx);
+      span.style.left = `${run.x * scale}px`;
+      span.style.top = `${run.y * scale}px`;
+      span.style.fontSize = `${fontPx}px`;
+      span.style.fontFamily = "sans-serif";
+      span.style.lineHeight = `${h}px`;
+      if (measured > 0) {
+        span.style.transform = `scaleX(${w / measured})`;
+      }
+      container.appendChild(span);
+
+      layerRuns.push({
+        span,
+        text: run.text,
+        rect: { x: run.x * scale, y: run.y * scale, w, h },
+        chars: charBoxesFromMetrics(run, scale, fontPx),
+        block: blockIndex,
+      });
     }
-    container.appendChild(span);
+  });
+
+  // Caret hit-testing geometry for the custom (Word-like) selection.
+  textLayerSelection.set(container, buildLines(layerRuns));
+}
+
+/**
+ * Per-character boxes for caret hit-testing, derived from the same canvas
+ * metrics that size the span — so carets land exactly where the ::selection
+ * highlight will paint. Widths are normalized to the run's true on-page
+ * width; surrogate pairs get a zero-width continuation so the array aligns
+ * 1:1 with UTF-16 indices.
+ */
+function charBoxesFromMetrics(
+  run: TextRunGeom,
+  scale: number,
+  fontPx: number,
+): CharBox[] {
+  const x0 = run.x * scale;
+  const y = run.y * scale;
+  const h = run.h * scale;
+  const runW = run.w * scale;
+  const widths: number[] = [];
+  const points = Array.from(run.text); // code points, not UTF-16 units
+  let sum = 0;
+  for (const cp of points) {
+    const w = Math.max(0.01, measure(cp, fontPx));
+    widths.push(w);
+    sum += w;
   }
+  const k = sum > 0 ? runW / sum : 0;
+  const boxes: CharBox[] = [];
+  let acc = 0;
+  for (let i = 0; i < points.length; i++) {
+    const w = widths[i] * k;
+    boxes.push({ x: x0 + acc, y, w, h });
+    if (points[i].length === 2) {
+      boxes.push({ x: x0 + acc + w, y, w: 0, h, cont: true });
+    }
+    acc += w;
+  }
+  return boxes;
 }

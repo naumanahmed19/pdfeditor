@@ -26,6 +26,7 @@ import {
 import { toast } from "sonner";
 import { useAppSelector, shallowEqual } from "../../store";
 import { cn, uid } from "../../lib/utils";
+import { attachTextSelection } from "../../lib/textselect";
 import { MARKUP_LABEL } from "../../lib/markup";
 import type { Annotation, MarkupStyle, Screen } from "../../types";
 import { FloatingNav } from "./FloatingNav";
@@ -126,6 +127,15 @@ function ViewerImpl() {
     measure();
     return () => obs.disconnect();
   }, []);
+
+  // Word-like text selection: caret placement from PDFium char geometry
+  // instead of browser hit-testing (see textselect.ts). The container only
+  // exists once a document is open.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !pdf) return;
+    return attachTextSelection(el);
+  }, [pdf]);
 
   // Fit-to-width / fit-to-page scale
   const maxPage = useMemo(
