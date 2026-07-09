@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   Combine,
+  Command as CommandIcon,
   Crop,
   Download,
   Droplets,
@@ -125,6 +126,44 @@ function TitleBarImpl() {
     window.addEventListener("pdfwb:open-replace", openReplace);
     return () => window.removeEventListener("pdfwb:open-replace", openReplace);
   }, []);
+
+  useEffect(() => {
+    const openProperties = () => {
+      if (app.pdf) setPropsOpen(true);
+    };
+    const openAbout = () => setAboutOpen(true);
+    const focusDocumentSearch = () => {
+      if (!app.pdf) return;
+      if (app.isMobile) {
+        setMobileSearch(true);
+        requestAnimationFrame(() => {
+          const input = document.getElementById(
+            "doc-mobile-search-input",
+          ) as HTMLInputElement | null;
+          input?.focus();
+          input?.select();
+        });
+        return;
+      }
+      const input = document.getElementById(
+        "doc-search-input",
+      ) as HTMLInputElement | null;
+      input?.focus();
+      input?.select();
+    };
+
+    window.addEventListener("pdfwb:open-properties", openProperties);
+    window.addEventListener("pdfwb:open-about", openAbout);
+    window.addEventListener("pdfwb:focus-document-search", focusDocumentSearch);
+    return () => {
+      window.removeEventListener("pdfwb:open-properties", openProperties);
+      window.removeEventListener("pdfwb:open-about", openAbout);
+      window.removeEventListener(
+        "pdfwb:focus-document-search",
+        focusDocumentSearch,
+      );
+    };
+  }, [app.isMobile, app.pdf]);
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -316,6 +355,17 @@ function TitleBarImpl() {
         </MenuTrigger>
         <MenuContent className="min-w-48">{toolsItems}</MenuContent>
       </Menu>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7"
+        title="Command palette"
+        onClick={() =>
+          window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
+        }
+      >
+        <CommandIcon className="h-4 w-4" />
+      </Button>
       <input
         ref={fileRef}
         id="global-open-input"
@@ -594,8 +644,9 @@ function TitleBarImpl() {
             <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <input
               autoFocus
+              id="doc-mobile-search-input"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => updateQuery(e.target.value)}
               placeholder="Search in document…"
               className="h-full w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
             />
