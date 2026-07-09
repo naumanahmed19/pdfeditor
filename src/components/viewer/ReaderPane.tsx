@@ -9,6 +9,7 @@ import {
 import type { PdfDoc, PdfPage } from "../../lib/pdf";
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
 import { renderTextLayer } from "../../lib/pdf";
+import { attachTextSelection } from "../../lib/textselect";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 import { Skeleton } from "../ui/skeleton";
@@ -61,6 +62,13 @@ export function ReaderPane({ docId }: { docId: string }) {
     setContainerWidth(el.clientWidth);
     return () => obs.disconnect();
   }, []);
+
+  // Word-like text selection (same controller as the primary Viewer).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !pdf) return;
+    return attachTextSelection(el);
+  }, [pdf]);
 
   const maxWidth = useMemo(
     () => dims.reduce((m, d) => Math.max(m, d.width), 0),
