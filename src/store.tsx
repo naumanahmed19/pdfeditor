@@ -69,6 +69,16 @@ import {
   type PersistResult,
 } from "./lib/persist";
 import { applyAccent, type AccentId } from "./lib/accents";
+import {
+  type DocRevision,
+  bumpBytesRevision,
+  bumpRevision,
+  discardOverlays,
+  freshRevision,
+  hasUnsavedByteEdits,
+  hasUnsavedChanges,
+  markSaved,
+} from "./lib/revision";
 
 const SETTINGS_KEY = "pickpdf-settings";
 const SIGNATURES_KEY = "pickpdf-signatures";
@@ -140,6 +150,12 @@ interface OpenDoc {
   formValues: Record<string, unknown>;
   /** Pending move/rename/delete edits to existing AcroForm fields. */
   fieldOps: Record<string, ExistingFieldOp>;
+  /**
+   * Dirty-tracking revision state (see src/lib/revision.ts): every mutation —
+   * overlay or byte-level — bumps it; a successful save records what was
+   * written. THE source of truth for "has unsaved changes".
+   */
+  rev: DocRevision;
 }
 
 function formValueText(value: unknown): string {
@@ -542,7 +558,13 @@ interface AppStore {
   setLetterSpacing: (v: number) => void;
 
   annotations: AnnotationMap;
+  /** Unsaved changes of ANY kind — overlay edits or committed byte edits. */
   hasAnnotations: boolean;
+  /** Overlay edits (annotations / form values / field ops) — what Discard removes. */
+  hasOverlayEdits: boolean;
+  /** Byte-level edits committed since the last save (text edits, page ops,
+   *  OCR, redactions…) — cannot be discarded, only saved. */
+  hasByteEdits: boolean;
   addAnnotation: (page: number, ann: Annotation) => void;
   addAnnotations: (page: number, anns: Annotation[]) => void;
   updateAnnotation: (page: number, ann: Annotation) => void;
@@ -733,7 +755,23 @@ function loadJson<T>(key: string, fallback: T): T {
   }
 }
 
+/**
+ * THE document-integrity gate: any unsaved change, overlay OR byte-level.
+ * Byte-level commits (page ops, OCR, in-place text edits, redactions…) clear
+ * the overlay maps, so this must NOT be inferred from them — it is revision
+ * tracking (src/lib/revision.ts), bumped by every mutation and reset only by
+ * a successful save.
+ */
 function docHasEdits(d: OpenDoc): boolean {
+  return hasUnsavedChanges(d.rev);
+}
+
+/**
+ * Overlay-only edits (annotations / form values / field ops) — the part of
+ * the unsaved state that still needs BAKING into the bytes, and the only part
+ * Discard can actually remove.
+ */
+function docHasOverlayEdits(d: OpenDoc): boolean {
   return (
     Object.values(d.annotations).some((l) => l.length > 0) ||
     Object.keys(d.formValues).length > 0 ||
@@ -824,6 +862,8 @@ function pushHistory(
     // Keep the current live proxy when a base carries none (bytes-only steps
     // from in-place content edits) — never blank out doc.pdf.
     pdf: base.pdf ?? d.pdf,
+    // Every push is a mutation; a new base means a committed byte-level edit.
+    rev: nextBase ? bumpBytesRevision(d.rev) : bumpRevision(d.rev),
   };
 }
 
@@ -843,6 +883,7 @@ function pushContentEdit(d: OpenDoc, nextBytes: Uint8Array): Partial<OpenDoc> {
     history,
     bytesHistory,
     historyIndex: history.length - 1,
+    rev: bumpBytesRevision(d.rev),
   };
 }
 
@@ -1392,6 +1433,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeTabId, updateDoc],
   );
 
+  // Discard removes ONLY the overlay maps. Byte-level edits committed since
+  // the last save are baked into d.bytes and cannot be discarded (their undo
+  // history may already be gone) — discardOverlays keeps the doc marked dirty
+  // in that case instead of pretending it matches the file on disk.
   const clearAnnotations = useCallback(() => {
     if (!activeTabId) return;
     updateDoc(activeTabId, (d) => ({
@@ -1401,6 +1446,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       historyIndex: 0,
       formValues: {},
       fieldOps: {},
+      rev: discardOverlays(d.rev),
     }));
     setSelected(null);
   }, [activeTabId, updateDoc]);
@@ -1416,17 +1462,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // edit stays reparse-free.
   const restoreStep = useCallback(
     async (doc: OpenDoc, target: number) => {
+      // No-op steps (undo at the bottom, redo at the top) must not touch the
+      // doc — bumping the revision would mark a clean document dirty.
+      if (target === doc.historyIndex) return;
       const base = doc.bytesHistory[target] ?? { bytes: doc.bytes, pdf: doc.pdf };
       const annotations = doc.history[target] ?? {};
       if (base.bytes === doc.bytes) {
-        updateDoc(doc.id, { historyIndex: target, annotations });
+        updateDoc(doc.id, {
+          historyIndex: target,
+          annotations,
+          rev: bumpRevision(doc.rev),
+        });
       } else if (base.pdf && base.pdf !== doc.pdf) {
-        updateDoc(doc.id, { historyIndex: target, annotations, bytes: base.bytes, pdf: base.pdf });
+        updateDoc(doc.id, {
+          historyIndex: target,
+          annotations,
+          bytes: base.bytes,
+          pdf: base.pdf,
+          // Crossing a content boundary swaps the base bytes — track it so a
+          // post-undo Discard can't declare the doc clean against stale bytes.
+          rev: bumpBytesRevision(doc.rev),
+        });
         setContentRev((v) => v + 1);
       } else {
         const nextPdf = await loadPdf(base.bytes);
         const prev = doc.pdf;
-        updateDoc(doc.id, { historyIndex: target, annotations, bytes: base.bytes, pdf: nextPdf });
+        updateDoc(doc.id, {
+          historyIndex: target,
+          annotations,
+          bytes: base.bytes,
+          pdf: nextPdf,
+          rev: bumpBytesRevision(doc.rev),
+        });
         setContentRev((v) => v + 1);
         // Free the outgoing proxy unless a history base still references it
         // (those are freed together on close via destroyDocProxies).
@@ -1451,6 +1518,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const hasAnnotations = useMemo(
     () => (active ? docHasEdits(active) : false),
+    [active],
+  );
+  /** Overlay edits Discard can remove (annotations / form values / field ops). */
+  const hasOverlayEdits = useMemo(
+    () => (active ? docHasOverlayEdits(active) : false),
+    [active],
+  );
+  /** Byte-level edits committed since the last save — not discardable. */
+  const hasByteEdits = useMemo(
+    () => (active ? hasUnsavedByteEdits(active.rev) : false),
     [active],
   );
 
@@ -1623,6 +1700,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           currentPage: 0,
           formValues: {},
           fieldOps: {},
+          rev: freshRevision(),
         };
         if (wrapperPw) {
           protectionInfo.current.set(doc.id, {
@@ -2068,7 +2146,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       let bytes = d.bytes;
-      if (docHasEdits(d)) {
+      // Bake only when OVERLAY edits exist — committed byte-level edits are
+      // already in d.bytes, and baking is read-only (must not bump revisions).
+      if (docHasOverlayEdits(d)) {
         bytes = await bakeAnnotations(d.bytes, d.annotations, d.formValues, d.fieldOps);
       }
       const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
@@ -2112,6 +2192,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       updateDoc(activeTabId, (d) => ({
         formValues: { ...d.formValues, [name]: value },
+        rev: bumpRevision(d.rev),
       }));
     },
     [activeTabId, updateDoc],
@@ -2128,10 +2209,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const merged = { ...existing, ...patch };
         // An op that changes nothing anymore can be dropped.
         const isNoop = !merged.newRect && !merged.deleted && !merged.newName;
+        // Dropping an op that was never stored changes nothing — don't dirty.
+        if (isNoop && !(base.key in d.fieldOps)) return {};
         const next = { ...d.fieldOps };
         if (isNoop) delete next[base.key];
         else next[base.key] = merged as ExistingFieldOp;
-        return { fieldOps: next };
+        return { fieldOps: next, rev: bumpRevision(d.rev) };
       });
     },
     [activeTabId, updateDoc],
@@ -2139,7 +2222,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const bakeToBytes = useCallback(async (): Promise<Uint8Array | null> => {
     if (!active) return null;
-    if (!docHasEdits(active)) return active.bytes;
+    // Byte-level edits are already committed to active.bytes — only overlay
+    // edits still need baking. Read-only: never bumps the revision.
+    if (!docHasOverlayEdits(active)) return active.bytes;
     return bakeAnnotations(
       active.bytes,
       active.annotations,
@@ -2163,7 +2248,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       try {
         let base = active.bytes;
-        if (docHasEdits(active)) {
+        if (docHasOverlayEdits(active)) {
           base = await bakeAnnotations(
             active.bytes,
             active.annotations,
@@ -2175,7 +2260,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const nextBytes = await op(base);
         const nextPdf = await loadPdf(nextBytes);
         destroyDocProxies(active, nextPdf);
-        updateDoc(id, {
+        updateDoc(id, (d) => ({
           bytes: nextBytes,
           pdf: nextPdf,
           annotations: {},
@@ -2184,7 +2269,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
-        });
+          // A committed byte-level edit: the doc no longer matches the file
+          // on disk even though the overlay maps were just cleared.
+          rev: bumpBytesRevision(d.rev),
+        }));
         setDocVersion((v) => v + 1);
         setSelected(null);
         persistWorking(id, active.name, nextBytes);
@@ -2505,6 +2593,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const saveCurrent = useCallback(async () => {
     if (!active) return;
     const handle = docHandles.current.get(active.id);
+    // Snapshot the revision the baked bytes will represent BEFORE any async
+    // work: edits landing while the write is in flight must keep the doc dirty.
+    const savedAt = {
+      revision: active.rev.revision,
+      bytesRevision: active.rev.bytesRevision,
+    };
     try {
       const baked = await bakeToBytes();
       if (!baked) return;
@@ -2528,14 +2622,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await writable.close();
         toast.success(`Saved to ${active.name}${locked}`);
       } else {
-        downloadBytes(out, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
-        toast.success(`PDF saved (downloaded)${locked}`);
+        // No handle yet — prefer acquiring one via the save-file picker so the
+        // write can be AWAITED before the doc is marked saved (and so future
+        // saves write straight to the file).
+        const picker = (
+          window as unknown as {
+            showSaveFilePicker?: (opts: unknown) => Promise<FileSystemFileHandle>;
+          }
+        ).showSaveFilePicker;
+        let newHandle: FileSystemFileHandle | null = null;
+        if (picker) {
+          try {
+            newHandle = await picker.call(window, {
+              suggestedName: active.name,
+              types: [
+                {
+                  description: "PDF document",
+                  accept: { "application/pdf": [".pdf"] },
+                },
+              ],
+            });
+          } catch (err) {
+            // The user cancelled the picker: abort the save entirely — the doc
+            // stays dirty and nothing is downloaded behind their back.
+            if ((err as DOMException)?.name === "AbortError") return;
+            // Any other picker failure: fall back to the anchor download.
+          }
+        }
+        if (newHandle) {
+          const writable = await newHandle.createWritable();
+          await writable.write(out as unknown as BufferSource);
+          await writable.close();
+          docHandles.current.set(active.id, newHandle);
+          toast.success(`Saved to ${newHandle.name || active.name}${locked}`);
+        } else {
+          // Anchor-download fallback (no File System Access API): the browser
+          // gives NO completion signal for an <a download> click, so there is
+          // nothing to await — the doc is marked saved optimistically below.
+          downloadBytes(out, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
+          toast.success(`PDF saved (downloaded)${locked}`);
+        }
       }
       // Commit in-app state to the saved bytes.
       if (docHasEdits(active)) {
         const nextPdf = await loadPdf(baked);
         destroyDocProxies(active, nextPdf);
-        updateDoc(active.id, {
+        updateDoc(active.id, (d) => ({
           bytes: baked,
           pdf: nextPdf,
           annotations: {},
@@ -2544,7 +2676,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
-        });
+          rev: markSaved(d.rev, savedAt),
+        }));
         setDocVersion((v) => v + 1);
         setSelected(null);
       }
@@ -2609,6 +2742,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!active) return;
       const id = active.id;
       const handle = docHandles.current.get(id);
+      // Same capture-before-bake rule as saveCurrent: the protected write
+      // represents THIS revision, not whatever lands during the async work.
+      const savedAt = {
+        revision: active.rev.revision,
+        bytesRevision: active.rev.bytesRevision,
+      };
       try {
         const baked = await bakeToBytes();
         if (!baked) return;
@@ -2665,7 +2804,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (docHasEdits(active)) {
           const nextPdf = await loadPdf(baked);
           destroyDocProxies(active, nextPdf);
-          updateDoc(id, {
+          updateDoc(id, (d) => ({
             bytes: baked,
             pdf: nextPdf,
             annotations: {},
@@ -2674,7 +2813,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             historyIndex: 0,
             formValues: {},
             fieldOps: {},
-          });
+            // The protected file on disk holds this same content — a save.
+            rev: markSaved(d.rev, savedAt),
+          }));
           setDocVersion((v) => v + 1);
           setSelected(null);
         }
@@ -2890,9 +3031,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         toast.error("No text could be recognized in this document.", { id: toastId });
         return;
       }
-      // Bake any pending edits first, then add the invisible OCR text layer.
+      // Bake any pending overlay edits first, then add the invisible OCR text
+      // layer (committed byte edits are already in active.bytes).
       let base = active.bytes;
-      if (docHasEdits(active)) {
+      if (docHasOverlayEdits(active)) {
         base = await bakeAnnotations(
           active.bytes,
           active.annotations,
@@ -2903,7 +3045,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const next = await addOcrTextLayer(base, ocr);
       const nextPdf = await loadPdf(next);
       destroyDocProxies(active, nextPdf);
-      updateDoc(id, {
+      updateDoc(id, (d) => ({
         bytes: next,
         pdf: nextPdf,
         annotations: {},
@@ -2912,7 +3054,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         historyIndex: 0,
         formValues: {},
         fieldOps: {},
-      });
+        // OCR rewrites the document in memory only — it stays unsaved.
+        rev: bumpBytesRevision(d.rev),
+      }));
       setDocVersion((v) => v + 1);
       setSelected(null);
       persistWorking(id, active.name, next);
@@ -3214,7 +3358,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
               nextAnnotations,
               pdfChanged && nextPdf ? { bytes: nextBytes, pdf: nextPdf } : undefined,
             )
-          : {}),
+          : // Form-value-only replacements skip pushHistory (no undo step) but
+            // are still mutations — bump the revision explicitly.
+            formValuesChanged
+            ? { rev: bumpRevision(d.rev) }
+            : {}),
         ...(formValuesChanged ? { formValues: nextFormValues } : {}),
       }));
       if (pdfChanged) {
@@ -3447,6 +3595,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLetterSpacing,
     annotations,
     hasAnnotations,
+    hasOverlayEdits,
+    hasByteEdits,
     addAnnotation,
     addAnnotations: addAnnotationsMany,
     updateAnnotation,
