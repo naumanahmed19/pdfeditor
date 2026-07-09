@@ -106,11 +106,15 @@ const MAX_PARA_LINES = 40;
  *  - boundaries: a line that ends visibly short of the column's right edge
  *    is a paragraph's final line; a line starting right of the column's left
  *    edge is an indented first line — both stop the walk.
+ * "block" scope collects the whole contiguous text block instead: the
+ * boundary signals are ignored and the leading budget is wide enough to
+ * cross paragraph spacing — only column, size and genuine gaps still stop it.
  * Returns lines top→bottom, each line's runs left→right.
  */
 export function collectParagraph(
   objs: TextObject[],
   hit: TextObject,
+  scope: "paragraph" | "block" = "paragraph",
 ): TextObject[][] {
   const lines = buildPageLines(objs);
   const start = lines.findIndex((l) => l.objs.some((o) => o.index === hit.index));
@@ -131,7 +135,14 @@ export function collectParagraph(
       // vertically farther than the leading budget ends the search.
       let cand: PageLine | null = null;
       let candIdx = -1;
-      const maxStep = leading ? leading * 1.35 : size * 2.1;
+      const maxStep =
+        scope === "block"
+          ? leading
+            ? leading * 2.6
+            : size * 3.2
+          : leading
+            ? leading * 1.35
+            : size * 2.1;
       for (let i = edgeIdx + dir; i >= 0 && i < lines.length; i += dir) {
         const l = lines[i];
         const dv = Math.abs(edge.top - l.top);
@@ -149,22 +160,25 @@ export function collectParagraph(
       if (cand.size < 0.8 * size || cand.size > 1.25 * size) return;
 
       // Paragraph-boundary signals, measured against the column extents the
-      // paragraph would have with the candidate included.
-      const colLeft = Math.min(cand.left, ...accepted.map((i) => lines[i].left));
-      const colRight = Math.max(cand.right, ...accepted.map((i) => lines[i].right));
-      const colW = colRight - colLeft;
-      const indent = Math.max(size * 0.9, colW * 0.04);
-      const short = (l: PageLine) => colW > size * 8 && l.right < colRight - 0.22 * colW;
-      if (dir > 0) {
-        // Going down: the current last line being short means the paragraph
-        // already ended; an indented candidate starts the next one.
-        if (short(edge)) return;
-        if (cand.left - colLeft > indent) return;
-      } else {
-        // Going up: a short candidate is the previous paragraph's final line;
-        // an indented current-first-line is this paragraph's own start.
-        if (short(cand)) return;
-        if (edge.left - colLeft > indent) return;
+      // paragraph would have with the candidate included. Block scope reads
+      // straight through them.
+      if (scope === "paragraph") {
+        const colLeft = Math.min(cand.left, ...accepted.map((i) => lines[i].left));
+        const colRight = Math.max(cand.right, ...accepted.map((i) => lines[i].right));
+        const colW = colRight - colLeft;
+        const indent = Math.max(size * 0.9, colW * 0.04);
+        const short = (l: PageLine) => colW > size * 8 && l.right < colRight - 0.22 * colW;
+        if (dir > 0) {
+          // Going down: the current last line being short means the paragraph
+          // already ended; an indented candidate starts the next one.
+          if (short(edge)) return;
+          if (cand.left - colLeft > indent) return;
+        } else {
+          // Going up: a short candidate is the previous paragraph's final line;
+          // an indented current-first-line is this paragraph's own start.
+          if (short(cand)) return;
+          if (edge.left - colLeft > indent) return;
+        }
       }
 
       if (dir < 0) accepted.unshift(candIdx);

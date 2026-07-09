@@ -13,6 +13,7 @@ import {
   type InlineEditRun,
   styleKey,
   familyRoot,
+  collectLine,
   mapLineEditToRuns,
   detectFontFromName,
   resolveTextFont,
@@ -284,10 +285,14 @@ export function PageView({
     // hover affordance already shows what's editable, a toast would only nag.
     if (!hit) return;
 
-    // Join the paragraph's fragments into one editable string — a "\n"
-    // separator (virtual, like the inferred spaces) closes each visual line —
-    // remembering each run's span so the edit maps back per run.
-    const paraLines = collectParagraph(objs, hit);
+    // Join the scoped fragments into one editable string — a "\n" separator
+    // (virtual, like the inferred spaces) closes each visual line —
+    // remembering each run's span so the edit maps back per run. The scope
+    // (line / paragraph / whole block) is the toolbar's edit-text sub-option.
+    const paraLines =
+      app.editTextScope === "line"
+        ? [collectLine(objs, hit)]
+        : collectParagraph(objs, hit, app.editTextScope);
     let joined = "";
     const runs: InlineEditRun[] = [];
     for (let li = 0; li < paraLines.length; li++) {

@@ -142,6 +142,19 @@ describe("collectParagraph", () => {
     }
   });
 
+  it("block scope reads through paragraph boundaries but not across columns", () => {
+    // Two paragraphs separated by a short final line + extra leading, same column.
+    const p1 = para(760, 3, 72, 300, { shortLast: true }); // ends y 732
+    const p2 = para(760 - 3 * 14 - 8, 3); // 22pt step — beyond paragraph budget
+    const right = para(760, 6, 340, 540);
+    const all = [...p1, ...p2, ...right];
+    expect(collectParagraph(all, p2[0])).toHaveLength(3); // paragraph stops
+    const block = collectParagraph(all, p2[0], "block");
+    expect(block).toHaveLength(6); // block spans both paragraphs
+    const rightIdx = new Set(right.map((o) => o.index));
+    for (const line of block) for (const o of line) expect(rightIdx.has(o.index)).toBe(false);
+  });
+
   it("ignores same-band table cells when walking lines", () => {
     // A two-cell row: clicking the left cell must not pull in the right cell,
     // and with no compatible line above/below it stays a one-line paragraph.
