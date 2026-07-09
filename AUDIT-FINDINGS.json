@@ -1,0 +1,292 @@
+[
+  {
+    "area": "PDF correctness",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Byte-level PDF mutations are not tracked as unsaved edits.",
+    "evidence": "src/store.tsx:717-722 checks only annotations, formValues, and fieldOps, while text, object, page, OCR, and redaction operations replace document bytes.",
+    "impact": "Users can close or refresh without a warning and lose edits, including applied redactions.",
+    "fix": "Track an explicit saved revision or content hash and mark every mutating path dirty.",
+    "source": "source audit"
+  },
+  {
+    "area": "PDF correctness",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Standard encrypted PDFs can become unreadable when processed by helper paths.",
+    "evidence": "src/lib/pdftools.ts:48 loads through pdf-lib with ignoreEncryption:true; src/lib/pdfium.ts:53 reopens with an empty password; a diagnostic output could not be reopened by PDFium with either the user password or no password.",
+    "impact": "Protected customer documents can be corrupted or silently lose protection.",
+    "fix": "Use the authenticated PDFium handle or an explicit owner-decrypt, mutate, validate, and re-encrypt pipeline.",
+    "source": "source audit and diagnostic"
+  },
+  {
+    "area": "PDF correctness",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "The 270-degree viewer-to-PDF coordinate transform is wrong.",
+    "evidence": "src/lib/pdftools.ts:460-475 and 1804-1818 swap width and height incorrectly; a 600x800 diagnostic produced x=540,y=450 instead of PDFium's x=340,y=650.",
+    "impact": "Crop, redaction, annotations, OCR, and form placement can affect the wrong region on rotated pages.",
+    "fix": "Replace hand-coded branches with one PDFium-backed transform and rotation fixtures.",
+    "source": "source audit and diagnostic"
+  },
+  {
+    "area": "Redaction",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Redaction can silently fail while the UI removes boxes and reports success.",
+    "evidence": "src/lib/pdfium.ts:200-226 skips failed pages and ignores a false redaction result; src/store.tsx:2213-2229 removes boxes and shows success without post-save verification.",
+    "impact": "Sensitive content may remain recoverable after a user is told it was permanently removed.",
+    "fix": "Fail closed on every page/quad error and reopen, extract, inspect objects, and render the output before success.",
+    "source": "source audit"
+  },
+  {
+    "area": "Redaction",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Image-only redactions do not remove the underlying image despite unconditional removal claims.",
+    "evidence": "TODO.md:83-88 records that image-only regions are only covered; the UI and marketing claim text and images are deleted and nothing is recoverable.",
+    "impact": "The privacy promise is unsafe for scanned PDFs, a primary redaction use case.",
+    "fix": "Implement destructive image/path redaction or detect and block unsupported regions with precise messaging.",
+    "source": "source and copy audit"
+  },
+  {
+    "area": "Page operations",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Page copy operations discard document-level structures.",
+    "evidence": "src/lib/pdftools.ts:52-130 rebuilds documents using copyPages; diagnostics changed test-form.pdf from four fields to zero and removed the outline from test-outline.pdf.",
+    "impact": "Merge, extract, delete, and reorder can destroy forms, outlines, destinations, tags, attachments, signatures, and catalog settings.",
+    "fix": "Mutate the page tree in place or explicitly preserve and remap every catalog structure, with round-trip fixtures.",
+    "source": "source audit and fixture diagnostic"
+  },
+  {
+    "area": "Crop",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Permanent crop changes page boxes but leaves hidden content recoverable.",
+    "evidence": "src/lib/pdftools.ts:237-257 only sets CropBox and MediaBox while src/components/tools/ToolsScreens.tsx:1105-1114 says the cropped area is removed permanently.",
+    "impact": "Users may disclose supposedly removed content.",
+    "fix": "Rename it boundary crop or truly rewrite/clamp page content and verify removal.",
+    "source": "source audit"
+  },
+  {
+    "area": "Permissions",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "PDF permission enforcement is incomplete and spread across UI paths.",
+    "evidence": "Split/extract, export, search/replace, and OCR paths lack centralized copy, assembly, or modify checks.",
+    "impact": "Restricted PDFs can be modified or exported through alternate workflows.",
+    "fix": "Enforce authorization inside every store mutation/export API rather than only in controls.",
+    "source": "source audit"
+  },
+  {
+    "area": "Reliability",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Whole-PDF undo history is memory-unbounded by bytes and leaks discarded PDFium proxies.",
+    "evidence": "src/store.tsx:780 retains up to 60 full byte arrays/proxies and discarded history entries are sliced without destroying their proxies.",
+    "impact": "Large PDFs can exhaust memory or crash long sessions.",
+    "fix": "Use a byte-budgeted history, destroy every discarded proxy, and store deltas or temporary files.",
+    "source": "source audit"
+  },
+  {
+    "area": "Performance",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Rendering is synchronous, non-cancellable, and lacks resource limits.",
+    "evidence": "src/lib/engine.ts:449 has a no-op cancel path; rendering copies full RGBA buffers and viewer startup caches every page handle.",
+    "impact": "Large or malicious documents can freeze or exhaust the UI process.",
+    "fix": "Move rendering/extraction to workers, tile pages, add real cancellation, and enforce pixel/page/file budgets.",
+    "source": "source audit"
+  },
+  {
+    "area": "Security",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "The desktop and live web surfaces lack a defensive content security policy and security headers.",
+    "evidence": "src-tauri/tauri.conf.json:28 sets csp:null; the live marketing audit scored 25/100 with HSTS, CSP, frame, MIME, referrer, and permissions headers absent.",
+    "impact": "Injection, clickjacking, downgrade, and secret-exposure risks are harder to contain.",
+    "fix": "Ship a restrictive CSP and the six baseline response headers on both origins.",
+    "source": "source audit and live header check"
+  },
+  {
+    "area": "Security",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Untrusted link schemes and arbitrary AI endpoints are accepted, while API keys are stored in localStorage.",
+    "evidence": "PDF and user links lack a strict scheme allow-list; custom endpoints accept arbitrary URLs; src/store.tsx:1113 serializes settings including customApiKey.",
+    "impact": "A malicious PDF or injection could expose secrets or launch unsafe protocols.",
+    "fix": "Allow-list schemes, confirm external launches, require HTTPS except loopback, and use an OS credential vault on desktop.",
+    "source": "source audit"
+  },
+  {
+    "area": "Privacy",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Local document, signature, chat, and API-key retention is not visible or controllable enough.",
+    "evidence": "IndexedDB retains up to ten 80 MB documents, closed files are not deleted, signatures and the last 40 chat messages persist, and failures are silent.",
+    "impact": "Local-first does not equal ephemeral; regulated users need retention and deletion control.",
+    "fix": "Add no-retention mode, per-item and clear-all deletion, retention disclosure, and protected secret storage.",
+    "source": "source audit"
+  },
+  {
+    "area": "Accessibility",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "The editor is not keyboard or assistive-technology ready.",
+    "evidence": "Custom dialogs lack dialog semantics/focus trapping, form inputs lack programmatic labels, object overlays are pointer-only, the text editor is an unlabeled contenteditable, and multiple controls are below 44 pixels.",
+    "impact": "The product is unusable for some users and cannot meet enterprise/public-sector accessibility requirements.",
+    "fix": "Adopt accessible dialog primitives, labels, keyboard object editing, axe tests, and PDF tagging/remediation workflows.",
+    "source": "source and browser audit"
+  },
+  {
+    "area": "Testing",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Critical PDF workflows have no integration, interoperability, corpus, fuzz, or end-to-end coverage.",
+    "evidence": "79 unit tests in eight files pass, but Rust has zero tests and no CI, E2E, coverage, visual regression, corpus, fuzz, or accessibility suite exists.",
+    "impact": "Release-blocking encryption, rotation, redaction, and structure-loss defects reached the current build.",
+    "fix": "Create a golden PDF corpus and invariant-based CI across open, edit, save, reopen, render, extract, and validate.",
+    "source": "test and repository audit"
+  },
+  {
+    "area": "Distribution",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "The public Download and GitHub links return 404 and no public release is available.",
+    "evidence": "Live broken-link checks returned 404 for github.com/naumanahmed19/pdfeditor and its releases path; the local remote is private/unavailable anonymously and there are no tags.",
+    "impact": "Visitors cannot install or verify the product, so acquisition and conversion stop at the CTA.",
+    "fix": "Publish a real release destination with checksums, release notes, and supported installers before advertising download.",
+    "source": "live link and git audit"
+  },
+  {
+    "area": "Distribution",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Available installer artifacts are unsigned, test-signed, or fail trust validation.",
+    "evidence": "Get-AuthenticodeSignature reported unsigned PDF Workbench builds, UnknownError with CN=PickPDF Test Code Signing for 0.1.0, and an unsigned PickPDF 0.1.1 setup.",
+    "impact": "Windows trust warnings and SmartScreen friction undermine a privacy/security product.",
+    "fix": "Use a production code-signing identity, timestamp every artifact, and automate verified release signing.",
+    "source": "artifact audit"
+  },
+  {
+    "area": "Marketing trust",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Public claims overstate implemented behavior and commercial readiness.",
+    "evidence": "The site claims lossless compression, complete redaction, very-large-file performance, automatic updates, signed installers, central seat management, deployment, and DPA support while source/live legal pages show lossy JPEG recompression, image redaction gaps, no updater/admin stack, test signing, and planned DPA/commerce.",
+    "impact": "Trust, legal, refund, and enterprise procurement risk outweigh short-term conversion gains.",
+    "fix": "Publish only verified capabilities and label Pro/Team as preview until purchase, licensing, support, and legal delivery exist.",
+    "source": "source, artifact, and live copy audit"
+  },
+  {
+    "area": "SEO technical",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "finding": "Three guide URLs in the sitemap canonicalize to the guides hub.",
+    "evidence": "All three guide routes return 200 but declare https://pickpdf.app/guides as canonical.",
+    "impact": "Search engines are instructed to consolidate the guide pages instead of indexing them.",
+    "fix": "Give each finished guide a self-referencing canonical or remove it from the sitemap.",
+    "source": "live crawl"
+  },
+  {
+    "area": "SEO technical",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "The browser editor origin returns the same indexable SPA shell with HTTP 200 for robots, sitemap, and nonexistent paths.",
+    "evidence": "open.pickpdf.app/robots.txt and a random nonexistent URL both returned the 730-byte PickPDF shell with HTTP 200; the shell has no noindex, canonical, or description.",
+    "impact": "The origin creates soft-404/crawl-noise risk and weak duplicate brand pages.",
+    "fix": "Return real 404s and apply X-Robots-Tag:noindex,nofollow to the app shell.",
+    "source": "live HTTP audit"
+  },
+  {
+    "area": "SEO architecture",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Thirteen commercial routes have no inbound HTML links.",
+    "evidence": "All eight tool pages, four comparison pages, and /guides were discoverable only through the sitemap.",
+    "impact": "Crawl priority, authority flow, usability, and conversions are weak.",
+    "fix": "Create a tools hub, make homepage tiles real links, and cross-link related tools, guides, and comparisons.",
+    "source": "live crawl"
+  },
+  {
+    "area": "SEO content",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Commercial and guide pages are too thin and generic to compete.",
+    "evidence": "Tool pages contain roughly 135-165 rendered words, comparisons 108-121, guides 103-111, and teams 132 including shared navigation/footer.",
+    "impact": "Pages do not demonstrate expertise, satisfy intent, or earn citations against established competitors.",
+    "fix": "Add task-specific product interaction, evidence, screenshots, limitations, examples, related links, authorship, and 600-1000+ useful words where needed.",
+    "source": "live crawl"
+  },
+  {
+    "area": "SEO content",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Metadata is systematically outside useful search-snippet ranges.",
+    "evidence": "Twenty-two descriptions are under 120 characters, the homepage description is 180, six titles are under 30, and the pricing title is 67.",
+    "impact": "Relevance signals and organic click-through potential are weaker, though length alone is not a ranking penalty.",
+    "fix": "Write unique query-matched titles, descriptions, and H1s for all sitemap routes.",
+    "source": "live crawl"
+  },
+  {
+    "area": "Authority",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "The site lacks the trust and authority layer needed for privacy and regulated-workflow claims.",
+    "evidence": "No About page, named team, author bios, security contact, company identity, benchmarks, case studies, public changelog, independent reviews, or substantive DPA exists.",
+    "impact": "Users, search engines, and enterprise buyers cannot validate who operates the product or its claims.",
+    "fix": "Publish About, Contact, Security, privacy architecture, changelog, named authors, reproducible benchmarks, and independent assessment.",
+    "source": "live content audit"
+  },
+  {
+    "area": "AI search",
+    "severity": "Info",
+    "confidence": "Confirmed",
+    "finding": "AI-search readiness is incomplete.",
+    "evidence": "llms.txt returns 404, AI crawler policy is implicit, and only the homepage contains JSON-LD.",
+    "impact": "The brand is harder to cite and understand in answer engines.",
+    "fix": "Add llms.txt, explicit crawler policy, Organization/WebSite schema, TechArticle schema, authors, and quotable benchmark data.",
+    "source": "live SEO audit"
+  },
+  {
+    "area": "Performance",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "The production editor payload and local AI default create substantial first-use cost.",
+    "evidence": "Build output contains a 2.19 MB main JS chunk, 4.63 MB PDFium WASM, 23.57 MB ONNX runtime WASM, and a default Gemma model documented at about 3 GB and 8 GB RAM.",
+    "impact": "Cold start, low-end devices, mobile usability, and completion rates suffer.",
+    "fix": "Code-split by workflow, lazy-load engines, use workers, ship a smaller default model, and measure p75 first-page and interaction latency.",
+    "source": "production build audit"
+  },
+  {
+    "area": "Product depth",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "Professional PDF parity features are absent or partial.",
+    "evidence": "No PKI signature validation, accessibility remediation/PDF-UA, PDF/A/X/E/VT validation, preflight/print production, autosave/versioning, full-fidelity conversions, multi-language OCR/deskew, collaboration/e-sign routing, API/SDK, or enterprise administration exists.",
+    "impact": "The product cannot yet replace Acrobat, Foxit, Nitro, Smallpdf, or iLovePDF for their strongest buyer segments.",
+    "fix": "Win the private local-first editing wedge first, then build professional and enterprise parity in measured stages.",
+    "source": "source and competitor audit"
+  },
+  {
+    "area": "Operations",
+    "severity": "Warning",
+    "confidence": "Confirmed",
+    "finding": "The deployed marketing application is not owned by the tracked checkout.",
+    "evidence": "The live sitemap exposes 23 routes, but this repository only special-cases /download and .gitignore excludes landing/; the deployed router, sitemap generator, and route source are absent.",
+    "impact": "SEO, legal copy, and release changes cannot be reviewed or gated with the product source.",
+    "fix": "Bring deployment source and infrastructure into version control with preview deployments and crawl/security CI.",
+    "source": "repository and live audit"
+  },
+  {
+    "area": "Validation",
+    "severity": "Pass",
+    "confidence": "Confirmed",
+    "finding": "The current checkout typechecks, builds, and passes its existing unit and dependency checks.",
+    "evidence": "TypeScript passed; Vitest passed 79/79; npm audit found zero advisories; Cargo compiled and cargo test completed with zero Rust tests.",
+    "impact": "The codebase has a useful baseline but the checks do not exercise release-critical PDF invariants.",
+    "fix": "Keep these gates and add corpus, E2E, security, performance, and accessibility validation.",
+    "source": "local verification"
+  }
+]

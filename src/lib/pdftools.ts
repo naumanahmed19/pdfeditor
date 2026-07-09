@@ -135,9 +135,11 @@ export async function insertBlankPage(
   atIndex: number,
 ): Promise<Uint8Array> {
   const doc = await load(bytes);
-  const ref = doc.getPage(Math.min(atIndex, doc.getPageCount() - 1));
+  const pageCount = doc.getPageCount();
+  const targetIndex = Math.max(0, Math.min(Math.floor(atIndex), pageCount));
+  const ref = doc.getPage(targetIndex === 0 ? 0 : targetIndex - 1);
   const { width, height } = ref.getSize();
-  doc.insertPage(atIndex, [width, height]);
+  doc.insertPage(targetIndex, [width, height]);
   return doc.save();
 }
 
