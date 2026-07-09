@@ -250,7 +250,7 @@ const EDITOR_TOOLS: Array<{
   {
     key: "redact",
     label: "Redact",
-    description: "Draw boxes that permanently remove content when applied.",
+    description: "Draw boxes that permanently delete the text and images beneath when applied.",
     icon: SquareSlash,
     shortcut: "X",
   },
