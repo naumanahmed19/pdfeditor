@@ -240,6 +240,10 @@ export function PageView({
   // for now: text can't flow between lines until reflow lands.
   const onTextLayerClick = async (e: React.MouseEvent) => {
     if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
+    // A click while an edit is open (or still committing) is the gesture that
+    // dismisses it — never a request to start another edit, and never worth a
+    // "click a line" hint.
+    if (inlineEdit || savingEdit) return;
     const pr = wrapRef.current.getBoundingClientRect();
 
     let objs;
@@ -276,7 +280,10 @@ export function PageView({
           (b.right - b.left) * (b.top - b.bottom),
       )[0];
     if (!hit) {
-      toast.info("Click directly on a line of text to edit it.");
+      // A stable id collapses repeat misses into one toast instead of a stack.
+      toast.info("Click directly on a line of text to edit it.", {
+        id: "edittext-miss",
+      });
       return;
     }
 
@@ -531,13 +538,16 @@ export function PageView({
         }
       }
       if (substitute) {
+        // The substitution changes the visible face — ask before committing,
+        // and keep the editor open (text preserved) when the user declines.
+        const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
+        const ok = window.confirm(
+          `The embedded font "${badFace}" doesn't include ${chars}, so the edited text would be set in a close matching font.\n\nContinue with the substitute font?`,
+        );
+        if (!ok) return false;
         // Recreate only the edited runs with a close bundled/standard face; the
         // untouched neighbors keep their original embedded fonts.
         await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic, true);
-        const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
-        toast.info(
-          `The embedded font "${badFace}" doesn't include ${chars}, so the edited text was set in a close matching font.`,
-        );
         setInlineEdit(null);
         return true;
       }
