@@ -53,6 +53,11 @@ import type {
   TextRunEdit,
 } from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
+import {
+  recipeAfterOwnerUnlock,
+  recipeForOpenedDoc,
+  type EncryptRecipe,
+} from "./lib/reprotect";
 import { isHandheldDevice } from "./lib/device";
 import { downloadBytes, uid } from "./lib/utils";
 import {
@@ -80,14 +85,19 @@ export type EditTextScope = "line" | "paragraph" | "block";
 
 /** How a document must be re-protected when its bytes are written to disk. */
 export type ProtectionRecipe =
-  | {
-      kind: "encrypt";
-      userPassword: string;
-      ownerPassword: string;
-      permissions: number;
-    }
+  | EncryptRecipe
   /** PickPDF wrapper: plain inner document + AES-GCM payload behind `password`. */
   | { kind: "wrapper"; password: string };
+
+/** Thrown by protectForDisk when the user declines writing an UNPROTECTED
+ *  copy of a document that was password-protected when it was opened. Save
+ *  and download catch it and abort quietly (no error toast, no fallback). */
+class ProtectionDeclinedError extends Error {
+  constructor() {
+    super("Cancelled — the file was not written");
+    this.name = "ProtectionDeclinedError";
+  }
+}
 
 /** A pending in-app password prompt (rendered by PasswordModal). */
 export interface PasswordRequest {
@@ -1477,6 +1487,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // a decrypted copy or silently drop protection. Set only after a protect (or
   // an unwrap) actually succeeds; cleared on remove-protection and close.
   const protectionInfo = useRef(new Map<string, ProtectionRecipe>());
+  /** Docs that were STANDARD-ENCRYPTED when opened. Should one of these ever
+   *  reach a write path with no recipe in protectionInfo (e.g. a
+   *  restrictions-only file whose owner password was never entered, so there
+   *  is nothing to re-encrypt with), protectForDisk demands explicit consent
+   *  before writing plain bytes instead of silently stripping protection.
+   *  Cleared on close and on an explicit remove-protection. */
+  const encryptedAtOpen = useRef(new Set<string>());
   /** Reactive mirror of protectionInfo's keys (refs don't trigger renders). */
   const [protectedIds, setProtectedIds] = useState<ReadonlySet<string>>(new Set());
   const markProtected = useCallback((docId: string, on: boolean) => {
@@ -1517,7 +1534,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
    */
   const persistWorking = useCallback(
     (id: string, name: string, bytes: Uint8Array) => {
-      if (protectionInfo.current.has(id)) return;
+      // encryptedAtOpen covers recipe-less protected docs (restrictions-only
+      // files): their working bytes are decrypted, and persisting them would
+      // hand a session restore an unprotected copy.
+      if (protectionInfo.current.has(id) || encryptedAtOpen.current.has(id))
+        return;
       void persistDoc({ id, name, bytes, lastOpened: Date.now(), open: true }).then(
         (result) => noteAutosaveSkipped(id, result),
       );
@@ -1614,6 +1635,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
             duration: 6000,
           });
         }
+        // Standard-encrypted document: every edit path operates on decrypted
+        // bytes and cannot re-emit the original encryption, so capture how to
+        // re-protect it NOW, while the entered password is known. With a
+        // recipe registered, protectForDisk re-encrypts every save/download;
+        // without one (no password was typed — a restrictions-only file that
+        // opens with an empty password), the write paths instead ask for
+        // explicit consent before emitting an unprotected copy.
+        if (!wrapperPw && pdfDoc.isEncrypted()) {
+          encryptedAtOpen.current.add(doc.id);
+          const recipe = recipeForOpenedDoc({
+            password: pdfDoc.password,
+            ownerUnlocked: pdfDoc.isOwnerUnlocked(),
+            userPermissions: pdfDoc.getUserPermissions(),
+          });
+          if (recipe) {
+            protectionInfo.current.set(doc.id, recipe);
+            markProtected(doc.id, true);
+          }
+        }
         setDocs((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
         setActiveTabId(doc.id);
         setDocVersion((v) => v + 1);
@@ -1634,7 +1674,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             });
           } else {
             toast.info("This document is encrypted", {
-              description: "You hold full permissions on it.",
+              description: protectionInfo.current.has(doc.id)
+                ? "You hold full permissions on it. Saving keeps it password-protected."
+                : "You hold full permissions on it.",
               duration: 5000,
             });
           }
@@ -1893,6 +1935,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // doc whose password prompt was cancelled). Still let the user clear it
         // from the sidebar and drop any stale protection state.
         protectionInfo.current.delete(id);
+        encryptedAtOpen.current.delete(id);
         markProtected(id, false);
         docHandles.current.delete(id);
         void markDocClosed(id).then(refreshRecent);
@@ -1929,6 +1972,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Drop the cleartext protection secret + its reactive flag; don't leave a
       // closed document's password resident for the rest of the session.
       protectionInfo.current.delete(id);
+      encryptedAtOpen.current.delete(id);
       markProtected(id, false);
       void markDocClosed(id).then(refreshRecent);
     },
@@ -2338,24 +2382,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /**
    * Apply a document's protection recipe to `bytes` before they touch disk or
    * IndexedDB. Standard-encrypt re-applies AES-256; PickPDF-lock re-wraps.
-   * Returns the input unchanged when the doc has no recipe. This is the single
-   * choke point that keeps every write/persist path from leaking a decrypted
-   * copy of a protected document.
+   * Returns the input unchanged when the doc has no recipe AND wasn't
+   * encrypted when it was opened. This is the single choke point that keeps
+   * every write/persist path from leaking a decrypted copy of a protected
+   * document — and it never lets an originally-encrypted document be written
+   * unprotected without explicit consent (throws ProtectionDeclinedError when
+   * the user says no).
    */
   const protectForDisk = useCallback(
     async (docId: string, bytes: Uint8Array, name: string): Promise<Uint8Array> => {
       const recipe = protectionInfo.current.get(docId);
-      if (!recipe) return bytes;
-      if (recipe.kind === "encrypt") {
-        const { encryptPdf } = await import("./lib/pdfium");
-        return encryptPdf(bytes, {
-          userPassword: recipe.userPassword,
-          ownerPassword: recipe.ownerPassword,
-          permissions: recipe.permissions,
-        });
+      if (recipe?.kind === "encrypt") {
+        try {
+          const { encryptPdf } = await import("./lib/pdfium");
+          return await encryptPdf(bytes, {
+            userPassword: recipe.userPassword,
+            ownerPassword: recipe.ownerPassword,
+            permissions: recipe.permissions,
+          });
+        } catch (err) {
+          // Re-encryption failed — never fall through to plain bytes quietly;
+          // that would strip the document's protection behind the user's back.
+          const ok = window.confirm(
+            `“${name}” is password-protected, but re-applying its protection failed (${
+              err instanceof Error ? err.message : "unknown error"
+            }). Save an UNPROTECTED copy instead?`,
+          );
+          if (!ok) throw new ProtectionDeclinedError();
+          return bytes;
+        }
       }
-      const { wrapProtected } = await import("./lib/protected");
-      return wrapProtected(bytes, recipe.password, name);
+      if (recipe?.kind === "wrapper") {
+        const { wrapProtected } = await import("./lib/protected");
+        return wrapProtected(bytes, recipe.password, name);
+      }
+      // No recipe, but the document was encrypted when it was opened — e.g. a
+      // restrictions-only file whose owner password was never entered, so
+      // there is nothing to re-encrypt with. Writing the (decrypted) working
+      // bytes would silently strip that protection: ask first.
+      if (encryptedAtOpen.current.has(docId)) {
+        const ok = window.confirm(
+          `“${name}” was password-protected when it was opened, and PickPDF can't re-apply that protection. Saving now will remove the protection from the saved file. Continue?`,
+        );
+        if (!ok) throw new ProtectionDeclinedError();
+      }
+      return bytes;
     },
     [],
   );
@@ -2364,9 +2435,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const bytes = await bakeToBytes();
     if (!bytes || !active) return;
     const base = active.name.replace(/\.pdf$/i, "");
-    const out = await protectForDisk(active.id, bytes, active.name);
+    // Unedited bytes of a still-encrypted document ARE the protected original
+    // — write them as-is (re-encrypting already-encrypted bytes would fail).
+    const stillEncrypted = bytes === active.bytes && active.pdf.isEncrypted();
+    let out: Uint8Array;
+    try {
+      out = stillEncrypted
+        ? bytes
+        : await protectForDisk(active.id, bytes, active.name);
+    } catch (err) {
+      if (err instanceof ProtectionDeclinedError) {
+        toast.info("Download cancelled — no file was written.");
+        return;
+      }
+      throw err;
+    }
     downloadBytes(out, `${base}-edited.pdf`);
-    toast.success(out === bytes ? "PDF downloaded" : "Protected PDF downloaded");
+    toast.success(
+      out !== bytes || stillEncrypted
+        ? "Protected PDF downloaded"
+        : "PDF downloaded",
+    );
   }, [bakeToBytes, active, protectForDisk]);
 
   /**
@@ -2383,8 +2472,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateDoc(active.id, { name: next });
       // For a protected doc, never rewrite its IndexedDB record with the plain
       // in-app bytes — leave the persisted protected form (and its old name)
-      // until the next save re-writes it protected.
-      if (protectionInfo.current.has(active.id)) {
+      // until the next save re-writes it protected. encryptedAtOpen covers
+      // recipe-less protected docs (restrictions-only files) the same way.
+      if (
+        protectionInfo.current.has(active.id) ||
+        encryptedAtOpen.current.has(active.id)
+      ) {
         void refreshRecent();
       } else {
         void persistDoc({
@@ -2418,8 +2511,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Protected docs go to disk re-protected; the in-app copy commits to the
       // plain baked bytes below (it stays editable, exactly like the protect
       // flow). This is why saving never strips a document's protection.
-      const out = await protectForDisk(active.id, baked, active.name);
-      const locked = out !== baked ? " (protected)" : "";
+      // Unedited bytes of a still-encrypted document ARE the protected
+      // original — write them as-is (re-encrypting encrypted bytes fails).
+      const stillEncrypted = baked === active.bytes && active.pdf.isEncrypted();
+      const out = stillEncrypted
+        ? baked
+        : await protectForDisk(active.id, baked, active.name);
+      const locked = out !== baked || stillEncrypted ? " (protected)" : "";
       if (handle) {
         if (handle.requestPermission) {
           const perm = await handle.requestPermission({ mode: "readwrite" });
@@ -2462,6 +2560,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Saving ends the editing session — no separate "Done" needed.
       setEditModeState(false);
     } catch (err) {
+      // The user declined writing an unprotected copy — abort quietly, and
+      // certainly don't "fall back" to downloading the same stripped bytes.
+      if (err instanceof ProtectionDeclinedError) {
+        toast.info("Save cancelled — no file was written.");
+        return;
+      }
       toast.error(
         `Save failed: ${err instanceof Error ? err.message : "error"} — downloading a copy instead.`,
       );
@@ -2608,6 +2712,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // opened PickPDF wrappers (which decrypt to plain on open).
     if (protectionInfo.current.has(id) && !active.pdf.isEncrypted()) {
       protectionInfo.current.delete(id);
+      // Removing protection is the user's explicit choice — plain writes no
+      // longer need the "was encrypted at open" consent gate.
+      encryptedAtOpen.current.delete(id);
       markProtected(id, false);
       toast.success("Protection removed — save to write the unlocked file");
       return;
@@ -2638,6 +2745,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       protectionInfo.current.delete(id);
+      encryptedAtOpen.current.delete(id);
       markProtected(id, false);
       toast.success("Protection removed — save to write the unlocked file");
     } catch (err) {
@@ -2670,6 +2778,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!active) return false;
       const ok = active.pdf.unlockOwner(ownerPassword);
       if (ok) {
+        // The REAL owner password is now proven — capture/upgrade the
+        // re-encryption recipe so saves reproduce the original policy exactly
+        // (same owner password, same permissions). This is also the moment a
+        // restrictions-only file (opened without a prompt, hence recipe-less)
+        // finally gets a recipe instead of the save-time consent fallback.
+        if (encryptedAtOpen.current.has(active.id)) {
+          const prev = protectionInfo.current.get(active.id);
+          protectionInfo.current.set(
+            active.id,
+            recipeAfterOwnerUnlock(
+              prev?.kind === "encrypt" ? prev : undefined,
+              active.pdf.password,
+              ownerPassword,
+              active.pdf.getUserPermissions(),
+            ),
+          );
+          markProtected(active.id, true);
+        }
         setPermTick((t) => t + 1);
         toast.success("Permissions unlocked — full access granted");
       } else {
@@ -2677,7 +2803,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       return ok;
     },
-    [active],
+    [active, markProtected],
   );
 
   /** Whether the document's permissions allow arming a given tool. */
