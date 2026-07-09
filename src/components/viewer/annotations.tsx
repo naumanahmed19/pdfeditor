@@ -783,8 +783,10 @@ function AnnotationItem({
   // While editing, the box auto-grows to fit the typed text (RichTextEditor
   // reports run changes via onRunsChange → measureRichText).
   const [editSize, setEditSize] = useState<{ w: number; h: number } | null>(null);
+  type ResizeCorner = "nw" | "ne" | "sw" | "se";
   const dragRef = useRef<{
     mode: "move" | "resize";
+    corner: ResizeCorner;
     startX: number;
     startY: number;
     orig: { x: number; y: number; w: number; h: number };
@@ -808,7 +810,11 @@ function AnnotationItem({
     live ??
     (editing && editSize ? { ...ann, w: editSize.w, h: editSize.h } : ann);
 
-  const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
+  const beginDrag = (
+    e: React.PointerEvent,
+    mode: "move" | "resize",
+    corner: ResizeCorner = "se",
+  ) => {
     // While reading, clicking a comment marker just opens its popup.
     if (ann.kind === "note" && app.tool === "read") {
       e.stopPropagation();
@@ -869,9 +875,17 @@ function AnnotationItem({
     }
     dragRef.current = {
       mode,
+      corner,
       startX: e.clientX,
       startY: e.clientY,
-      orig: { x: ann.x, y: ann.y, w: ann.w, h: ann.h },
+      orig: {
+        x: ann.x,
+        y: ann.y,
+        // While editing, the box is auto-grown to fit the text — drag that
+        // size, not the last committed one, so the box doesn't jump on grab.
+        w: editing && editSize ? editSize.w : ann.w,
+        h: editing && editSize ? editSize.h : ann.h,
+      },
     };
     // Form-builder aids: snap candidates on this page, and (when the pressed
     // field is part of a multi-selection) the ids that drag along with it.
@@ -933,16 +947,30 @@ function AnnotationItem({
           });
         }
       } else if (ann.kind === "image") {
-        // Images keep their aspect ratio while resizing.
-        const w = Math.max(8, d.orig.w + dx);
-        finalBox = { ...d.orig, w, h: Math.max(8, w * (d.orig.h / d.orig.w)) };
-      } else {
-        let next = {
-          ...d.orig,
-          w: Math.max(8, d.orig.w + dx),
-          h: Math.max(8, d.orig.h + dy),
+        // Images keep their aspect ratio while resizing; the corner opposite
+        // the grabbed handle stays anchored.
+        const c = d.corner;
+        const w = Math.max(8, d.orig.w + (c.includes("w") ? -dx : dx));
+        const h = Math.max(8, w * (d.orig.h / d.orig.w));
+        finalBox = {
+          x: c.includes("w") ? d.orig.x + d.orig.w - w : d.orig.x,
+          y: c.includes("n") ? d.orig.y + d.orig.h - h : d.orig.y,
+          w,
+          h,
         };
-        if (canSnap && !ev.altKey) {
+      } else {
+        const c = d.corner;
+        const w = Math.max(8, d.orig.w + (c.includes("w") ? -dx : dx));
+        const h = Math.max(8, d.orig.h + (c.includes("n") ? -dy : dy));
+        let next = {
+          x: c.includes("w") ? d.orig.x + d.orig.w - w : d.orig.x,
+          y: c.includes("n") ? d.orig.y + d.orig.h - h : d.orig.y,
+          w,
+          h,
+        };
+        // Edge snapping adjusts w/h around a fixed top-left, so it only
+        // applies to the bottom-right handle; the other corners move x/y.
+        if (c === "se" && canSnap && !ev.altKey) {
           const s = snapResizingRect(next, snapOthers, pageBox, snapOpts);
           next = { ...next, w: s.w, h: s.h };
           app.setSnapGuides(
@@ -1443,10 +1471,10 @@ function AnnotationItem({
     }
   }
 
-  // Text boxes keep one consistent dashed look — hovering, selected, blank,
-  // mid-type, or re-selected later all look the same; only the placeholder
-  // hint is specific to the still-blank state.
-  const isTextSelected = ann.kind === "text" && isSelected;
+  // Text boxes get design-tool-style chrome: a thin solid frame drawn just
+  // OUTSIDE the box (an overlay, so selecting/hovering never reflows the
+  // text), corner handles, and a grab band around the frame for dragging.
+  const textChrome = ann.kind === "text" && (isSelected || editing) && !previewing;
   const isEmptyText = ann.kind === "text" && editing && !hasContent;
 
   return (
@@ -1454,20 +1482,19 @@ function AnnotationItem({
       ref={wrapRef}
       style={style}
       className={cn(
-        isTextSelected
-          ? "rounded-md border-2 border-dashed border-blue-400"
-          : (isSelected || isMulti) &&
-              !previewing &&
-              "ring-2 ring-blue-500 ring-offset-1",
+        ann.kind !== "text" &&
+          (isSelected || isMulti) &&
+          !previewing &&
+          "ring-2 ring-blue-500 ring-offset-1",
         hasActiveSearchHit
           ? "annotation-search-hit-active"
           : hasSearchHit && "annotation-search-hit",
-        isEmptyText && "bg-blue-50/40",
+        isEmptyText && "rounded-sm bg-blue-50/40",
         erasable && "hover:ring-2 hover:ring-red-400/80",
         !isSelected &&
           !erasable &&
           (ann.kind === "text"
-            ? selectable && "hover:rounded-md hover:border-2 hover:border-dashed hover:border-blue-400/60"
+            ? selectable && "hover:rounded-sm hover:ring-1 hover:ring-blue-400/60"
             : (selectable || noteInRead) && "hover:ring-1 hover:ring-blue-400/60"),
         // A linked text box in read mode gets a link-like hover hotspot.
         linkInRead && ann.kind === "text" && "rounded-sm hover:ring-1 hover:ring-blue-400/50",
@@ -1507,6 +1534,32 @@ function AnnotationItem({
         </div>
       )}
       {body}
+      {textChrome && (
+        <>
+          {/* Selection frame drawn just outside the text so glyphs never
+              touch it; a faint white halo keeps it visible on dark pages. */}
+          <div className="pointer-events-none absolute -inset-1 rounded-[3px] border border-blue-500 shadow-[0_0_0_1px_rgba(255,255,255,0.55)]" />
+          {/* Grab band: an invisible ~10px zone around the frame. The whole
+              box drags when idle, but while editing the text area owns the
+              pointer — the band is what makes the box draggable then. */}
+          {!ann.locked &&
+            (
+              [
+                "-left-2.5 -right-2.5 -top-2.5 h-2.5",
+                "-bottom-2.5 -left-2.5 -right-2.5 h-2.5",
+                "-left-2.5 bottom-0 top-0 w-2.5",
+                "-right-2.5 bottom-0 top-0 w-2.5",
+              ] as const
+            ).map((pos) => (
+              <div
+                key={pos}
+                className={cn("absolute cursor-move", pos)}
+                style={{ touchAction: "none" }}
+                onPointerDown={(e) => beginDrag(e, "move")}
+              />
+            ))}
+        </>
+      )}
       {ann.kind === "text" && hasLinkTarget(ann.link) && (app.editMode || isSelected) && (
         // Corner badge marking a text box that's been turned into a link.
         <div
@@ -1517,10 +1570,23 @@ function AnnotationItem({
         </div>
       )}
       {isSelected && !previewing && ann.kind !== "note" && (
-        <div
-          className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
-          onPointerDown={(e) => beginDrag(e, "resize")}
-        />
+        // Corner resize handles; the corner opposite the grabbed one anchors.
+        <>
+          {(["nw", "ne", "sw", "se"] as const).map((c) => (
+            <div
+              key={c}
+              className={cn(
+                "absolute h-2.5 w-2.5 rounded-full border-[1.5px] border-blue-500 bg-white shadow-sm",
+                c === "nw" && "-left-2 -top-2 cursor-nwse-resize",
+                c === "ne" && "-right-2 -top-2 cursor-nesw-resize",
+                c === "sw" && "-bottom-2 -left-2 cursor-nesw-resize",
+                c === "se" && "-bottom-2 -right-2 cursor-nwse-resize",
+              )}
+              style={{ touchAction: "none" }}
+              onPointerDown={(e) => beginDrag(e, "resize", c)}
+            />
+          ))}
+        </>
       )}
       {isSelected && ROTATABLE_KINDS.has(ann.kind) && (
         <>
