@@ -28,6 +28,13 @@ import type {
   NoteAnnotation,
   TextAnnotation,
 } from "../types";
+import {
+  displayRectToPdf,
+  displaySize,
+  displayToPdfMatrix,
+  isIdentityMatrix,
+  pageGeometry,
+} from "./coords";
 import { hasLinkTarget, linkHref } from "./linktarget";
 import type { OcrPage } from "./ocr";
 import type { RedactRect } from "./pdfium";
@@ -249,13 +256,9 @@ export async function cropPages(
     const page = doc.getPage(idx);
     // Displayed geometry is the CropBox (falls back to MediaBox), so the
     // selection maps relative to it — including its origin offset.
-    const cb = page.getCropBox();
-    const rotation = page.getRotation().angle;
-    const r = toPdfRect(rect, cb.width, cb.height, rotation);
-    const x = cb.x + r.x;
-    const y = cb.y + r.y;
-    page.setCropBox(x, y, r.w, r.h);
-    if (permanent) page.setMediaBox(x, y, r.w, r.h);
+    const r = displayRectToPdf(rect, pageGeometry(page));
+    page.setCropBox(r.x, r.y, r.w, r.h);
+    if (permanent) page.setMediaBox(r.x, r.y, r.w, r.h);
   }
   return doc.save();
 }
@@ -456,36 +459,13 @@ export async function addPageNumbers(
 }
 
 /**
- * Convert a rect from viewer space (origin top-left of the *rotated* page as
- * displayed, PDF points) into pdf-lib space (origin bottom-left of the
- * unrotated page). Handles 0/90/180/270 page rotation.
- */
-function toPdfRect(
-  a: { x: number; y: number; w: number; h: number },
-  pw: number, // unrotated page width
-  ph: number, // unrotated page height
-  rotation: number,
-): { x: number; y: number; w: number; h: number } {
-  switch (((rotation % 360) + 360) % 360) {
-    case 90:
-      // displayed width = ph, displayed height = pw
-      return { x: a.y, y: a.x, w: a.h, h: a.w };
-    case 180:
-      return { x: pw - a.x - a.w, y: a.y, w: a.w, h: a.h };
-    case 270:
-      return { x: ph - a.y - a.h, y: pw - a.x - a.w, w: a.h, h: a.w };
-    default:
-      return { x: a.x, y: ph - a.y - a.h, w: a.w, h: a.h };
-  }
-}
-
-/**
  * Destructively redact every pending "redact" box in `annotations`: the text
  * (and form content) under each box is removed from the page content stream via
  * PDFium and a black box is painted in its place — it can't be copied, searched
  * or recovered, unlike a whiteout cover. Returns the input unchanged when there
- * are no redaction boxes. Box coordinates are mapped through `toPdfRect`, so
- * rotated pages are handled identically to the rest of the baking pipeline.
+ * are no redaction boxes. Box coordinates are mapped through the shared
+ * display→PDF converter, so rotated and crop-offset pages are handled
+ * identically to the rest of the baking pipeline.
  */
 export async function applyRedactions(
   bytes: Uint8Array,
@@ -498,11 +478,10 @@ export async function applyRedactions(
     const pageIndex = Number(pageIndexStr);
     if (pageIndex < 0 || pageIndex >= doc.getPageCount() || !list.length) continue;
     const page = doc.getPage(pageIndex);
-    const { width: pw, height: ph } = page.getSize();
-    const rotation = page.getRotation().angle;
+    const geom = pageGeometry(page);
     for (const ann of list) {
       if (ann.kind !== "redact") continue;
-      const r = toPdfRect(ann, pw, ph, rotation);
+      const r = displayRectToPdf(ann, geom);
       rects.push({
         pageIndex,
         left: r.x,
@@ -808,67 +787,102 @@ export async function bakeAnnotations(
     const pageIndex = Number(pageIndexStr);
     if (pageIndex < 0 || pageIndex >= doc.getPageCount() || !list.length) continue;
     const page = doc.getPage(pageIndex);
-    const { width: pw, height: ph } = page.getSize();
-    const rotation = page.getRotation().angle;
+    const geom = pageGeometry(page);
+    const disp = displaySize(geom);
+    const ctm = displayToPdfMatrix(geom);
 
-    for (const ann of list) {
-      const r = toPdfRect(ann, pw, ph, rotation);
-      if (ann.kind === "formfield") {
-        newFields.push({ ann, r, pageIndex });
-        continue;
-      }
-      if (ann.kind === "note") {
-        // Skip empty notes; write real ones as native PDF comments.
-        if (ann.text.trim()) addNoteAnnotation(doc, pageIndex, ann, r);
-        continue;
-      }
-      if (ann.kind === "link") {
-        // Native /Link annotation (URI action or internal page destination).
-        addLinkOverRect(doc, pageIndex, ann, r);
-        continue;
-      }
-      // Redaction is applied destructively above (PDFium), not drawn as an
-      // overlay — the black box is already baked into the page content.
-      if (ann.kind === "redact") continue;
-
-      // Free rotation: wrap the draw in a CTM that spins the coordinate
-      // system about the box center, so every kind (text, shapes, images,
-      // ink) bakes rotated without per-kind math. Screen-clockwise degrees
-      // map to a negative (clockwise-on-page) angle in PDF space.
-      const spin = ann.rotation ?? 0;
-      if (spin) {
-        const phi = (-spin * Math.PI) / 180;
-        const cos = Math.cos(phi);
-        const sin = Math.sin(phi);
-        const cx = r.x + r.w / 2;
-        const cy = r.y + r.h / 2;
-        page.pushOperators(
-          pushGraphicsState(),
-          concatTransformationMatrix(
-            cos,
-            sin,
-            -sin,
-            cos,
-            cx - cx * cos + cy * sin,
-            cy - cx * sin - cy * cos,
-          ),
-        );
-      }
-      try {
-        if (ann.kind === "text") {
-          // Linked text bakes as a hyperlink (blue + underline) to match screen.
-          const textAnn = hasLinkTarget(ann.link) ? linkStyledText(ann) : ann;
-          await drawRichText(page, textAnn, r, rotation, getStyledFont);
-        } else {
-          await drawAnnotation(doc, page, ann, r, await getFont(StandardFonts.Helvetica), rotation);
+    // Rotated (or crop-offset) pages: wrap all *drawn* content in a CTM that
+    // maps the y-up display frame onto page user space, so shapes, ink, text
+    // and images bake with plain rotation-0 math and come out correctly
+    // placed and oriented on screen. Annotation dictionaries (/Rect of
+    // notes, links, form fields) live outside the content stream and use the
+    // absolute-page-space rect instead.
+    const wrapCtm =
+      !isIdentityMatrix(ctm) &&
+      list.some(
+        (a) =>
+          a.kind !== "formfield" &&
+          a.kind !== "note" &&
+          a.kind !== "link" &&
+          a.kind !== "redact",
+      );
+    if (wrapCtm) {
+      page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...ctm));
+    }
+    try {
+      for (const ann of list) {
+        if (ann.kind === "formfield") {
+          newFields.push({ ann, r: displayRectToPdf(ann, geom), pageIndex });
+          continue;
         }
-      } finally {
-        if (spin) page.pushOperators(popGraphicsState());
+        if (ann.kind === "note") {
+          // Skip empty notes; write real ones as native PDF comments.
+          if (ann.text.trim()) {
+            addNoteAnnotation(doc, pageIndex, ann, displayRectToPdf(ann, geom));
+          }
+          continue;
+        }
+        if (ann.kind === "link") {
+          // Native /Link annotation (URI action or internal page destination).
+          addLinkOverRect(doc, pageIndex, ann, displayRectToPdf(ann, geom));
+          continue;
+        }
+        // Redaction is applied destructively above (PDFium), not drawn as an
+        // overlay — the black box is already baked into the page content.
+        if (ann.kind === "redact") continue;
+
+        // Drawn content works in the y-up display frame (the CTM above maps
+        // it onto the page): a simple y-flip of the display rect.
+        const r = { x: ann.x, y: disp.height - ann.y - ann.h, w: ann.w, h: ann.h };
+
+        // Free rotation: wrap the draw in a CTM that spins the coordinate
+        // system about the box center, so every kind (text, shapes, images,
+        // ink) bakes rotated without per-kind math. Screen-clockwise degrees
+        // map to a negative (clockwise-in-frame) angle in the y-up frame.
+        const spin = ann.rotation ?? 0;
+        if (spin) {
+          const phi = (-spin * Math.PI) / 180;
+          const cos = Math.cos(phi);
+          const sin = Math.sin(phi);
+          const cx = r.x + r.w / 2;
+          const cy = r.y + r.h / 2;
+          page.pushOperators(
+            pushGraphicsState(),
+            concatTransformationMatrix(
+              cos,
+              sin,
+              -sin,
+              cos,
+              cx - cx * cos + cy * sin,
+              cy - cx * sin - cy * cos,
+            ),
+          );
+        }
+        try {
+          if (ann.kind === "text") {
+            // Linked text bakes as a hyperlink (blue + underline) to match screen.
+            const textAnn = hasLinkTarget(ann.link) ? linkStyledText(ann) : ann;
+            await drawRichText(page, textAnn, r, getStyledFont);
+          } else {
+            await drawAnnotation(
+              doc,
+              page,
+              ann,
+              r,
+              await getFont(StandardFonts.Helvetica),
+              disp.height,
+            );
+          }
+        } finally {
+          if (spin) page.pushOperators(popGraphicsState());
+        }
+        // A text box turned into a link gets a /Link over its (axis-aligned) box.
+        if (ann.kind === "text" && hasLinkTarget(ann.link)) {
+          addLinkOverRect(doc, pageIndex, ann.link, displayRectToPdf(ann, geom));
+        }
       }
-      // A text box turned into a link gets a /Link over its (axis-aligned) box.
-      if (ann.kind === "text" && hasLinkTarget(ann.link)) {
-        addLinkOverRect(doc, pageIndex, ann.link, r);
-      }
+    } finally {
+      if (wrapCtm) page.pushOperators(popGraphicsState());
     }
   }
 
@@ -943,10 +957,9 @@ function applyFieldOps(
       const field = form.getField(op.fieldName);
       if (op.newRect) {
         const page = doc.getPage(op.pageIndex);
-        const { width: pw, height: ph } = page.getSize();
-        const rotation = page.getRotation().angle;
-        const orig = toPdfRect(op.origRect, pw, ph, rotation);
-        const next = toPdfRect(op.newRect, pw, ph, rotation);
+        const geom = pageGeometry(page);
+        const orig = displayRectToPdf(op.origRect, geom);
+        const next = displayRectToPdf(op.newRect, geom);
         // Multi-widget fields (radio groups): move the widget whose current
         // rect is closest to the original position.
         const widgets = (field as any).acroField.getWidgets();
@@ -1359,11 +1372,12 @@ function applyWidgetAppearance(
  * wrapping at the box width like the on-screen editor. `getStyledFont`
  * resolves + caches a pdf-lib font per run style.
  */
+// `r` is the annotation box in the y-up display frame; the caller's CTM maps
+// the frame onto the page, so no per-draw rotation compensation is needed.
 async function drawRichText(
   page: ReturnType<PDFDocument["getPage"]>,
   ann: TextAnnotation,
   r: { x: number; y: number; w: number; h: number },
-  rotation: number,
   getStyledFont: (
     family: TextAnnotation["fontFamily"],
     bold: boolean,
@@ -1431,7 +1445,6 @@ async function drawRichText(
           size: t.style.fontSize,
           font: t.font,
           color: rgb(c.r, c.g, c.b),
-          rotate: degrees(rotation),
         };
         try {
           page.drawText(text, opts);
@@ -1557,7 +1570,6 @@ async function drawRichText(
           size: bfs,
           font: markerFont,
           color: rgb(c.r, c.g, c.b),
-          rotate: degrees(rotation),
         };
         try {
           page.drawText(marker, opts);
@@ -1570,14 +1582,20 @@ async function drawRichText(
   }
 }
 
+// `r` is the annotation box in the y-up display frame (origin bottom-left of
+// the page as displayed); the caller's CTM maps the frame onto the page, so
+// no per-kind rotation math is needed. `dispHeight` is the display height —
+// point-level conversions inside the frame are a plain y-flip.
 async function drawAnnotation(
   doc: PDFDocument,
   page: ReturnType<PDFDocument["getPage"]>,
   ann: Annotation,
   r: { x: number; y: number; w: number; h: number },
   font: Awaited<ReturnType<PDFDocument["embedFont"]>>,
-  rotation: number,
+  dispHeight: number,
 ) {
+  /** Display point (top-left origin) → y-up display frame. */
+  const toFrame = (p: { x: number; y: number }) => ({ x: p.x, y: dispHeight - p.y });
   switch (ann.kind) {
     case "highlight": {
       const c = hexToRgb01(ann.color);
@@ -1593,8 +1611,8 @@ async function drawAnnotation(
     }
     case "markup": {
       // Underline / strikethrough / squiggly. Endpoints are computed in
-      // display space and mapped point-by-point, so rotated pages come out
-      // right without box-edge special cases.
+      // display space and flipped into the frame point-by-point, so no
+      // box-edge special cases are needed.
       const c = hexToRgb01(ann.color);
       const color = rgb(c.r, c.g, c.b);
       const seg = (
@@ -1603,8 +1621,8 @@ async function drawAnnotation(
         thickness: number,
       ) =>
         page.drawLine({
-          start: displayPointToPdf(p1, page, rotation),
-          end: displayPointToPdf(p2, page, rotation),
+          start: toFrame(p1),
+          end: toFrame(p2),
           color,
           thickness,
         });
@@ -1692,7 +1710,7 @@ async function drawAnnotation(
       const c = hexToRgb01(ann.color);
       const color = rgb(c.r, c.g, c.b);
       // Endpoints in display space (same math as the on-screen SVG), then
-      // each point mapped through the page rotation.
+      // each point flipped into the y-up frame.
       const tail = { x: ann.x + (ann.ax ?? 0) * ann.w, y: ann.y + (ann.ay ?? 0) * ann.h };
       const head = { x: ann.x + (ann.bx ?? 1) * ann.w, y: ann.y + (ann.by ?? 1) * ann.h };
       const angle = Math.atan2(head.y - tail.y, head.x - tail.x);
@@ -1704,8 +1722,8 @@ async function drawAnnotation(
       });
       const line = (p1: { x: number; y: number }, p2: { x: number; y: number }) =>
         page.drawLine({
-          start: displayPointToPdf(p1, page, rotation),
-          end: displayPointToPdf(p2, page, rotation),
+          start: toFrame(p1),
+          end: toFrame(p2),
           color,
           thickness: ann.strokeWidth,
           lineCap: 1 as any,
@@ -1718,11 +1736,11 @@ async function drawAnnotation(
     case "ink": {
       const c = hexToRgb01(ann.color);
       // Points are relative to the annotation box in display space; convert
-      // each to absolute display coords, then to pdf space pairwise as lines.
+      // each to absolute display coords, then into the frame pairwise as lines.
       const pts = ann.points.map((p) => ({ x: ann.x + p.x, y: ann.y + p.y }));
       for (let i = 1; i < pts.length; i++) {
-        const a = displayPointToPdf(pts[i - 1], page, rotation);
-        const b = displayPointToPdf(pts[i], page, rotation);
+        const a = toFrame(pts[i - 1]);
+        const b = toFrame(pts[i]);
         page.drawLine({
           start: a,
           end: b,
@@ -1750,7 +1768,6 @@ async function drawAnnotation(
           size: ann.fontSize,
           font,
           color: rgb(c.r, c.g, c.b),
-          rotate: degrees(rotation),
         };
         try {
           // Embedded unicode fonts can draw the raw text directly.
@@ -1764,23 +1781,15 @@ async function drawAnnotation(
     }
     case "mark": {
       // Check / cross: draw as line segments in display space (each point
-      // mapped through the page rotation), matching the on-screen SVG. Free
-      // rotation of the mark itself is handled by the CTM wrap in the caller.
+      // flipped into the frame), matching the on-screen SVG. Free rotation
+      // of the mark itself is handled by the spin CTM wrap in the caller.
       const c = hexToRgb01(ann.color);
       const color = rgb(c.r, c.g, c.b);
       const t = Math.max(0.75, Math.min(ann.w, ann.h) * MARK_STROKE_FRAC);
       for (const [a, b] of markSegments(ann.symbol)) {
         page.drawLine({
-          start: displayPointToPdf(
-            { x: ann.x + a[0] * ann.w, y: ann.y + a[1] * ann.h },
-            page,
-            rotation,
-          ),
-          end: displayPointToPdf(
-            { x: ann.x + b[0] * ann.w, y: ann.y + b[1] * ann.h },
-            page,
-            rotation,
-          ),
+          start: toFrame({ x: ann.x + a[0] * ann.w, y: ann.y + a[1] * ann.h }),
+          end: toFrame({ x: ann.x + b[0] * ann.w, y: ann.y + b[1] * ann.h }),
           color,
           thickness: t,
           lineCap: 1 as any,
@@ -1797,36 +1806,18 @@ async function drawAnnotation(
         y: r.y,
         width: r.w,
         height: r.h,
-        rotate: degrees(rotation),
       });
       break;
     }
   }
 }
 
-function displayPointToPdf(
-  p: { x: number; y: number },
-  page: { getSize(): { width: number; height: number } },
-  rotation: number,
-): { x: number; y: number } {
-  const { width: pw, height: ph } = page.getSize();
-  switch (((rotation % 360) + 360) % 360) {
-    case 90:
-      return { x: p.y, y: p.x };
-    case 180:
-      return { x: pw - p.x, y: p.y };
-    case 270:
-      return { x: ph - p.y, y: pw - p.x };
-    default:
-      return { x: p.x, y: ph - p.y };
-  }
-}
-
 /**
  * Add an invisible (opacity 0) text layer to a PDF from OCR results, so the
  * document becomes searchable, selectable and AI-readable without changing how
- * it looks. Word positions come from the rasterized page and are mapped back to
- * PDF points.
+ * it looks. Word positions come from the rasterized page — the page *as
+ * displayed* (rotated, CropBox) — so the words are drawn in the y-up display
+ * frame under the same display→page CTM the annotation baking uses.
  */
 export async function addOcrTextLayer(
   bytes: Uint8Array,
@@ -1839,7 +1830,13 @@ export async function addOcrTextLayer(
   for (const p of ocr) {
     if (p.pageIndex < 0 || p.pageIndex >= pageCount || !p.words.length) continue;
     const page = doc.getPage(p.pageIndex);
-    const { height: ph } = page.getSize();
+    const geom = pageGeometry(page);
+    const disp = displaySize(geom);
+    const ctm = displayToPdfMatrix(geom);
+    const wrapCtm = !isIdentityMatrix(ctm);
+    if (wrapCtm) {
+      page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...ctm));
+    }
     const s = p.renderScale;
 
     for (const w of p.words) {
@@ -1849,7 +1846,7 @@ export async function addOcrTextLayer(
       const boxH = (w.y1 - w.y0) / s;
       const size = Math.max(4, boxH * 0.92);
       // Baseline sits a little above the box bottom (top-left origin → flip Y).
-      const y = ph - w.y1 / s + boxH * 0.18;
+      const y = disp.height - w.y1 / s + boxH * 0.18;
       const boxW = (w.x1 - w.x0) / s;
       // Horizontally squeeze the invisible text to roughly match the word width
       // so selection lines up with the image.
@@ -1872,6 +1869,7 @@ export async function addOcrTextLayer(
         /* skip glyphs the font can't encode */
       }
     }
+    if (wrapCtm) page.pushOperators(popGraphicsState());
   }
   return doc.save();
 }

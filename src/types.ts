@@ -33,7 +33,8 @@ export type ToolKind =
 
 export interface BaseAnnotation {
   id: string;
-  /** Coordinates in PDF points, origin top-left of the unrotated page at scale 1. */
+  /** Coordinates in PDF points at scale 1, origin top-left of the page as
+   *  displayed (the /Rotate-rotated CropBox — see src/lib/coords.ts). */
   x: number;
   y: number;
   w: number;
