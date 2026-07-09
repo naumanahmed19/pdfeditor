@@ -33,7 +33,6 @@ import {
   Redo2,
   RotateCw,
   Signature,
-  SquarePen,
   SquareSlash,
   Square,
   Stamp,
@@ -67,7 +66,7 @@ import { activeBlockEditor } from "../../lib/activeBlockEditor";
 import { activeInlineEdit } from "../../lib/activeInlineEdit";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
+import { Menu, MenuContent, MenuGroup, MenuItem, MenuLabel, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { LinkProperties } from "./LinkProperties";
 import { hasLinkTarget } from "../../lib/linktarget";
@@ -87,15 +86,16 @@ import type {
   ToolKind,
 } from "../../types";
 
-/** Tools in display order; `group` boundaries render as thin separators. */
-const TOOLS: Array<{
+type ToolbarTool = {
   key: ToolKind;
   icon: typeof Type;
   name: string;
   desc: string;
-  group: number;
   shortcut?: string;
-}> = [
+};
+
+/** Tools in historical display order; groups below decide top-level placement. */
+const TOOLS: Array<ToolbarTool & { group: number }> = [
   { key: "read", icon: MousePointer2, name: "Read", desc: "Select & copy text, follow links", group: 0, shortcut: "V" },
   { key: "pan", icon: Hand, name: "Pan", desc: "Drag to scroll the page", group: 0 },
   { key: "select", icon: Move, name: "Move / select", desc: "Move, resize or delete annotations you added (highlights, shapes, text boxes, stamps…)", group: 0, shortcut: "M" },
@@ -124,16 +124,70 @@ const TOOLS: Array<{
  * moving/resizing existing text & images — so they're grouped apart from the
  * annotation tools. Shortcuts stay live via the same handler as TOOLS.
  */
-const EDIT_TOOLS: Array<{
-  key: ToolKind;
-  icon: typeof Type;
-  name: string;
-  desc: string;
-  shortcut?: string;
-}> = [
+const EDIT_TOOLS: ToolbarTool[] = [
   { key: "edittext", icon: TextCursorInput, name: "Edit text", desc: "Click a line of the document to retype it, or change its font, size and color", shortcut: "E" },
   { key: "editobject", icon: MousePointerClick, name: "Move objects", desc: "Click existing text or an image to move, resize, recolor or delete it", shortcut: "G" },
 ];
+
+const ALL_TOOLS: ToolbarTool[] = [...TOOLS, ...EDIT_TOOLS];
+const BASIC_TOOLS = TOOLS.filter((t) => t.group === 0);
+
+type ToolFlyoutId = "text" | "markup" | "shapes" | "cleanup";
+
+const TOOL_FLYOUTS: Array<{
+  id: ToolFlyoutId;
+  label: string;
+  desc: string;
+  defaultTool: ToolKind;
+  tools: ToolKind[];
+}> = [
+  {
+    id: "text",
+    label: "Text",
+    desc: "Add text or edit existing page content",
+    defaultTool: "text",
+    tools: ["text", "edittext", "editobject"],
+  },
+  {
+    id: "markup",
+    label: "Markup",
+    desc: "Highlights, comments, ink, marks and links",
+    defaultTool: "highlight",
+    tools: ["highlight", "underline", "strikeout", "squiggly", "note", "ink", "mark", "link"],
+  },
+  {
+    id: "shapes",
+    label: "Shapes",
+    desc: "Draw rectangles, ellipses, lines, arrows and callouts",
+    defaultTool: "rect",
+    tools: ["rect", "ellipse", "line", "arrow", "callout"],
+  },
+  {
+    id: "cleanup",
+    label: "Cleanup",
+    desc: "Hide, erase or permanently redact content",
+    defaultTool: "whiteout",
+    tools: ["whiteout", "eraser", "redact"],
+  },
+];
+
+const INITIAL_LAST_TOOL_BY_GROUP: Record<ToolFlyoutId, ToolKind> = {
+  text: "text",
+  markup: "highlight",
+  shapes: "rect",
+  cleanup: "whiteout",
+};
+
+const TOOL_FLYOUT_BY_KEY = new Map<ToolKind, ToolFlyoutId>(
+  TOOL_FLYOUTS.flatMap((group) => group.tools.map((key) => [key, group.id] as const)),
+);
+type ToolFlyoutConfig = (typeof TOOL_FLYOUTS)[number];
+
+function getTool(key: ToolKind): ToolbarTool {
+  const tool = ALL_TOOLS.find((t) => t.key === key);
+  if (!tool) throw new Error(`Unknown toolbar tool: ${key}`);
+  return tool;
+}
 
 /**
  * Horizontally scrollable row: instead of wrapping onto a second line when it
@@ -240,6 +294,122 @@ function NativeSelect({
   );
 }
 
+/** Row item used inside grouped toolbar flyout menus. */
+function ToolMenuItem({
+  tool,
+  active,
+  onSelect,
+}: {
+  tool: ToolbarTool;
+  active: boolean;
+  onSelect: (key: ToolKind) => void;
+}) {
+  const Icon = tool.icon;
+  return (
+    <MenuItem onClick={() => onSelect(tool.key)} className="items-start py-2">
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex items-center gap-1.5 font-medium">
+          {tool.name}
+          {tool.shortcut && (
+            <kbd className="rounded border bg-muted px-1 text-[10px] font-normal text-muted-foreground">
+              {tool.shortcut}
+            </kbd>
+          )}
+        </span>
+        <span className="text-[11px] leading-snug text-muted-foreground">
+          {tool.desc}
+        </span>
+      </span>
+      {active && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+    </MenuItem>
+  );
+}
+
+function ActionMenuItem({
+  icon: Icon,
+  name,
+  desc,
+  active,
+  onClick,
+}: {
+  icon: typeof Type;
+  name: string;
+  desc: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <MenuItem onClick={onClick} className="items-start py-2">
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="font-medium">{name}</span>
+        <span className="text-[11px] leading-snug text-muted-foreground">
+          {desc}
+        </span>
+      </span>
+      {active && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+    </MenuItem>
+  );
+}
+
+function ToolFlyoutButton({
+  group,
+  activeTool,
+  lastTool,
+  onSelect,
+}: {
+  group: ToolFlyoutConfig;
+  activeTool?: ToolKind;
+  lastTool: ToolKind;
+  onSelect: (key: ToolKind) => void;
+}) {
+  const active = !!activeTool;
+  const displayTool = getTool(activeTool ?? lastTool ?? group.defaultTool);
+  const Icon = displayTool.icon;
+
+  return (
+    <Menu>
+      <Tip
+        label={active ? displayTool.name : group.label}
+        desc={active ? displayTool.desc : group.desc}
+        shortcut={active ? displayTool.shortcut : undefined}
+      >
+        <MenuTrigger
+          aria-label={group.label}
+          aria-pressed={active}
+          className={cn(
+            "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
+            active
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          <Icon className="h-4 w-4" />
+          <span className="hidden sm:inline">{group.label}</span>
+          <ChevronDown className="h-3 w-3 opacity-70" />
+        </MenuTrigger>
+      </Tip>
+      <MenuContent className="min-w-64">
+        <MenuGroup>
+          <MenuLabel>{group.label}</MenuLabel>
+          {group.tools.map((key) => {
+            const tool = getTool(key);
+            return (
+              <ToolMenuItem
+                key={key}
+                tool={tool}
+                active={activeTool === key}
+                onSelect={onSelect}
+              />
+            );
+          })}
+        </MenuGroup>
+      </MenuContent>
+    </Menu>
+  );
+}
+
 /** Contextual control for turning a selected text box into a clickable link —
  *  a toggle button opening the shared "Link properties" picker. */
 function TextLinkControl({
@@ -296,6 +466,15 @@ function TextLinkControl({
 export function EditorToolbar() {
   const app = useApp();
   const imageRef = useRef<HTMLInputElement>(null);
+  const [lastToolByGroup, setLastToolByGroup] = useState(INITIAL_LAST_TOOL_BY_GROUP);
+
+  useEffect(() => {
+    const groupId = TOOL_FLYOUT_BY_KEY.get(app.tool);
+    if (!groupId) return;
+    setLastToolByGroup((prev) =>
+      prev[groupId] === app.tool ? prev : { ...prev, [groupId]: app.tool },
+    );
+  }, [app.tool]);
 
   // Live handle to an in-place "edit existing text" session, so its font /
   // size / color controls render in this toolbar's contextual row.
@@ -346,14 +525,12 @@ export function EditorToolbar() {
 
   if (!app.pdf) return null;
 
-  // The tool cluster is a single-select toggle group driven by app.tool
-  // (empty while a stamp is pending or a form tool is active).
-  const toolValue =
-    !app.pendingStamp && TOOLS.some((t) => t.key === app.tool) ? [app.tool] : [];
+  // The visible basics stay a single-select toggle group. Creation/edit tools
+  // live in flyouts below, but still route through the same selection logic.
+  const basicToolValue =
+    !app.pendingStamp && BASIC_TOOLS.some((t) => t.key === app.tool) ? [app.tool] : [];
 
-  const handleToolChange = (values: string[]) => {
-    const key = values[0] as ToolKind | undefined;
-    if (!key) return; // ignore toggling the active tool off
+  const selectTool = (key: ToolKind) => {
     if (
       key === "highlight" ||
       key === "underline" ||
@@ -377,20 +554,11 @@ export function EditorToolbar() {
     if (key !== "select") app.setSelected(null);
   };
 
-  // Arm one of the "edit existing content" sub-tools from the dropdown. Neither
-  // is "select", so any live annotation selection is cleared (same as above).
-  const armEditTool = (key: ToolKind) => {
-    app.setTool(key);
-    app.setPendingStamp(null);
-    app.setSelected(null);
+  const handleToolChange = (values: string[]) => {
+    const key = values[0] as ToolKind | undefined;
+    if (!key) return; // ignore toggling the active tool off
+    selectTool(key);
   };
-  const editActive = app.tool === "edittext" || app.tool === "editobject";
-  const EditIcon =
-    app.tool === "editobject"
-      ? MousePointerClick
-      : app.tool === "edittext"
-        ? TextCursorInput
-        : SquarePen;
 
   // When a text box is selected, style controls edit it directly.
   const selectedText = (() => {
@@ -560,6 +728,13 @@ export function EditorToolbar() {
     !!selectedFormField ||
     !!app.selectedField ||
     !!selectedAnn;
+  const insertActive = !!app.pendingStamp || app.formBuilder || app.tool.startsWith("form");
+  const InsertIcon =
+    app.formBuilder || app.tool.startsWith("form")
+      ? FormInput
+      : app.pendingStamp
+        ? Stamp
+        : ImageIcon;
 
   return (
     // data-ann-controls: pressing toolbar controls must not deselect the
@@ -577,142 +752,123 @@ export function EditorToolbar() {
       {/* tools (scroll/slide horizontally instead of wrapping) */}
       <DragScroll className="flex-1">
         <ToggleGroup
-          value={toolValue}
+          value={basicToolValue}
           onValueChange={handleToolChange}
           className="flex items-center gap-1 bg-transparent p-0"
-          aria-label="Annotation tools"
+          aria-label="Basic tools"
         >
-          {TOOLS.map((t, i) => (
-            <div key={t.key} className="flex shrink-0 items-center gap-1">
-              {i > 0 && t.group !== TOOLS[i - 1].group && (
-                <Separator orientation="vertical" className="mx-1 h-6" />
-              )}
-              <Tip label={t.name} desc={t.desc} shortcut={t.shortcut}>
-                <ToggleGroupItem
-                  value={t.key}
-                  aria-label={t.name}
-                  className="h-8 w-8 rounded-md data-[pressed]:!bg-primary data-[pressed]:!text-primary-foreground"
-                >
-                  <t.icon className="h-4 w-4" />
-                </ToggleGroupItem>
-              </Tip>
-              {/* Edit-existing-content dropdown sits right after "Add text":
-                  retype text runs, or move/resize existing text & images —
-                  kept out of the annotation toggle row so the two never fight
-                  over the same click. */}
-              {t.key === "text" && (
-                <Menu>
-                  <Tip
-                    label="Edit content"
-                    desc="Retype existing text, or move existing text & images"
+          {BASIC_TOOLS.map((t) => {
+            const Icon = t.icon;
+            return (
+              <div
+                key={t.key}
+                className={cn(
+                  "flex shrink-0 items-center gap-1",
+                  t.key === "pan" && "hidden sm:flex",
+                )}
+              >
+                <Tip label={t.name} desc={t.desc} shortcut={t.shortcut}>
+                  <ToggleGroupItem
+                    value={t.key}
+                    aria-label={t.name}
+                    className="h-8 w-8 rounded-md data-[pressed]:!bg-primary data-[pressed]:!text-primary-foreground"
                   >
-                    <MenuTrigger
-                      className={cn(
-                        "flex h-8 shrink-0 items-center justify-center gap-0.5 rounded-md px-1.5 text-xs font-medium transition-colors",
-                        editActive
-                          ? "bg-primary text-primary-foreground"
-                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                      )}
-                    >
-                      <EditIcon className="h-4 w-4" />
-                      <ChevronDown className="h-3 w-3 opacity-70" />
-                    </MenuTrigger>
-                  </Tip>
-                  <MenuContent className="min-w-56">
-                    {EDIT_TOOLS.map((et) => (
-                      <MenuItem key={et.key} onClick={() => armEditTool(et.key)}>
-                        <et.icon className="mt-0.5 h-4 w-4 shrink-0" />
-                        <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="flex items-center gap-1.5 font-medium">
-                            {et.name}
-                            {et.shortcut && (
-                              <kbd className="rounded border bg-muted px-1 text-[10px] font-normal text-muted-foreground">
-                                {et.shortcut}
-                              </kbd>
-                            )}
-                          </span>
-                          <span className="text-[11px] text-muted-foreground">
-                            {et.desc}
-                          </span>
-                        </span>
-                        {app.tool === et.key && (
-                          <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        )}
-                      </MenuItem>
-                    ))}
-                  </MenuContent>
-                </Menu>
-              )}
-            </div>
-          ))}
+                    <Icon className="h-4 w-4" />
+                  </ToggleGroupItem>
+                </Tip>
+              </div>
+            );
+          })}
         </ToggleGroup>
         <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />
-        <Tip label="Insert image" desc="PNG or JPEG, placed as a stamp">
-          <button
-            onClick={() => imageRef.current?.click()}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <ImageIcon className="h-4 w-4" />
-          </button>
-        </Tip>
-        <Tip
-          label="Form builder"
-          desc="Design fillable forms: palette, tab order, validation"
-        >
-          <button
-            onClick={() => app.setFormBuilder(!app.formBuilder)}
-            className={cn(
-              "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
-              app.formBuilder || app.tool.startsWith("form")
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <FormInput className="h-4 w-4" />
-            Form
-          </button>
-        </Tip>
+        {TOOL_FLYOUTS.map((group) => {
+          const activeTool =
+            app.pendingStamp ? undefined : group.tools.find((key) => key === app.tool);
+          return (
+            <ToolFlyoutButton
+              key={group.id}
+              group={group}
+              activeTool={activeTool}
+              lastTool={lastToolByGroup[group.id]}
+              onSelect={selectTool}
+            />
+          );
+        })}
+        <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />
         <Menu>
-          <Tip label="Stamp" desc="Place a predefined stamp (APPROVED, DRAFT, …)">
-            <MenuTrigger className="flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-              <Stamp className="h-4 w-4" />
-              Stamp
+          <Tip label="Insert" desc="Images, fillable forms and stamps">
+            <MenuTrigger
+              aria-label="Insert"
+              aria-pressed={insertActive}
+              className={cn(
+                "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
+                insertActive
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              <InsertIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Insert</span>
+              <ChevronDown className="h-3 w-3 opacity-70" />
             </MenuTrigger>
           </Tip>
-          <MenuContent className="min-w-48">
-            {STAMPS.map((s) => (
-              <MenuItem
-                key={s.label}
-                onClick={() => {
-                  const { dataUrl, aspect } = makeStamp(s);
-                  app.setPendingStamp({ dataUrl, aspect });
-                }}
-              >
-                <span
-                  className="rounded border-2 px-1.5 py-0.5 text-[10px] font-bold italic"
-                  style={{ borderColor: s.color, color: s.color }}
+          <MenuContent className="min-w-64">
+            <MenuGroup>
+              <MenuLabel>Insert</MenuLabel>
+              <ActionMenuItem
+                icon={ImageIcon}
+                name="Image"
+                desc="PNG or JPEG, placed as a stamp"
+                onClick={() => imageRef.current?.click()}
+              />
+              <ActionMenuItem
+                icon={FormInput}
+                name="Form builder"
+                desc="Design fillable forms: palette, tab order, validation"
+                active={app.formBuilder || app.tool.startsWith("form")}
+                onClick={() => app.setFormBuilder(!app.formBuilder)}
+              />
+            </MenuGroup>
+            <MenuGroup className="mt-1 border-t pt-1">
+              <MenuLabel>Stamps</MenuLabel>
+              {STAMPS.map((s) => (
+                <MenuItem
+                  key={s.label}
+                  onClick={() => {
+                    const { dataUrl, aspect } = makeStamp(s);
+                    app.setPendingStamp({ dataUrl, aspect });
+                  }}
+                  className="py-2"
                 >
-                  {s.label}
-                </span>
-                {s.withDate && (
-                  <span className="text-[10px] text-muted-foreground">+ date</span>
-                )}
-              </MenuItem>
-            ))}
+                  <Stamp className="h-4 w-4 shrink-0" />
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span
+                      className="rounded border-2 px-1.5 py-0.5 text-[10px] font-bold italic"
+                      style={{ borderColor: s.color, color: s.color }}
+                    >
+                      {s.label}
+                    </span>
+                    {s.withDate && (
+                      <span className="text-[10px] text-muted-foreground">+ date</span>
+                    )}
+                  </span>
+                </MenuItem>
+              ))}
+            </MenuGroup>
           </MenuContent>
         </Menu>
         <Tip label="Insert signature" desc="Draw, type or upload; saved for reuse">
           <button
             onClick={() => app.setSignatureModalOpen(true)}
             className={cn(
-              "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
+              "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
               app.pendingStamp
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
             <Signature className="h-4 w-4" />
-            Sign
+            <span className="hidden sm:inline">Sign</span>
           </button>
         </Tip>
       </DragScroll>
