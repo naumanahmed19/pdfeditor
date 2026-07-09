@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Calendar, MessageSquare, PenLine, Trash2 } from "lucide-react";
+import { Calendar, Link2, MessageSquare, PenLine, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { cn, uid, ROTATABLE_KINDS } from "../../lib/utils";
 import { MARKUP_COLORS, squigglyPath } from "../../lib/markup";
+import { MARK_STROKE_FRAC, markSegments } from "../../lib/marks";
 import {
   FIELD_FOR_TOOL,
   FIELD_META,
@@ -18,6 +19,7 @@ import {
   blocksPlainText,
   blocksToSemanticHtml,
   getBlocks,
+  linkStyledText,
   measureBlocks,
 } from "../../lib/richtext";
 import type { PageDims } from "./types";
@@ -30,10 +32,19 @@ import {
 } from "./form";
 import type {
   Annotation,
+  LinkAnnotation,
+  LinkTarget,
   NoteAnnotation,
+  SearchMatch,
   ShapeAnnotation,
   TextAnnotation,
 } from "../../types";
+import {
+  followLinkTarget,
+  hasLinkTarget,
+  linkTitle,
+} from "../../lib/linktarget";
+import { LinkProperties } from "./LinkProperties";
 import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Popover, PopoverContent } from "../ui/popover";
@@ -58,6 +69,52 @@ function textSpacingStyle(ann: TextAnnotation, scale: number): React.CSSProperti
     lineHeight: ann.lineHeight ?? DEFAULT_LINE_HEIGHT,
     letterSpacing: (ann.letterSpacing ?? 0) * scale,
   };
+}
+
+function highlightAnnotationHtml(
+  html: string,
+  matches: SearchMatch[],
+  activeId: string | undefined,
+): string {
+  if (!matches.length || typeof document === "undefined") return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const ordered = [...matches].sort((a, b) => a.start - b.start || a.end - b.end);
+  const showText = document.defaultView?.NodeFilter?.SHOW_TEXT ?? 4;
+  const walker = document.createTreeWalker(template.content, showText);
+  const nodes: Text[] = [];
+  let node: Node | null;
+  while ((node = walker.nextNode())) nodes.push(node as Text);
+
+  let offset = 0;
+  for (const textNode of nodes) {
+    const value = textNode.nodeValue ?? "";
+    const nodeStart = offset;
+    const nodeEnd = nodeStart + value.length;
+    offset = nodeEnd;
+    const hits = ordered.filter((m) => m.end > nodeStart && m.start < nodeEnd);
+    if (!hits.length) continue;
+
+    const frag = document.createDocumentFragment();
+    let pos = 0;
+    for (const match of hits) {
+      const start = Math.max(pos, match.start - nodeStart);
+      const end = Math.min(value.length, match.end - nodeStart);
+      if (end <= start) continue;
+      if (start > pos) frag.appendChild(document.createTextNode(value.slice(pos, start)));
+      const mark = document.createElement("span");
+      mark.className =
+        match.id === activeId
+          ? "annotation-search-mark annotation-search-mark-active"
+          : "annotation-search-mark";
+      mark.textContent = value.slice(start, end);
+      frag.appendChild(mark);
+      pos = end;
+    }
+    if (pos < value.length) frag.appendChild(document.createTextNode(value.slice(pos)));
+    textNode.parentNode?.replaceChild(frag, textNode);
+  }
+  return template.innerHTML;
 }
 
 /** Pencil cursor for the freehand tool (lucide pencil with a white halo so it
@@ -104,6 +161,8 @@ export function AnnotationLayer({
       "whiteout",
       "redact",
       "ink",
+      "mark",
+      "link",
       "formtext",
       "formcheckbox",
       "formdropdown",
@@ -290,6 +349,27 @@ export function AnnotationLayer({
         return;
       }
 
+      // Check / cross mark: a click drops a default-sized mark centered on the
+      // pointer; a drag sizes it. The tool stays armed so several boxes on a
+      // form can be ticked in a row.
+      if (app.tool === "mark") {
+        const DEF = 18;
+        const rect =
+          w > 3 && h > 3
+            ? { x, y, w, h }
+            : { x: draft.x0 - DEF / 2, y: draft.y0 - DEF / 2, w: DEF, h: DEF };
+        app.addAnnotation(pageIndex, {
+          id: uid(),
+          kind: "mark",
+          symbol: app.markSymbol,
+          color: app.markColor,
+          ...rect,
+        });
+        setDraft(null);
+        setInkPoints([]);
+        return;
+      }
+
       // Arrows and callouts accept any drag direction (including pure
       // horizontal / vertical), unlike box tools which need a real area.
       if ((app.tool === "arrow" || app.tool === "callout") && (w > 3 || h > 3)) {
@@ -394,6 +474,17 @@ export function AnnotationLayer({
           warnWhiteoutOnce();
         } else if (app.tool === "redact") {
           app.addAnnotation(pageIndex, { ...base, kind: "redact" });
+        } else if (app.tool === "link") {
+          // Create an empty link region and select it — the properties popover
+          // opens so the user picks a target (URL / email / phone / page).
+          app.addAnnotation(pageIndex, {
+            ...base,
+            kind: "link",
+            targetType: "url",
+            value: "",
+          });
+          app.setSelected({ page: pageIndex, id: base.id });
+          app.setTool("select");
         } else if (app.tool === "rect" || app.tool === "ellipse") {
           app.addAnnotation(pageIndex, {
             ...base,
@@ -624,6 +715,16 @@ function AnnotationItem({
   const app = useApp();
   const isSelected =
     app.selected?.page === pageIndex && app.selected?.id === ann.id;
+  const activeSearchMatch = app.searchMatches[app.activeMatch];
+  const annotationSearchMatches = app.searchMatches.filter((m) => {
+    if (m.page !== pageIndex) return false;
+    if (m.annotationId && "id" in ann) return m.annotationId === ann.id;
+    return ann.kind === "formfield" && !!m.fieldName && m.fieldName === ann.fieldName;
+  });
+  const hasSearchHit = annotationSearchMatches.length > 0;
+  const hasActiveSearchHit =
+    !!activeSearchMatch &&
+    annotationSearchMatches.some((m) => m.id === activeSearchMatch.id);
   // Form-builder state for this annotation: live-preview inputs and
   // multi-selection membership.
   const previewing =
@@ -713,6 +814,13 @@ function AnnotationItem({
       e.stopPropagation();
       e.preventDefault();
       app.setSelected({ page: pageIndex, id: ann.id });
+      return;
+    }
+    // While reading, clicking a link (area-link or a linked text box) follows it.
+    if (linkInRead) {
+      e.stopPropagation();
+      e.preventDefault();
+      followLink();
       return;
     }
     // Clicking an existing highlight / markup with its own tool armed SELECTS
@@ -919,6 +1027,21 @@ function AnnotationItem({
   // any element it touches; everything else needs the Select tool.
   const selectable = app.tool === "select" && !ann.locked;
   const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
+  // The link target of this annotation, if any — an area-link, or a text box
+  // that's been turned into a link. Followed on click while reading (baked
+  // links additionally surface via LinkLayer once saved).
+  const linkTarget: LinkTarget | null =
+    ann.kind === "link"
+      ? hasLinkTarget(ann)
+        ? ann
+        : null
+      : ann.kind === "text" && hasLinkTarget(ann.link)
+        ? ann.link
+        : null;
+  const linkInRead = !!linkTarget && app.tool === "read" && !ann.locked;
+  const followLink = () => {
+    if (linkTarget) followLinkTarget(linkTarget, app.scrollToPage);
+  };
   const editMarkArmed =
     ((ann.kind === "highlight" && app.tool === "highlight") ||
       (ann.kind === "markup" &&
@@ -940,10 +1063,13 @@ function AnnotationItem({
     height: box.h * scale,
     transform: rotationDeg ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center",
-    pointerEvents: selectable || noteInRead || editMarkArmed || erasable ? "auto" : "none",
+    pointerEvents:
+      selectable || noteInRead || linkInRead || editMarkArmed || erasable
+        ? "auto"
+        : "none",
     cursor: selectable
       ? "move"
-      : noteInRead || editMarkArmed || erasable
+      : noteInRead || linkInRead || editMarkArmed || erasable
         ? "pointer"
         : "default",
     touchAction: selectable || erasable ? "none" : "auto",
@@ -1113,6 +1239,33 @@ function AnnotationItem({
         </svg>
       );
       break;
+    case "mark": {
+      const mw = Math.max(1, box.w);
+      const mh = Math.max(1, box.h);
+      const t = Math.max(1, Math.min(mw, mh) * MARK_STROKE_FRAC);
+      body = (
+        <svg
+          className="h-full w-full overflow-visible"
+          preserveAspectRatio="none"
+          viewBox={`0 0 ${mw} ${mh}`}
+        >
+          {markSegments(ann.symbol).map(([a, b], i) => (
+            <line
+              key={i}
+              x1={a[0] * mw}
+              y1={a[1] * mh}
+              x2={b[0] * mw}
+              y2={b[1] * mh}
+              stroke={ann.color}
+              strokeWidth={t}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ))}
+        </svg>
+      );
+      break;
+    }
     case "image":
       body = (
         <img
@@ -1122,6 +1275,26 @@ function AnnotationItem({
           draggable={false}
         />
       );
+      break;
+    case "link":
+      // Highlighted only while the Link tool is armed (so all link regions are
+      // visible to manage them). With any other tool — and while reading — the
+      // link is an invisible hotspot with just a hover tint.
+      body =
+        app.tool === "link" ? (
+          <div
+            className="relative h-full w-full rounded-[2px] border border-dashed border-blue-500/70"
+            style={{ background: "rgba(59,130,246,0.12)" }}
+            title={linkTitle(ann)}
+          >
+            <Link2 className="absolute right-0.5 top-0.5 h-3 w-3 text-blue-600/90" />
+          </div>
+        ) : (
+          <div
+            className="h-full w-full rounded-sm hover:bg-blue-500/10 hover:ring-1 hover:ring-blue-400/50"
+            title={linkTitle(ann)}
+          />
+        );
       break;
     case "formfield": {
       if (previewing) {
@@ -1246,13 +1419,25 @@ function AnnotationItem({
           }}
         />
       ) : (
-        <div
-          className="richtext-blocks h-full w-full break-words"
-          style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
-          dangerouslySetInnerHTML={{
-            __html: blocksToSemanticHtml(getBlocks(textAnn), textAnn, scale),
-          }}
-        />
+        (() => {
+          // A linked text box displays as a hyperlink (blue + underline).
+          const disp = hasLinkTarget(textAnn.link) ? linkStyledText(textAnn) : textAnn;
+          const html = blocksToSemanticHtml(getBlocks(disp), disp, scale);
+          const markedHtml = highlightAnnotationHtml(
+            html,
+            annotationSearchMatches.filter((m) => m.source === "annotation-text"),
+            activeSearchMatch?.id,
+          );
+          return (
+            <div
+              className="richtext-blocks h-full w-full break-words"
+              style={{ ...textSpacingStyle(disp, scale), textAlign: disp.align ?? "left" }}
+              dangerouslySetInnerHTML={{
+                __html: markedHtml,
+              }}
+            />
+          );
+        })()
       );
       break;
     }
@@ -1274,6 +1459,9 @@ function AnnotationItem({
           : (isSelected || isMulti) &&
               !previewing &&
               "ring-2 ring-blue-500 ring-offset-1",
+        hasActiveSearchHit
+          ? "annotation-search-hit-active"
+          : hasSearchHit && "annotation-search-hit",
         isEmptyText && "bg-blue-50/40",
         erasable && "hover:ring-2 hover:ring-red-400/80",
         !isSelected &&
@@ -1281,6 +1469,8 @@ function AnnotationItem({
           (ann.kind === "text"
             ? selectable && "hover:rounded-md hover:border-2 hover:border-dashed hover:border-blue-400/60"
             : (selectable || noteInRead) && "hover:ring-1 hover:ring-blue-400/60"),
+        // A linked text box in read mode gets a link-like hover hotspot.
+        linkInRead && ann.kind === "text" && "rounded-sm hover:ring-1 hover:ring-blue-400/50",
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
       onPointerEnter={(e) => {
@@ -1317,6 +1507,15 @@ function AnnotationItem({
         </div>
       )}
       {body}
+      {ann.kind === "text" && hasLinkTarget(ann.link) && (app.editMode || isSelected) && (
+        // Corner badge marking a text box that's been turned into a link.
+        <div
+          className="pointer-events-none absolute -right-1 -top-1 rounded-sm bg-background/80 p-px shadow-sm"
+          title={linkTitle(ann.link)}
+        >
+          <Link2 className="h-3 w-3 text-blue-600/90" />
+        </div>
+      )}
       {isSelected && !previewing && ann.kind !== "note" && (
         <div
           className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-blue-500"
@@ -1414,6 +1613,54 @@ function AnnotationItem({
                 app.updateAnnotation(pageIndex, { ...ann, ...p } as Annotation)
               }
               onDelete={() => app.removeAnnotation(pageIndex, ann.id)}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
+      {ann.kind === "link" && !ann.locked && (
+        <Popover
+          open={isSelected}
+          onOpenChange={(o: boolean, details?: { reason?: string; event?: Event }) => {
+            if (o) return;
+            const age = performance.now() - selectedAt.current;
+            const pressLike =
+              details?.reason === "outside-press" || details?.reason === "focus-out";
+            if (pressLike) {
+              const target = details?.event?.target as HTMLElement | null;
+              // Clicking the link box itself or the toolbar controls must not
+              // dismiss; and the trusted click that finishes drawing lands just
+              // outside the freshly-mounted popup — ignore that tail.
+              if (
+                target &&
+                (wrapRef.current?.contains(target) ||
+                  target.closest?.("[data-ann-controls]"))
+              ) {
+                return;
+              }
+              if (age < 500) return;
+            }
+            app.setSelected(null);
+          }}
+        >
+          <PopoverContent
+            data-ann-controls
+            anchor={wrapRef}
+            side="top"
+            align="start"
+            sideOffset={10}
+            className="w-72 p-3"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <LinkProperties
+              target={{ targetType: ann.targetType, value: ann.value }}
+              onChange={(t) =>
+                app.updateAnnotation(pageIndex, { ...ann, ...t } as Annotation)
+              }
+              onDelete={() => {
+                app.removeAnnotation(pageIndex, ann.id);
+                app.setSelected(null);
+              }}
+              onClose={() => app.setSelected(null)}
             />
           </PopoverContent>
         </Popover>

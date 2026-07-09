@@ -3,6 +3,21 @@
 // styled spans). These pure helpers are shared by the editor, the on-screen
 // display, size measurement and PDF baking — no React or DOM-framework deps.
 import type { BlockKind, FontFamilyKind, TextAnnotation, TextBlock, TextRun } from "../types";
+import { LINK_COLOR } from "./linktarget";
+
+/** A display/bake-time clone of a linked text box, restyled as a hyperlink
+ *  (blue + underline) across the box and every run. Derived from `ann.link`,
+ *  so the stored colors are untouched and removing the link restores them. */
+export function linkStyledText(ann: TextAnnotation): TextAnnotation {
+  const restyle = (r: TextRun): TextRun => ({ ...r, color: LINK_COLOR, underline: true });
+  return {
+    ...ann,
+    color: LINK_COLOR,
+    underline: true,
+    runs: ann.runs?.map(restyle),
+    blocks: ann.blocks?.map((b) => ({ ...b, runs: b.runs.map(restyle) })),
+  };
+}
 
 export interface ResolvedStyle {
   color: string;

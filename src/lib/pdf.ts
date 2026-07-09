@@ -2,7 +2,8 @@
 // the same engine that edits documents now renders them, extracts text,
 // resolves outlines/links and reads form fields.
 import { PdfDoc, PasswordError, type PdfPage } from "./engine";
-import type { OutlineNode, SearchMatch } from "../types";
+import type { OutlineNode, SearchMatch, SearchOptions } from "../types";
+import { buildSearchIndex, findInIndex, snippetAround } from "./search";
 
 export type { PdfPage };
 export { PdfDoc };
@@ -86,6 +87,7 @@ export function hasRasterImages(pdf: PdfDoc, maxPages = 5): boolean {
 export async function searchDocument(
   pdf: PdfDoc,
   query: string,
+  options?: Partial<SearchOptions>,
 ): Promise<SearchMatch[]> {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -99,8 +101,50 @@ export async function searchDocument(
         const start = Math.max(0, at - 30);
         const snippet =
           (start > 0 ? "…" : "") + str.slice(start, at + q.length + 40);
-        matches.push({ page: page.pageIndex, itemIndex, snippet });
+        matches.push({
+          id: `pdf:${page.pageIndex}:${itemIndex}:${at}`,
+          page: page.pageIndex,
+          source: "pdf-content",
+          snippet,
+          text: str.slice(at, at + q.length),
+          ranges: [{ itemIndex, start: at, end: at + q.length }],
+          replaceable: true,
+          start: at,
+          end: at + q.length,
+          ordinal: matches.length,
+        });
       }
+    });
+  }
+  return matches;
+}
+
+export async function searchDocumentAdvanced(
+  pdf: PdfDoc,
+  query: string,
+  options?: Partial<SearchOptions>,
+): Promise<SearchMatch[]> {
+  const pages = await extractAllText(pdf);
+  const matches: SearchMatch[] = [];
+  for (const page of pages) {
+    const index = buildSearchIndex(
+      page.items.map((text, itemIndex) => ({ itemIndex, text })),
+    );
+    const hits = findInIndex(index, query, options);
+    if ("error" in hits) throw new Error(hits.error);
+    hits.forEach((hit, ordinal) => {
+      matches.push({
+        id: `pdf:${page.pageIndex}:${ordinal}:${hit.start}:${hit.end}`,
+        page: page.pageIndex,
+        source: "pdf-content",
+        snippet: snippetAround(index.text, hit.start, hit.end),
+        text: hit.text,
+        ranges: hit.ranges,
+        replaceable: hit.ranges.length > 0,
+        start: hit.start,
+        end: hit.end,
+        ordinal,
+      });
     });
   }
   return matches;

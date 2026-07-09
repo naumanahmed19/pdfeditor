@@ -24,12 +24,15 @@ import type {
   AnnotationMap,
   ExistingFieldOp,
   FormFieldAnnotation,
+  LinkTarget,
   NoteAnnotation,
   TextAnnotation,
 } from "../types";
+import { hasLinkTarget, linkHref } from "./linktarget";
 import type { OcrPage } from "./ocr";
 import type { RedactRect } from "./pdfium";
 import { hexToRgb01 } from "./utils";
+import { MARK_STROKE_FRAC, markSegments } from "./marks";
 import {
   DEFAULT_LINE_HEIGHT,
   LIST_INDENT_PTS,
@@ -37,6 +40,7 @@ import {
   blockFontSize,
   computeMarkers,
   getBlocks,
+  linkStyledText,
   resolveBlockRun,
   type ResolvedStyle,
 } from "./richtext";
@@ -688,6 +692,53 @@ function addNoteAnnotation(
   annots.push(popupRef);
 }
 
+/**
+ * Write a native /Link annotation over the rect `r` pointing at `target`. A
+ * URI action covers url / email (mailto:) / phone (tel:); an internal page
+ * target uses a /Dest [pageRef /Fit] like the outline destinations. Shared by
+ * the area-link tool and text-box links. Returns false (nothing written) when
+ * the target is empty or an out-of-range page.
+ */
+function addLinkOverRect(
+  doc: PDFDocument,
+  pageIndex: number,
+  target: LinkTarget,
+  r: { x: number; y: number; w: number; h: number },
+): boolean {
+  const ctx = doc.context;
+  const linkDict = ctx.obj({
+    Type: "Annot",
+    Subtype: "Link",
+    Rect: [r.x, r.y, r.x + r.w, r.y + r.h],
+    // No visible border box — the link is an invisible hotspot.
+    Border: [0, 0, 0],
+  });
+
+  if (target.targetType === "page") {
+    const n = parseInt(target.value, 10);
+    if (!(n >= 1 && n <= doc.getPageCount())) return false;
+    linkDict.set(
+      PDFName.of("Dest"),
+      ctx.obj([doc.getPage(n - 1).ref, PDFName.of("Fit")]),
+    );
+  } else {
+    const uri = linkHref(target);
+    if (!uri) return false;
+    linkDict.set(
+      PDFName.of("A"),
+      ctx.obj({ Type: "Action", S: "URI", URI: PDFString.of(uri) }),
+    );
+  }
+
+  const page = doc.getPage(pageIndex);
+  const ref = ctx.register(linkDict);
+  const existing = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+  const annots = existing ?? ctx.obj([]);
+  if (!existing) page.node.set(PDFName.of("Annots"), annots);
+  annots.push(ref);
+  return true;
+}
+
 /** Bake overlay annotations permanently into the PDF. */
 export async function bakeAnnotations(
   bytes: Uint8Array,
@@ -766,6 +817,11 @@ export async function bakeAnnotations(
         if (ann.text.trim()) addNoteAnnotation(doc, pageIndex, ann, r);
         continue;
       }
+      if (ann.kind === "link") {
+        // Native /Link annotation (URI action or internal page destination).
+        addLinkOverRect(doc, pageIndex, ann, r);
+        continue;
+      }
       // Redaction is applied destructively above (PDFium), not drawn as an
       // overlay — the black box is already baked into the page content.
       if (ann.kind === "redact") continue;
@@ -795,12 +851,18 @@ export async function bakeAnnotations(
       }
       try {
         if (ann.kind === "text") {
-          await drawRichText(page, ann, r, rotation, getStyledFont);
+          // Linked text bakes as a hyperlink (blue + underline) to match screen.
+          const textAnn = hasLinkTarget(ann.link) ? linkStyledText(ann) : ann;
+          await drawRichText(page, textAnn, r, rotation, getStyledFont);
         } else {
           await drawAnnotation(doc, page, ann, r, await getFont(StandardFonts.Helvetica), rotation);
         }
       } finally {
         if (spin) page.pushOperators(popGraphicsState());
+      }
+      // A text box turned into a link gets a /Link over its (axis-aligned) box.
+      if (ann.kind === "text" && hasLinkTarget(ann.link)) {
+        addLinkOverRect(doc, pageIndex, ann.link, r);
       }
     }
   }
@@ -1693,6 +1755,32 @@ async function drawAnnotation(
           page.drawText(sanitizeWinAnsi(line), opts);
         }
       });
+      break;
+    }
+    case "mark": {
+      // Check / cross: draw as line segments in display space (each point
+      // mapped through the page rotation), matching the on-screen SVG. Free
+      // rotation of the mark itself is handled by the CTM wrap in the caller.
+      const c = hexToRgb01(ann.color);
+      const color = rgb(c.r, c.g, c.b);
+      const t = Math.max(0.75, Math.min(ann.w, ann.h) * MARK_STROKE_FRAC);
+      for (const [a, b] of markSegments(ann.symbol)) {
+        page.drawLine({
+          start: displayPointToPdf(
+            { x: ann.x + a[0] * ann.w, y: ann.y + a[1] * ann.h },
+            page,
+            rotation,
+          ),
+          end: displayPointToPdf(
+            { x: ann.x + b[0] * ann.w, y: ann.y + b[1] * ann.h },
+            page,
+            rotation,
+          ),
+          color,
+          thickness: t,
+          lineCap: 1 as any,
+        });
+      }
       break;
     }
     case "image": {

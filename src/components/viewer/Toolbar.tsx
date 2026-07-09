@@ -2,6 +2,7 @@ import {
   useEffect,
   useReducer,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
   type SelectHTMLAttributes,
@@ -18,6 +19,7 @@ import {
   Highlighter,
   Image as ImageIcon,
   Italic,
+  Link2,
   Lock,
   MessageSquare,
   MessageSquareQuote,
@@ -42,6 +44,7 @@ import {
   Underline,
   Undo2,
   Waves,
+  X,
 } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
@@ -65,6 +68,9 @@ import { activeInlineEdit } from "../../lib/activeInlineEdit";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { LinkProperties } from "./LinkProperties";
+import { hasLinkTarget } from "../../lib/linktarget";
 import { Separator } from "../ui/separator";
 import { Tip, TooltipProvider } from "../ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
@@ -74,6 +80,8 @@ import type {
   Annotation,
   FontFamilyKind,
   FormFieldAnnotation,
+  MarkAnnotation,
+  MarkSymbol,
   ShapeAnnotation,
   TextAnnotation,
   ToolKind,
@@ -98,6 +106,8 @@ const TOOLS: Array<{
   { key: "squiggly", icon: Waves, name: "Squiggly underline", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2 },
   { key: "note", icon: MessageSquare, name: "Comment", desc: "Click the page to add a sticky note", group: 2, shortcut: "C" },
   { key: "ink", icon: Pencil, name: "Draw freehand", desc: "Pen strokes in the chosen color & size", group: 2, shortcut: "D" },
+  { key: "mark", icon: Check, name: "Check / cross", desc: "Stamp a ✓ or ✗ — click to drop one, drag to size it. For ticking printed or scanned forms", group: 2, shortcut: "Y" },
+  { key: "link", icon: Link2, name: "Link", desc: "Drag a box to make a clickable link — to a URL, email, phone number or another page", group: 2, shortcut: "N" },
   { key: "rect", icon: Square, name: "Rectangle", desc: "Drag to draw; fill optional", group: 3, shortcut: "R" },
   { key: "ellipse", icon: Circle, name: "Ellipse", desc: "Drag to draw; fill optional", group: 3, shortcut: "O" },
   { key: "line", icon: Minus, name: "Line", desc: "Drag from start to end", group: 3, shortcut: "L" },
@@ -227,6 +237,59 @@ function NativeSelect({
       />
       <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
     </span>
+  );
+}
+
+/** Contextual control for turning a selected text box into a clickable link —
+ *  a toggle button opening the shared "Link properties" picker. */
+function TextLinkControl({
+  ann,
+  onPatch,
+}: {
+  ann: TextAnnotation;
+  onPatch: (p: Partial<TextAnnotation>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const linked = hasLinkTarget(ann.link);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Tip label="Link" desc="Make this text box a clickable link">
+        <PopoverTrigger
+          className={cn(
+            "flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
+            linked
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          <Link2 className="h-4 w-4" />
+          {linked ? "Linked" : "Link"}
+        </PopoverTrigger>
+      </Tip>
+      <PopoverContent
+        data-ann-controls
+        side="bottom"
+        align="start"
+        sideOffset={8}
+        className="w-72 p-3"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <LinkProperties
+          target={ann.link ?? { targetType: "url", value: "" }}
+          onChange={(t) => onPatch({ link: t })}
+          onDelete={
+            linked
+              ? () => {
+                  onPatch({ link: undefined });
+                  setOpen(false);
+                }
+              : undefined
+          }
+          deleteLabel="Remove link"
+          onClose={() => setOpen(false)}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -376,6 +439,8 @@ export function EditorToolbar() {
     line: { icon: Minus, label: "Line" },
     arrow: { icon: MoveUpRight, label: "Arrow" },
     ink: { icon: Pencil, label: "Drawing" },
+    mark: { icon: Check, label: "Check / cross" },
+    link: { icon: Link2, label: "Link" },
     highlight: { icon: Highlighter, label: "Highlight" },
     markup: { icon: Underline, label: "Text markup" },
     note: { icon: MessageSquare, label: "Comment" },
@@ -462,6 +527,15 @@ export function EditorToolbar() {
     }
   };
 
+  // A selected check / cross mark — its symbol & color are edited in the
+  // contextual row (same controls as the armed tool).
+  const selectedMark = selectedAnn?.kind === "mark" ? selectedAnn : null;
+  const patchSelectedMark = (p: Partial<MarkAnnotation>) => {
+    if (selectedMark && app.selected) {
+      app.updateAnnotation(app.selected.page, { ...selectedMark, ...p } as Annotation);
+    }
+  };
+
   // Contextual style controls: font options only while working with text,
   // stroke width only for drawing tools (armed-tool defaults; a *selected*
   // annotation is handled by the styleAnn branch instead).
@@ -481,6 +555,8 @@ export function EditorToolbar() {
     showColor ||
     showFill ||
     app.tool === "edittext" ||
+    app.tool === "mark" ||
+    app.tool === "link" ||
     !!selectedFormField ||
     !!app.selectedField ||
     !!selectedAnn;
@@ -926,6 +1002,12 @@ export function EditorToolbar() {
               />
             </>
           )}
+          {selectedText && (
+            <>
+              <Separator orientation="vertical" className="mx-0.5 h-6 shrink-0" />
+              <TextLinkControl ann={selectedText} onPatch={patchSelectedText} />
+            </>
+          )}
           </>
         ) : styleAnn ? (
           // A selected shape / drawing / highlight / whiteout — edit it directly.
@@ -948,6 +1030,30 @@ export function EditorToolbar() {
               />
             )}
           </>
+        ) : selectedMark ? (
+          <div className="flex items-center gap-2">
+            <ToggleGroup
+              value={[selectedMark.symbol]}
+              onValueChange={(v) =>
+                v[0] && patchSelectedMark({ symbol: v[0] as MarkSymbol })
+              }
+              aria-label="Mark symbol"
+              className="shrink-0"
+            >
+              <ToggleGroupItem value="check" aria-label="Check" className="h-7 w-8">
+                <Check className="h-4 w-4" />
+              </ToggleGroupItem>
+              <ToggleGroupItem value="cross" aria-label="Cross" className="h-7 w-8">
+                <X className="h-4 w-4" />
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <Separator orientation="vertical" className="h-6 shrink-0" />
+            <ColorSwatch
+              value={selectedMark.color}
+              onChange={(v) => patchSelectedMark({ color: v })}
+              title="Color"
+            />
+          </div>
         ) : app.tool === "highlight" ? (
           <div className="flex items-center gap-2">
             <ToggleGroup
@@ -1001,6 +1107,34 @@ export function EditorToolbar() {
             />
             <SizePresets value={app.strokeWidth} onChange={app.setStrokeWidth} />
           </>
+        ) : app.tool === "mark" ? (
+          <div className="flex items-center gap-2">
+            <ToggleGroup
+              value={[app.markSymbol]}
+              onValueChange={(v) =>
+                v[0] && app.setMarkSymbol(v[0] as MarkSymbol)
+              }
+              aria-label="Mark symbol"
+              className="shrink-0"
+            >
+              <ToggleGroupItem value="check" aria-label="Check" className="h-7 w-8">
+                <Check className="h-4 w-4" />
+              </ToggleGroupItem>
+              <ToggleGroupItem value="cross" aria-label="Cross" className="h-7 w-8">
+                <X className="h-4 w-4" />
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <Separator orientation="vertical" className="h-6 shrink-0" />
+            <ColorSwatch value={app.markColor} onChange={app.setMarkColor} title="Color" />
+            <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
+              Click to place · drag to size
+            </span>
+          </div>
+        ) : app.tool === "link" ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Link2 className="h-3.5 w-3.5" />
+            Drag a box over the page to create a link, then set its target.
+          </span>
         ) : (
           showColor && (
             <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />

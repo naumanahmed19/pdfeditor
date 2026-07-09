@@ -163,6 +163,23 @@ body {
   background: rgba(249, 115, 22, 0.6);
 }
 
+.annotation-search-hit {
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.85), 0 0 0 5px rgba(250, 204, 21, 0.22);
+}
+
+.annotation-search-hit-active {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.95), 0 0 0 6px rgba(249, 115, 22, 0.24);
+}
+
+.annotation-search-mark {
+  border-radius: 2px;
+  background: rgba(250, 204, 21, 0.55);
+}
+
+.annotation-search-mark-active {
+  background: rgba(249, 115, 22, 0.65);
+}
+
 /* ---------- bundled metric-compatible fonts ---------- */
 @font-face {
   font-family: "Carlito";

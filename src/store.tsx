@@ -19,18 +19,28 @@ import type {
   ExistingFieldOp,
   FolderNode,
   FontFamilyKind,
+  MarkSymbol,
   SavedSignature,
   Screen,
   SearchMatch,
+  SearchOptions,
   ToolKind,
 } from "./types";
 import {
   loadPdf,
-  searchDocument,
+  searchDocumentAdvanced,
   extractAllText,
   setPasswordPrompter,
   hasRasterImages,
 } from "./lib/pdf";
+import {
+  DEFAULT_SEARCH_OPTIONS,
+  buildSearchIndex,
+  compileSearch,
+  findInIndex,
+  replaceHitInText,
+  snippetAround,
+} from "./lib/search";
 import { pickFolder, readNode } from "./lib/folder";
 import { addOcrTextLayer, bakeAnnotations } from "./lib/pdftools";
 import type {
@@ -115,6 +125,150 @@ interface OpenDoc {
   formValues: Record<string, unknown>;
   /** Pending move/rename/delete edits to existing AcroForm fields. */
   fieldOps: Record<string, ExistingFieldOp>;
+}
+
+function formValueText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
+function pageForFormValue(d: OpenDoc, fieldName: string): number {
+  for (const [page, list] of Object.entries(d.annotations)) {
+    if (
+      list.some((ann) => ann.kind === "formfield" && ann.fieldName === fieldName)
+    ) {
+      return Number(page);
+    }
+  }
+  const op = Object.values(d.fieldOps).find((x) => x.fieldName === fieldName);
+  return op?.pageIndex ?? d.currentPage;
+}
+
+function searchTextSources(
+  d: OpenDoc,
+  query: string,
+  options: SearchOptions,
+): SearchMatch[] {
+  const matches: SearchMatch[] = [];
+  const addTextMatches = (
+    page: number,
+    source: SearchMatch["source"],
+    text: string,
+    idPrefix: string,
+    extra: Pick<SearchMatch, "annotationId" | "fieldName"> = {},
+  ) => {
+    if (!text) return;
+    const index = buildSearchIndex([{ itemIndex: 0, text }]);
+    const hits = findInIndex(index, query, options);
+    if ("error" in hits) throw new Error(hits.error);
+    hits.forEach((hit, ordinal) => {
+      matches.push({
+        id: `${idPrefix}:${ordinal}:${hit.start}:${hit.end}`,
+        page,
+        source,
+        snippet: snippetAround(index.text, hit.start, hit.end),
+        text: hit.text,
+        ranges: hit.ranges,
+        replaceable: true,
+        start: hit.start,
+        end: hit.end,
+        ordinal,
+        ...extra,
+      });
+    });
+  };
+
+  if (options.includeAnnotations) {
+    for (const [pageKey, list] of Object.entries(d.annotations)) {
+      const page = Number(pageKey);
+      for (const ann of list) {
+        if (ann.kind === "text") {
+          addTextMatches(page, "annotation-text", ann.text, `ann:${ann.id}`, {
+            annotationId: ann.id,
+          });
+        } else if (ann.kind === "note") {
+          addTextMatches(page, "note-text", ann.text, `note:${ann.id}`, {
+            annotationId: ann.id,
+          });
+        }
+      }
+    }
+  }
+
+  if (options.includeFormValues) {
+    for (const [fieldName, value] of Object.entries(d.formValues)) {
+      const text = formValueText(value);
+      addTextMatches(
+        pageForFormValue(d, fieldName),
+        "form-value",
+        text,
+        `form:${fieldName}`,
+        { fieldName },
+      );
+    }
+  }
+
+  return matches;
+}
+
+function orderedTextObjects(objs: TextObject[]): TextObject[] {
+  const sorted = objs.filter((o) => o.text).sort((a, b) => b.top - a.top || a.left - b.left);
+  const lines: TextObject[][] = [];
+  for (const obj of sorted) {
+    const line = lines[lines.length - 1];
+    const h = obj.top - obj.bottom;
+    if (line && Math.abs(obj.top - line[0].top) <= Math.max(2, h * 0.5)) {
+      line.push(obj);
+    } else {
+      lines.push([obj]);
+    }
+  }
+  for (const line of lines) line.sort((a, b) => a.left - b.left);
+  return lines.flat();
+}
+
+function planTextObjectReplacements(
+  objs: TextObject[],
+  query: string,
+  replacement: string,
+  options: SearchOptions,
+  ordinals?: Set<number>,
+): { edits: TextRunEdit[]; count: number; error?: string } {
+  const ordered = orderedTextObjects(objs);
+  const index = buildSearchIndex(
+    ordered.map((obj) => ({ itemIndex: obj.index, text: obj.text })),
+  );
+  const hits = findInIndex(index, query, options);
+  if ("error" in hits) return { edits: [], count: 0, error: hits.error };
+  const compiled = compileSearch(query, options);
+  if ("error" in compiled) return { edits: [], count: 0, error: compiled.error };
+
+  const byIndex = new Map(objs.map((obj) => [obj.index, obj.text]));
+  let count = 0;
+  for (let ordinal = hits.length - 1; ordinal >= 0; ordinal--) {
+    if (ordinals && !ordinals.has(ordinal)) continue;
+    const hit = hits[ordinal];
+    const ranges = hit.ranges.filter((r) => r.itemIndex != null);
+    if (!ranges.length) continue;
+    const nextText = compiled.replacementFor(hit, replacement);
+    ranges.forEach((range, rangeIndex) => {
+      const itemIndex = range.itemIndex!;
+      const current = byIndex.get(itemIndex);
+      if (current == null) return;
+      const insert = rangeIndex === 0 ? nextText : "";
+      byIndex.set(
+        itemIndex,
+        current.slice(0, range.start) + insert + current.slice(range.end),
+      );
+    });
+    count += 1;
+  }
+
+  const edits = objs
+    .map((obj) => ({ objectIndex: obj.index, text: byIndex.get(obj.index) ?? obj.text }))
+    .filter((edit, i) => edit.text !== objs[i].text);
+  return { edits, count };
 }
 
 export interface TabInfo {
@@ -340,6 +494,11 @@ interface AppStore {
   /** Fill color for new rect/ellipse shapes; null = no fill. */
   toolFill: string | null;
   setToolFill: (c: string | null) => void;
+  /** Check / cross tool: which symbol to stamp, and its color. */
+  markSymbol: MarkSymbol;
+  setMarkSymbol: (s: MarkSymbol) => void;
+  markColor: string;
+  setMarkColor: (c: string) => void;
   strokeWidth: number;
   setStrokeWidth: (w: number) => void;
   fontSize: number;
@@ -451,10 +610,15 @@ interface AppStore {
   reorderFormField: (page: number, id: string, dir: -1 | 1) => void;
 
   searchQuery: string;
+  searchOptions: SearchOptions;
   searchMatches: SearchMatch[];
   activeMatch: number;
-  runSearch: (q: string) => Promise<void>;
+  searchError: string | null;
+  runSearch: (q: string, options?: Partial<SearchOptions>) => Promise<void>;
+  setSearchOptions: (options: Partial<SearchOptions>) => void;
   gotoMatch: (i: number) => void;
+  replaceMatch: (replacement: string, index?: number) => Promise<void>;
+  replaceAll: (replacement: string) => Promise<void>;
   clearSearch: () => void;
 
   aiOpen: boolean;
@@ -742,6 +906,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [markupColor, setMarkupColor] = useState("#dc2626");
   // Fill color for new rect/ellipse shapes; null = no fill (outline only).
   const [toolFill, setToolFill] = useState<string | null>(null);
+  const [markSymbol, setMarkSymbol] = useState<MarkSymbol>("check");
+  const [markColor, setMarkColor] = useState("#16a34a");
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [fontSize, setFontSize] = useState(14);
   const [fontFamily, setFontFamily] = useState<FontFamilyKind>("helvetica");
@@ -852,8 +1018,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [pendingStamp, setPendingStamp] = useState<PendingStamp | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOptions, setSearchOptionsState] = useState<SearchOptions>(
+    DEFAULT_SEARCH_OPTIONS,
+  );
   const [searchMatches, setSearchMatches] = useState<SearchMatch[]>([]);
   const [activeMatch, setActiveMatch] = useState(0);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   // AI panel opens by default on desktop, stays closed on mobile.
   const [isMobile, setIsMobile] = useState(
@@ -2671,18 +2841,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const runSearch = useCallback(
-    async (q: string) => {
+    async (q: string, optionPatch?: Partial<SearchOptions>) => {
+      const options = { ...searchOptions, ...(optionPatch ?? {}) };
       setSearchQuery(q);
+      setSearchOptionsState(options);
+      setSearchError(null);
       if (!active?.pdf || !q.trim()) {
         setSearchMatches([]);
+        setActiveMatch(0);
         return;
       }
-      const matches = await searchDocument(active.pdf, q);
-      setSearchMatches(matches);
-      setActiveMatch(0);
-      if (matches.length) scrollToPage(matches[0].page);
+      try {
+        const pdfMatches = options.includePdfText
+          ? await searchDocumentAdvanced(active.pdf, q, options)
+          : [];
+        const textMatches = searchTextSources(active, q, options);
+        const matches = [...pdfMatches, ...textMatches].sort(
+          (a, b) => a.page - b.page || a.start - b.start || a.id.localeCompare(b.id),
+        );
+        setSearchMatches(matches);
+        setActiveMatch(0);
+        if (matches.length) scrollToPage(matches[0].page);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Search failed.";
+        setSearchError(message);
+        setSearchMatches([]);
+        setActiveMatch(0);
+      }
     },
-    [active, scrollToPage],
+    [active, scrollToPage, searchOptions],
+  );
+
+  const setSearchOptions = useCallback(
+    (patch: Partial<SearchOptions>) => {
+      const next = { ...searchOptions, ...patch };
+      setSearchOptionsState(next);
+      if (searchQuery.trim()) void runSearch(searchQuery, next);
+    },
+    [runSearch, searchOptions, searchQuery],
   );
 
   const gotoMatch = useCallback(
@@ -2695,9 +2891,230 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [searchMatches, scrollToPage],
   );
 
+  const applySearchReplacements = useCallback(
+    async (targets: SearchMatch[], replacement: string) => {
+      if (!active || !activeTabId || !searchQuery.trim() || !targets.length) return;
+
+      let replaced = 0;
+      let skipped = 0;
+      let nextBytes = active.bytes;
+      let pdfChanged = false;
+      let nextAnnotations = active.annotations;
+      let annotationsChanged = false;
+      let nextFormValues = active.formValues;
+      let formValuesChanged = false;
+
+      const pdfByPage = new Map<number, Set<number>>();
+      for (const match of targets) {
+        if (match.source !== "pdf-content") continue;
+        if (!match.replaceable) {
+          skipped += 1;
+          continue;
+        }
+        const set = pdfByPage.get(match.page) ?? new Set<number>();
+        set.add(match.ordinal);
+        pdfByPage.set(match.page, set);
+      }
+
+      if (pdfByPage.size) {
+        const { getTextObjects, styleTextRuns } = await import("./lib/pdfium");
+        for (const [page, ordinals] of [...pdfByPage.entries()].sort((a, b) => a[0] - b[0])) {
+          const objs = await getTextObjects(nextBytes, page);
+          const plan = planTextObjectReplacements(
+            objs,
+            searchQuery,
+            replacement,
+            searchOptions,
+            ordinals,
+          );
+          if (plan.error) throw new Error(plan.error);
+          if (!plan.count || !plan.edits.length) {
+            skipped += ordinals.size;
+            continue;
+          }
+          nextBytes = await styleTextRuns(nextBytes, page, plan.edits, {});
+          pdfChanged = true;
+          replaced += plan.count;
+        }
+      }
+
+      const textTargets = targets.filter(
+        (m) => m.source === "annotation-text" || m.source === "note-text",
+      );
+      const byAnnotation = new Map<string, SearchMatch[]>();
+      for (const match of textTargets) {
+        if (!match.annotationId) continue;
+        const list = byAnnotation.get(match.annotationId) ?? [];
+        list.push(match);
+        byAnnotation.set(match.annotationId, list);
+      }
+
+      const patchAnnotation = (page: number, ann: Annotation) => {
+        if (nextAnnotations === active.annotations) {
+          nextAnnotations = { ...active.annotations };
+        }
+        const list = [...(nextAnnotations[page] ?? [])];
+        const idx = list.findIndex((a) => a.id === ann.id);
+        if (idx >= 0) {
+          list[idx] = ann;
+          nextAnnotations = { ...nextAnnotations, [page]: list };
+          annotationsChanged = true;
+        }
+      };
+
+      for (const [annotationId, matches] of byAnnotation) {
+        let found:
+          | { page: number; ann: Extract<Annotation, { kind: "text" | "note" }> }
+          | null = null;
+        for (const [pageKey, list] of Object.entries(nextAnnotations)) {
+          const ann = list.find(
+            (a): a is Extract<Annotation, { kind: "text" | "note" }> =>
+              a.id === annotationId && (a.kind === "text" || a.kind === "note"),
+          );
+          if (ann) {
+            found = { page: Number(pageKey), ann };
+            break;
+          }
+        }
+        if (!found) {
+          skipped += matches.length;
+          continue;
+        }
+        let text = found.ann.text;
+        for (const match of [...matches].sort((a, b) => b.start - a.start)) {
+          const result = replaceHitInText(
+            text,
+            match,
+            searchQuery,
+            replacement,
+            searchOptions,
+          );
+          if (result.error) throw new Error(result.error);
+          text = result.text;
+          replaced += 1;
+        }
+        const ann =
+          found.ann.kind === "text"
+            ? ({ ...found.ann, text, runs: undefined, blocks: undefined } as Annotation)
+            : ({ ...found.ann, text } as Annotation);
+        patchAnnotation(found.page, ann);
+      }
+
+      const formTargets = targets.filter((m) => m.source === "form-value" && m.fieldName);
+      const byField = new Map<string, SearchMatch[]>();
+      for (const match of formTargets) {
+        const fieldName = match.fieldName!;
+        const list = byField.get(fieldName) ?? [];
+        list.push(match);
+        byField.set(fieldName, list);
+      }
+      for (const [fieldName, matches] of byField) {
+        let text = formValueText(nextFormValues[fieldName]);
+        if (!text) {
+          skipped += matches.length;
+          continue;
+        }
+        for (const match of [...matches].sort((a, b) => b.start - a.start)) {
+          const result = replaceHitInText(
+            text,
+            match,
+            searchQuery,
+            replacement,
+            searchOptions,
+          );
+          if (result.error) throw new Error(result.error);
+          text = result.text;
+          replaced += 1;
+        }
+        nextFormValues = { ...nextFormValues, [fieldName]: text };
+        formValuesChanged = true;
+      }
+
+      if (!replaced && skipped) {
+        toast.info(`No replacements made (${skipped} skipped).`);
+        return;
+      }
+
+      let nextPdf: PdfDoc | null = null;
+      if (pdfChanged) nextPdf = await loadPdf(nextBytes);
+      updateDoc(activeTabId, (d) => ({
+        ...(pdfChanged || annotationsChanged
+          ? pushHistory(
+              d,
+              nextAnnotations,
+              pdfChanged && nextPdf ? { bytes: nextBytes, pdf: nextPdf } : undefined,
+            )
+          : {}),
+        ...(formValuesChanged ? { formValues: nextFormValues } : {}),
+      }));
+      if (pdfChanged) {
+        setSelected(null);
+        persistWorking(active.id, active.name, nextBytes);
+      }
+      toast.success(
+        `Replaced ${replaced}${skipped ? ` (${skipped} skipped)` : ""}.`,
+      );
+      const searchDoc: OpenDoc = {
+        ...active,
+        bytes: nextBytes,
+        pdf: nextPdf ?? active.pdf,
+        annotations: nextAnnotations,
+        formValues: nextFormValues,
+      };
+      const pdfMatches = searchOptions.includePdfText
+        ? await searchDocumentAdvanced(searchDoc.pdf, searchQuery, searchOptions)
+        : [];
+      const textMatches = searchTextSources(searchDoc, searchQuery, searchOptions);
+      const matches = [...pdfMatches, ...textMatches].sort(
+        (a, b) => a.page - b.page || a.start - b.start || a.id.localeCompare(b.id),
+      );
+      setSearchMatches(matches);
+      setActiveMatch(0);
+    },
+    [
+      active,
+      activeTabId,
+      persistWorking,
+      searchOptions,
+      searchQuery,
+      updateDoc,
+    ],
+  );
+
+  const replaceMatch = useCallback(
+    async (replacement: string, index = activeMatch) => {
+      const match = searchMatches[index];
+      if (!match) return;
+      try {
+        await applySearchReplacements([match], replacement);
+      } catch (err) {
+        toast.error(
+          `Replace failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        );
+      }
+    },
+    [activeMatch, applySearchReplacements, searchMatches],
+  );
+
+  const replaceAll = useCallback(
+    async (replacement: string) => {
+      if (!searchMatches.length) return;
+      try {
+        await applySearchReplacements(searchMatches, replacement);
+      } catch (err) {
+        toast.error(
+          `Replace all failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        );
+      }
+    },
+    [applySearchReplacements, searchMatches],
+  );
+
   const clearSearch = useCallback(() => {
     setSearchQuery("");
     setSearchMatches([]);
+    setActiveMatch(0);
+    setSearchError(null);
   }, []);
 
   const setEditMode = useCallback(
@@ -2832,6 +3249,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFontColor,
     toolFill,
     setToolFill,
+    markSymbol,
+    setMarkSymbol,
+    markColor,
+    setMarkColor,
     strokeWidth,
     setStrokeWidth,
     fontSize,
@@ -2902,10 +3323,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setGridSize,
     reorderFormField,
     searchQuery,
+    searchOptions,
     searchMatches,
     activeMatch,
+    searchError,
     runSearch,
+    setSearchOptions,
     gotoMatch,
+    replaceMatch,
+    replaceAll,
     clearSearch,
     aiOpen,
     setAiOpen,
