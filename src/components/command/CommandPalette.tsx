@@ -865,6 +865,17 @@ export function CommandPalette() {
     hasPdfReason,
   ]);
 
+  const visibleCommandGroups = useMemo(
+    () =>
+      GROUPS.map((group) => ({
+        ...group,
+        items: commands.filter(
+          (command) => command.group === group.id && !command.disabledReason,
+        ),
+      })).filter((group) => group.items.length > 0),
+    [commands],
+  );
+
   const runCommand = (command: PaletteCommand) => {
     if (command.disabledReason) return;
     setOpen(false);
@@ -899,15 +910,13 @@ export function CommandPalette() {
       <CommandDialog open={open} onOpenChange={setOpen} filter={commandFilter}>
         <CommandInput placeholder="Search tools, panels, and actions..." />
         <CommandList className="max-h-[min(70vh,34rem)]">
-          <CommandEmpty>No matching command.</CommandEmpty>
-          {GROUPS.map((group, index) => {
-            const items = commands.filter((command) => command.group === group.id);
-            if (!items.length) return null;
+          <CommandEmpty>No available command.</CommandEmpty>
+          {visibleCommandGroups.map((group, index) => {
             return (
               <div key={group.id}>
                 {index > 0 && <CommandSeparator />}
                 <CommandGroup heading={group.heading}>
-                  {items.map((command) => (
+                  {group.items.map((command) => (
                     <CommandRow
                       key={command.id}
                       command={command}
