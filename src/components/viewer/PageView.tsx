@@ -280,13 +280,9 @@ export function PageView({
           (a.right - a.left) * (a.top - a.bottom) -
           (b.right - b.left) * (b.top - b.bottom),
       )[0];
-    if (!hit) {
-      // A stable id collapses repeat misses into one toast instead of a stack.
-      toast.info("Click directly on a line of text to edit it.", {
-        id: "edittext-miss",
-      });
-      return;
-    }
+    // A miss (margin, image, whitespace) simply does nothing — the tool's
+    // hover affordance already shows what's editable, a toast would only nag.
+    if (!hit) return;
 
     // Join the paragraph's fragments into one editable string — a "\n"
     // separator (virtual, like the inferred spaces) closes each visual line —
