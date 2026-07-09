@@ -2226,9 +2226,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /**
    * Destructively apply every pending redaction box: PDFium strips the covered
-   * text/content from the page and paints a black box. Removes the boxes and
-   * swaps the base bytes onto the undo timeline (so it's still reversible via
-   * Ctrl+Z within the session, but the saved file no longer holds the content).
+   * content from the page, paints a black box, then reopens the saved bytes to
+   * verify nothing extractable remains (redactRegions throws otherwise —
+   * failing closed). Only after verification are the boxes removed and the
+   * base bytes swapped onto the undo timeline (still reversible via Ctrl+Z
+   * within the session, but the saved file no longer holds the content). On
+   * any failure the pending boxes are KEPT and the document is left unchanged.
    */
   const applyRedactions = useCallback(async () => {
     if (!active) return;
@@ -2241,16 +2244,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     const ok = window.confirm(
-      `Permanently remove the content under ${boxes.length} redaction ${
-        boxes.length === 1 ? "box" : "boxes"
-      }? The text and images beneath will be deleted from the document — this can't be recovered from the saved file.`,
+      `Apply ${boxes.length} redaction ${boxes.length === 1 ? "box" : "boxes"}?\n\n` +
+        "Permanently deleted from the document: text under each box (including form-field text), any image a box touches (the whole image is removed), and vector graphics fully inside a box. A black box is painted over each area, and the result is verified before it is kept.\n\n" +
+        "Not removed: comments/annotations and document metadata — review those separately if they may contain sensitive content.",
     );
     if (!ok) return;
     try {
       const { applyRedactions: apply } = await import("./lib/pdftools");
       const nextBytes = await apply(active.bytes, active.annotations);
+      // Verification passed inside redactRegions — only now drop the applied
+      // redaction boxes, keeping every other annotation.
       const nextPdf = await loadPdf(nextBytes);
-      // Drop the now-applied redaction boxes, keep every other annotation.
       const nextAnns: AnnotationMap = {};
       for (const [page, list] of Object.entries(active.annotations)) {
         const kept = list.filter((a) => a.kind !== "redact");
@@ -2262,11 +2266,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSelected(null);
       persistWorking(id, active.name, nextBytes);
       toast.success(
-        `Redacted ${boxes.length} ${boxes.length === 1 ? "region" : "regions"}`,
+        `Redacted ${boxes.length} ${boxes.length === 1 ? "region" : "regions"} — verified: no extractable text or images remain in the redacted areas`,
       );
     } catch (err) {
+      // Fail closed: the document was not changed and the boxes stay pending.
       toast.error(
-        `Redaction failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `${err instanceof Error ? err.message : "Redaction failed: unknown error"}. The document was NOT changed and your redaction boxes were kept.`,
       );
     }
   }, [active, updateDoc, persistWorking]);

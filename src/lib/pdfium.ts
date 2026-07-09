@@ -165,15 +165,239 @@ export interface RedactRect {
   top: number;
 }
 
+/** A RedactRect normalized so left<=right and bottom<=top. */
+interface NormRect {
+  left: number;
+  bottom: number;
+  right: number;
+  top: number;
+}
+
+/** Group rects by page and normalize their edge order. */
+function rectsByPage(rects: RedactRect[]): Map<number, NormRect[]> {
+  const byPage = new Map<number, NormRect[]>();
+  for (const r of rects) {
+    const list = byPage.get(r.pageIndex) ?? [];
+    list.push({
+      left: Math.min(r.left, r.right),
+      right: Math.max(r.left, r.right),
+      bottom: Math.min(r.bottom, r.top),
+      top: Math.max(r.bottom, r.top),
+    });
+    byPage.set(r.pageIndex, list);
+  }
+  return byPage;
+}
+
+// Code points that carry no content on their own — remaining whitespace (often
+// synthesized by the text engine) must not fail a redaction.
+const REDACT_IGNORED_CODEPOINTS = new Set([
+  0x00, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0,
+]);
+
 /**
- * Destructively redact rectangular regions: text (and, with recurseForms, form
- * field values) intersecting each rect is REMOVED from the page content — not
- * just covered — and an optional black box is drawn in its place. Returns a
- * fresh PDF byte array.
+ * Count the extractable characters whose center falls inside any of `rects`.
+ * Char boxes come from the text page in page space (origin bottom-left) — the
+ * exact convention the redaction quads use — so rotated pages are measured in
+ * the same unrotated user space and need no extra handling. Whitespace and
+ * engine-generated characters are ignored: they carry no recoverable content.
+ */
+function countCharsInRects(
+  mod: WrappedPdfiumModule,
+  textPage: number,
+  rects: NormRect[],
+): number {
+  const rt = rtx(mod);
+  const d4 = rt.wasmExports.malloc(32); // 4 doubles: left, right, bottom, top
+  try {
+    const n = mod.FPDFText_CountChars(textPage);
+    let hits = 0;
+    for (let i = 0; i < n; i++) {
+      const code = mod.FPDFText_GetUnicode(textPage, i);
+      if (REDACT_IGNORED_CODEPOINTS.has(code)) continue;
+      if (mod.FPDFText_IsGenerated(textPage, i) === 1) continue;
+      if (!mod.FPDFText_GetCharBox(textPage, i, d4, d4 + 8, d4 + 16, d4 + 24)) continue;
+      const cx = (rt.getValue(d4, "double") + rt.getValue(d4 + 8, "double")) / 2;
+      const cy = (rt.getValue(d4 + 16, "double") + rt.getValue(d4 + 24, "double")) / 2;
+      if (
+        rects.some(
+          (r) => cx >= r.left && cx <= r.right && cy >= r.bottom && cy <= r.top,
+        )
+      ) {
+        hits++;
+      }
+    }
+    return hits;
+  } finally {
+    rt.wasmExports.free(d4);
+  }
+}
+
+// Slack (pt) when testing containment — forgives sub-pixel bound excursions.
+const REDACT_CONTAIN_EPS = 0.5;
+
+/** Object bounds vs the redaction rects: how the object must be treated. */
+function boundsHitRects(
+  kind: "image" | "path",
+  b: NormRect,
+  rects: NormRect[],
+): boolean {
+  return kind === "image"
+    ? // Any real overlap dooms an image — partial removal isn't possible, and
+      // dropping the whole image is safer than leaving its data in the file.
+      rects.some(
+        (r) => b.left < r.right && b.right > r.left && b.bottom < r.top && b.top > r.bottom,
+      )
+    : // Paths are removed only when fully covered; a page border or background
+      // that merely crosses a box must survive.
+      rects.some(
+        (r) =>
+          b.left >= r.left - REDACT_CONTAIN_EPS &&
+          b.right <= r.right + REDACT_CONTAIN_EPS &&
+          b.bottom >= r.bottom - REDACT_CONTAIN_EPS &&
+          b.top <= r.top + REDACT_CONTAIN_EPS,
+      );
+}
+
+/**
+ * Best-effort content removal beyond text: delete images that overlap a
+ * redaction rect (the whole image — partial overlap still leaks data) and
+ * vector paths fully covered by one. Throws if a doomed object can't be
+ * removed — redaction must never silently leave covered content behind.
+ */
+function removeObjectsInRects(
+  mod: WrappedPdfiumModule,
+  page: number,
+  rects: NormRect[],
+  pageIndex: number,
+): void {
+  const rt = rtx(mod);
+  const f4 = rt.wasmExports.malloc(16); // 4 floats: left, bottom, right, top
+  try {
+    const doomed: Array<{ obj: number; kind: "image" | "path" }> = [];
+    const count = mod.FPDFPage_CountObjects(page);
+    for (let i = 0; i < count; i++) {
+      const obj = mod.FPDFPage_GetObject(page, i);
+      const type = mod.FPDFPageObj_GetType(obj);
+      if (type !== FPDF_PAGEOBJ_IMAGE && type !== FPDF_PAGEOBJ_PATH) continue;
+      if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
+      const kind = type === FPDF_PAGEOBJ_IMAGE ? "image" : "path";
+      const b: NormRect = {
+        left: rt.getValue(f4, "float"),
+        bottom: rt.getValue(f4 + 4, "float"),
+        right: rt.getValue(f4 + 8, "float"),
+        top: rt.getValue(f4 + 12, "float"),
+      };
+      if (boundsHitRects(kind, b, rects)) doomed.push({ obj, kind });
+    }
+    // Remove after enumerating — removal by handle doesn't disturb the others.
+    for (const { obj, kind } of doomed) {
+      if (!mod.FPDFPage_RemoveObject(page, obj)) {
+        throw new Error(
+          `Redaction failed: could not remove a covered ${kind} on page ${pageIndex + 1}`,
+        );
+      }
+      mod.FPDFPageObj_Destroy(obj);
+    }
+  } finally {
+    rt.wasmExports.free(f4);
+  }
+}
+
+const FPDF_FILLMODE_ALTERNATE = 1;
+
+/**
+ * Reopen freshly-saved bytes and prove the redaction worked: no extractable
+ * text character may remain centered inside a redacted rect, and no image may
+ * still overlap one. Throws (identifying the pages) when anything survives.
+ */
+function verifyRedaction(
+  mod: WrappedPdfiumModule,
+  outBytes: Uint8Array,
+  byPage: Map<number, NormRect[]>,
+): void {
+  const rt = rtx(mod);
+  const filePtr = toHeap(mod, outBytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, outBytes.length, "");
+  if (!doc) {
+    rt.wasmExports.free(filePtr);
+    throw new Error("Redaction verification failed: could not reopen the redacted document");
+  }
+  const problems: string[] = [];
+  const f4 = rt.wasmExports.malloc(16);
+  try {
+    for (const [pageIndex, rects] of byPage) {
+      const page = mod.FPDF_LoadPage(doc, pageIndex);
+      if (!page) {
+        problems.push(`page ${pageIndex + 1} could not be reopened`);
+        continue;
+      }
+      try {
+        // Text check: any surviving character centered in a redacted rect.
+        const textPage = mod.FPDFText_LoadPage(page);
+        if (!textPage) {
+          problems.push(`page ${pageIndex + 1} text could not be re-read`);
+        } else {
+          try {
+            const chars = countCharsInRects(mod, textPage, rects);
+            if (chars > 0) {
+              problems.push(
+                `${chars} text character${chars === 1 ? "" : "s"} still extractable on page ${pageIndex + 1}`,
+              );
+            }
+          } finally {
+            mod.FPDFText_ClosePage(textPage);
+          }
+        }
+        // Image check: any surviving image still overlapping a redacted rect.
+        let images = 0;
+        const count = mod.FPDFPage_CountObjects(page);
+        for (let i = 0; i < count; i++) {
+          const obj = mod.FPDFPage_GetObject(page, i);
+          if (mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) continue;
+          if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
+          const b: NormRect = {
+            left: rt.getValue(f4, "float"),
+            bottom: rt.getValue(f4 + 4, "float"),
+            right: rt.getValue(f4 + 8, "float"),
+            top: rt.getValue(f4 + 12, "float"),
+          };
+          if (boundsHitRects("image", b, rects)) images++;
+        }
+        if (images > 0) {
+          problems.push(
+            `${images} image${images === 1 ? "" : "s"} still present on page ${pageIndex + 1}`,
+          );
+        }
+      } finally {
+        mod.FPDF_ClosePage(page);
+      }
+    }
+  } finally {
+    rt.wasmExports.free(f4);
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+  if (problems.length) {
+    throw new Error(`Redaction verification failed: ${problems.join("; ")}`);
+  }
+}
+
+/**
+ * Destructively redact rectangular regions, failing closed. Removed from the
+ * page content (not just covered): text intersecting each rect (including
+ * form-field text via recurseForms), every image that overlaps a rect (the
+ * whole image — partial removal would still leak data), and vector paths fully
+ * covered by a rect. A black box is then painted over each region. Comments/
+ * annotations and document metadata are NOT touched.
  *
- * This is what a whiteout can't do: the redacted text no longer exists in the
- * saved file, so it can't be copied, searched, or recovered. Uses EmbedPDF's
- * EPDFText_RedactInQuads primitive (the same one their redaction plugin uses).
+ * Fail-closed guarantees: any page-load, removal, content-generation or save
+ * failure throws and no bytes are returned. After saving, the output is
+ * reopened and re-checked — if any extractable text or overlapping image
+ * survives inside a redacted region, this throws instead of returning bytes.
+ *
+ * Text removal uses EmbedPDF's EPDFText_RedactInQuads primitive (the same one
+ * their redaction plugin uses).
  */
 export async function redactRegions(
   bytes: Uint8Array,
@@ -183,6 +407,7 @@ export async function redactRegions(
   const drawBlackBoxes = opts.drawBlackBoxes ?? true;
   const mod = await getPdfium();
   const rt = rtx(mod);
+  const byPage = rectsByPage(rects);
   const filePtr = toHeap(mod, bytes);
   const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, "");
   if (!doc) {
@@ -190,17 +415,30 @@ export async function redactRegions(
     throw new Error(`PDFium: could not open document (err ${mod.FPDF_GetLastError()})`);
   }
   try {
-    const byPage = new Map<number, RedactRect[]>();
-    for (const r of rects) {
-      const list = byPage.get(r.pageIndex) ?? [];
-      list.push(r);
-      byPage.set(r.pageIndex, list);
-    }
-
     for (const [pageIndex, list] of byPage) {
       const page = mod.FPDF_LoadPage(doc, pageIndex);
-      if (!page) continue;
+      if (!page) {
+        throw new Error(`Redaction failed: could not load page ${pageIndex + 1}`);
+      }
       try {
+        // Count the text the redaction MUST remove, before touching the page —
+        // used to tell "nothing to redact" apart from "removal failed".
+        const textPage = mod.FPDFText_LoadPage(page);
+        if (!textPage) {
+          throw new Error(
+            `Redaction failed: could not read the text on page ${pageIndex + 1}`,
+          );
+        }
+        let expected: number;
+        try {
+          expected = countCharsInRects(mod, textPage, list);
+        } finally {
+          mod.FPDFText_ClosePage(textPage);
+        }
+
+        // Non-text content first (before our black boxes exist as paths).
+        removeObjectsInRects(mod, page, list, pageIndex);
+
         // Pack an array of FS_QUADPOINTSF (page-space, origin bottom-left).
         // Field order per point: (x1,y1)=TL (x2,y2)=TR (x3,y3)=BL (x4,y4)=BR.
         const ptr = rt.wasmExports.malloc(FS_QUADPOINTSF_SIZE * list.length);
@@ -223,13 +461,47 @@ export async function redactRegions(
           drawBlackBoxes,
         );
         rt.wasmExports.free(ptr);
-        if (ok) mod.FPDFPage_GenerateContent(page);
+        if (!ok && expected > 0) {
+          throw new Error(
+            `Redaction failed: PDFium could not remove the text on page ${pageIndex + 1}`,
+          );
+        }
+
+        // Draw our own black box per region (even when the primitive already
+        // drew some): coverage must not depend on whether text was matched.
+        if (drawBlackBoxes) {
+          for (const r of list) {
+            const box = mod.FPDFPageObj_CreateNewRect(
+              r.left,
+              r.bottom,
+              r.right - r.left,
+              r.top - r.bottom,
+            );
+            if (!box) {
+              throw new Error(
+                `Redaction failed: could not draw the black box on page ${pageIndex + 1}`,
+              );
+            }
+            mod.FPDFPageObj_SetFillColor(box, 0, 0, 0, 255);
+            mod.FPDFPath_SetDrawMode(box, FPDF_FILLMODE_ALTERNATE, false);
+            mod.FPDFPage_InsertObject(page, box);
+          }
+        }
+
+        if (!mod.FPDFPage_GenerateContent(page)) {
+          throw new Error(
+            `Redaction failed: could not regenerate the content of page ${pageIndex + 1}`,
+          );
+        }
       } finally {
         mod.FPDF_ClosePage(page);
       }
     }
 
-    return saveAsCopy(mod, doc);
+    const out = saveAsCopy(mod, doc);
+    // Trust nothing: reopen what was saved and prove the content is gone.
+    verifyRedaction(mod, out, byPage);
+    return out;
   } finally {
     mod.FPDF_CloseDocument(doc);
     rt.wasmExports.free(filePtr);

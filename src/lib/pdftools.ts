@@ -700,12 +700,15 @@ export async function addPageNumbers(
 
 /**
  * Destructively redact every pending "redact" box in `annotations`: the text
- * (and form content) under each box is removed from the page content stream via
- * PDFium and a black box is painted in its place — it can't be copied, searched
- * or recovered, unlike a whiteout cover. Returns the input unchanged when there
- * are no redaction boxes. Box coordinates are mapped through the shared
- * display→PDF converter, so rotated and crop-offset pages are handled
- * identically to the rest of the baking pipeline.
+ * (and form content) under each box, images overlapping it and vector paths
+ * fully covered by it are removed from the page content via PDFium and a black
+ * box is painted in place — unlike a whiteout cover, the content can't be
+ * copied, searched or recovered. Fails closed: any per-page failure throws,
+ * and the saved bytes are reopened and re-checked before being returned (see
+ * redactRegions). Returns the input unchanged when there are no redaction
+ * boxes. Box coordinates are mapped through the shared display→PDF converter,
+ * so rotated and crop-offset pages are handled identically to the rest of the
+ * baking pipeline.
  */
 export async function applyRedactions(
   bytes: Uint8Array,
