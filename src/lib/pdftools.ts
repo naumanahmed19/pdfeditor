@@ -6,8 +6,10 @@ import {
   PDFDropdown,
   PDFHexString,
   PDFName,
+  PDFObjectCopier,
   PDFOptionList,
   PDFRadioGroup,
+  PDFRef,
   PDFString,
   PDFTextField,
   StandardFonts,
@@ -18,6 +20,7 @@ import {
   pushGraphicsState,
   rgb,
   type PDFFont,
+  type PDFPage,
 } from "pdf-lib";
 import type {
   Annotation,
@@ -56,14 +59,145 @@ async function load(bytes: Uint8Array): Promise<PDFDocument> {
   return PDFDocument.load(bytes, { ignoreEncryption: true });
 }
 
-export async function mergePdfs(files: Uint8Array[]): Promise<Uint8Array> {
-  const out = await PDFDocument.create();
-  for (const bytes of files) {
-    const src = await load(bytes);
-    const pages = await out.copyPages(src, src.getPageIndices());
-    pages.forEach((p) => out.addPage(p));
+/**
+ * Copy document-info metadata (title/author/subject/keywords/creator and the
+ * creation date) from `src` into `out`. Producer and modification date are
+ * deliberately left to pdf-lib's fresh values — this software *is* the
+ * producer of the new file, and it was just modified.
+ */
+function copyDocMetadata(src: PDFDocument, out: PDFDocument) {
+  const title = src.getTitle();
+  if (title !== undefined) out.setTitle(title);
+  const author = src.getAuthor();
+  if (author !== undefined) out.setAuthor(author);
+  const subject = src.getSubject();
+  if (subject !== undefined) out.setSubject(subject);
+  const keywords = src.getKeywords();
+  // getKeywords returns the raw string; setKeywords joins with a space, so a
+  // single-element array round-trips it unchanged.
+  if (keywords !== undefined) out.setKeywords([keywords]);
+  const creator = src.getCreator();
+  if (creator !== undefined) out.setCreator(creator);
+  const creationDate = src.getCreationDate();
+  if (creationDate !== undefined) out.setCreationDate(creationDate);
+}
+
+/**
+ * Re-register AcroForm fields for pages copied out of `src` with copyPages.
+ *
+ * pdf-lib's copyPages deep-copies each page's widget annotations together
+ * with their field dictionaries (reached through /Parent), but never lists
+ * those fields in the destination catalog's /AcroForm — so fields still
+ * *render* (widgets carry their appearance streams) but stop being
+ * interactive. To fix that, walk the copied pages' /Annots, climb each
+ * widget's /Parent chain to its root field, and add every root field to the
+ * destination AcroForm exactly once. Form-level defaults the fields depend on
+ * (/DA default appearance, /DR font resources, /Q quadding, /NeedAppearances)
+ * are copied too; on multi-source merges only missing keys are filled in and
+ * /DR's sub-dictionaries (e.g. /Font) are merged key-by-key.
+ *
+ * Known, accepted limitations (best effort by design):
+ * - Fields with the same fully-qualified name merged from different sources
+ *   become one logical field whose widgets share a value (valid PDF, same as
+ *   Acrobat's behavior for same-named fields; Acrobat's combine renames).
+ * - A field whose widgets span copied *and* uncopied pages keeps /Kids
+ *   entries pointing at orphaned page copies; viewers simply never render
+ *   those widgets.
+ * - XFA is never copied (pdf-lib cannot read or write it) and digital
+ *   signatures are invalidated by any page operation, so /SigFlags and
+ *   signature values are not carried over.
+ */
+function registerCopiedFormFields(
+  src: PDFDocument,
+  out: PDFDocument,
+  copiedPages: PDFPage[],
+) {
+  const srcAcro = src.catalog.AcroForm();
+  if (!srcAcro) return;
+
+  // Collect the root field of every copied widget annotation first, so
+  // pages without form widgets never cause an empty /AcroForm to be added.
+  const rootRefs: PDFRef[] = [];
+  const seen = new Set<string>();
+  for (const page of copiedPages) {
+    const annots = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+    if (!annots) continue;
+    for (let i = 0, len = annots.size(); i < len; i++) {
+      const annotRef = annots.get(i);
+      if (!(annotRef instanceof PDFRef)) continue;
+      const dict = out.context.lookupMaybe(annotRef, PDFDict);
+      if (!dict || dict.get(PDFName.of("Subtype")) !== PDFName.of("Widget")) {
+        continue;
+      }
+      // Climb to the root field; a merged field+widget dict has no /Parent
+      // and is its own root. `visited` guards against /Parent cycles in
+      // malformed files.
+      let ref = annotRef;
+      let node: PDFDict = dict;
+      const visited = new Set<string>([ref.toString()]);
+      for (;;) {
+        const parentRef = node.get(PDFName.of("Parent"));
+        if (!(parentRef instanceof PDFRef) || visited.has(parentRef.toString())) {
+          break;
+        }
+        const parent = out.context.lookupMaybe(parentRef, PDFDict);
+        if (!parent) break;
+        visited.add(parentRef.toString());
+        ref = parentRef;
+        node = parent;
+      }
+      if (!seen.has(ref.toString())) {
+        seen.add(ref.toString());
+        rootRefs.push(ref);
+      }
+    }
   }
-  return out.save();
+  if (!rootRefs.length) return;
+
+  const outAcro = out.catalog.getOrCreateAcroForm();
+  const copier = PDFObjectCopier.for(src.context, out.context);
+
+  for (const key of ["DA", "Q", "NeedAppearances"]) {
+    const name = PDFName.of(key);
+    const val = srcAcro.get(name);
+    if (val && !outAcro.dict.get(name)) outAcro.dict.set(name, copier.copy(val));
+  }
+  const srcDR = srcAcro.lookupMaybe(PDFName.of("DR"), PDFDict);
+  if (srcDR) {
+    const outDR = outAcro.dict.lookupMaybe(PDFName.of("DR"), PDFDict);
+    if (!outDR) {
+      outAcro.dict.set(PDFName.of("DR"), copier.copy(srcDR));
+    } else {
+      // Merge resource categories (/Font, /XObject, …) without clobbering
+      // entries an earlier source already claimed.
+      for (const [key, value] of srcDR.entries()) {
+        const existing = outDR.get(key);
+        if (!existing) {
+          outDR.set(key, copier.copy(value));
+          continue;
+        }
+        const srcSub = srcDR.lookupMaybe(key, PDFDict);
+        const outSub = outDR.lookupMaybe(key, PDFDict);
+        if (!srcSub || !outSub) continue;
+        for (const [subKey, subValue] of srcSub.entries()) {
+          if (!outSub.get(subKey)) outSub.set(subKey, copier.copy(subValue));
+        }
+      }
+    }
+  }
+
+  const registered = new Set<string>();
+  const fields = outAcro.normalizedEntries().Fields;
+  for (let i = 0, len = fields.size(); i < len; i++) {
+    registered.add(fields.get(i).toString());
+  }
+  for (const ref of rootRefs) {
+    if (!registered.has(ref.toString())) outAcro.addField(ref);
+  }
+}
+
+export async function mergePdfs(files: Uint8Array[]): Promise<Uint8Array> {
+  return mergeMixed(files.map((bytes) => ({ bytes, kind: "pdf" as const })));
 }
 
 export async function extractPages(
@@ -74,6 +208,13 @@ export async function extractPages(
   const out = await PDFDocument.create();
   const pages = await out.copyPages(src, pageIndexes);
   pages.forEach((p) => out.addPage(p));
+  // Rebuilding via copyPages keeps page content + annotations but drops
+  // document-level structures. Restore what we can: info metadata and the
+  // AcroForm registration that makes copied form fields interactive again.
+  // Outlines, named destinations and page labels reference pages that may
+  // not exist in the subset; they are intentionally not carried over.
+  copyDocMetadata(src, out);
+  registerCopiedFormFields(src, out, pages);
   return out.save();
 }
 
@@ -102,15 +243,89 @@ export async function buildPrintDoc(
   return out.save();
 }
 
+/**
+ * Remove AcroForm fields whose widgets all sit on pages about to be deleted,
+ * so the form doesn't keep phantom entries for fields that can no longer be
+ * seen or filled. Must run *before* the pages are removed — pdf-lib's
+ * removeField needs the owning pages present to unlink the widgets. Fields
+ * with at least one widget on a surviving page are kept whole (their dead
+ * widgets simply never render). Everything here is best effort: when a
+ * widget's page can't be determined, the field is conservatively kept.
+ */
+function removeFieldsOnDoomedPages(doc: PDFDocument, doomed: Set<PDFRef>) {
+  // Don't let getForm() invent an empty /AcroForm on documents without one.
+  if (!doc.catalog.AcroForm()) return;
+  let form;
+  try {
+    form = doc.getForm();
+  } catch {
+    return;
+  }
+  // Widgets *should* carry /P, but it's optional — fall back to a reverse
+  // map built from every page's /Annots.
+  const annotToPage = new Map<PDFRef, PDFRef>();
+  for (const page of doc.getPages()) {
+    const annots = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+    if (!annots) continue;
+    for (let i = 0, len = annots.size(); i < len; i++) {
+      const ref = annots.get(i);
+      if (ref instanceof PDFRef) annotToPage.set(ref, page.ref);
+    }
+  }
+  for (const field of form.getFields()) {
+    const widgets = field.acroField.getWidgets();
+    if (!widgets.length) continue;
+    const allDoomed = widgets.every((w) => {
+      let pageRef = w.P();
+      if (!pageRef) {
+        const widgetRef = doc.context.getObjectRef(w.dict);
+        if (widgetRef) pageRef = annotToPage.get(widgetRef);
+      }
+      return pageRef !== undefined && doomed.has(pageRef);
+    });
+    if (!allDoomed) continue;
+    try {
+      form.removeField(field);
+    } catch {
+      /* leave the field in place — a dangling entry is harmless */
+    }
+  }
+}
+
+/**
+ * Delete pages in place (doc.removePage) instead of rebuilding the document
+ * with copyPages, so every catalog-level structure — AcroForm, outlines,
+ * named destinations, page labels, metadata, attachments, tags, optional
+ * content — survives untouched.
+ *
+ * Deliberate trade-offs:
+ * - Outline items / named destinations pointing at a removed page become
+ *   dangling references. Viewers treat a dead destination as a no-op, and
+ *   keeping the rest of the outline intact beats dropping it wholesale.
+ * - /PageLabels ranges are index-based, so labels shift with the pages; they
+ *   are not remapped.
+ * - The removed page objects stay in the file as unreferenced objects
+ *   (pdf-lib never garbage-collects), so this hides content rather than
+ *   erasing it — true content removal is the redaction pipeline's job.
+ * - Digital signatures are invalidated by any page operation by nature; no
+ *   preservation is attempted.
+ */
 export async function deletePages(
   bytes: Uint8Array,
   pageIndexes: number[],
 ): Promise<Uint8Array> {
-  const src = await load(bytes);
-  const keep = src
-    .getPageIndices()
-    .filter((i) => !pageIndexes.includes(i));
-  return extractPages(bytes, keep);
+  const doc = await load(bytes);
+  const pageCount = doc.getPageCount();
+  const targets = [...new Set(pageIndexes)]
+    .filter((i) => Number.isInteger(i) && i >= 0 && i < pageCount)
+    .sort((a, b) => b - a); // descending, so removals don't shift indexes
+  if (targets.length) {
+    removeFieldsOnDoomedPages(doc, new Set(targets.map((i) => doc.getPage(i).ref)));
+    for (const i of targets) doc.removePage(i);
+  }
+  // Deleting every page yields a single blank page (save() adds a default
+  // page to empty documents) — same net behavior as the old rebuild path.
+  return doc.save();
 }
 
 export async function rotatePage(
@@ -125,16 +340,29 @@ export async function rotatePage(
   return doc.save();
 }
 
+/**
+ * Reorder in place: detach the page from the page tree and re-insert the
+ * same PDFPage at the target index (pdf-lib's insertPage accepts an existing
+ * page of the same document). Nothing else in the file changes, so forms,
+ * outlines, destinations, labels, metadata and attachments all survive —
+ * unlike the previous copyPages rebuild. `to` is interpreted against the
+ * order *after* removal, matching the old splice semantics.
+ */
 export async function movePage(
   bytes: Uint8Array,
   from: number,
   to: number,
 ): Promise<Uint8Array> {
-  const src = await load(bytes);
-  const order = src.getPageIndices();
-  const [moved] = order.splice(from, 1);
-  order.splice(to, 0, moved);
-  return extractPages(bytes, order);
+  const doc = await load(bytes);
+  const last = doc.getPageCount() - 1;
+  const src = Math.max(0, Math.min(Math.floor(from), last));
+  const dst = Math.max(0, Math.min(Math.floor(to), last));
+  if (src !== dst) {
+    const page = doc.getPage(src);
+    doc.removePage(src);
+    doc.insertPage(dst, page);
+  }
+  return doc.save();
 }
 
 export async function insertBlankPage(
@@ -196,14 +424,26 @@ export interface MergeInput {
   kind: "pdf" | "image/png" | "image/jpeg";
 }
 
-/** Merge PDFs and images (each image becomes one page) into a single PDF. */
+/**
+ * Merge PDFs and images (each image becomes one page) into a single PDF.
+ * Document metadata is taken from the first PDF input (the primary source);
+ * AcroForm fields from every source are re-registered so they stay
+ * interactive (see registerCopiedFormFields for what can and can't be
+ * preserved). Outlines, named destinations and page labels are not merged.
+ */
 export async function mergeMixed(inputs: MergeInput[]): Promise<Uint8Array> {
   const out = await PDFDocument.create();
+  let primary = true;
   for (const input of inputs) {
     if (input.kind === "pdf") {
       const src = await load(input.bytes);
       const pages = await out.copyPages(src, src.getPageIndices());
       pages.forEach((p) => out.addPage(p));
+      if (primary) {
+        copyDocMetadata(src, out);
+        primary = false;
+      }
+      registerCopiedFormFields(src, out, pages);
     } else {
       await imagesToPdfPages(out, { bytes: input.bytes, type: input.kind });
     }
