@@ -11,6 +11,8 @@ export type ToolKind =
   | "strikeout"
   | "squiggly"
   | "ink"
+  | "mark"
+  | "link"
   | "rect"
   | "ellipse"
   | "line"
@@ -105,6 +107,9 @@ export interface TextAnnotation extends BaseAnnotation {
   letterSpacing?: number;
   /** Exact CSS font-family for on-screen display (e.g. the embedded PDF font). */
   displayFontCss?: string;
+  /** When set, the whole text box is a clickable link (baked as a /Link over
+   *  the box, and followed on click while reading). */
+  link?: LinkTarget;
 }
 
 export interface HighlightAnnotation extends BaseAnnotation {
@@ -172,6 +177,35 @@ export interface ImageAnnotation extends BaseAnnotation {
   kind: "image";
   /** PNG or JPEG data URL. */
   dataUrl: string;
+}
+
+export type MarkSymbol = "check" | "cross";
+
+/** A ✓ or ✗ stamped onto the page — for ticking flat / scanned form checkboxes
+ *  (not an interactive AcroForm field). Drawn as a crisp vector glyph both
+ *  on-screen and when baked into the saved PDF. */
+export interface MarkAnnotation extends BaseAnnotation {
+  kind: "mark";
+  symbol: MarkSymbol;
+  color: string;
+}
+
+export type LinkTargetType = "url" | "email" | "phone" | "page";
+
+/** Where a link points. Shared by the area-link tool (LinkAnnotation) and
+ *  text-box links (TextAnnotation.link). */
+export interface LinkTarget {
+  targetType: LinkTargetType;
+  /** Raw target: a URL, email address, phone number, or — for `page` — the
+   *  1-based destination page number as a string. */
+  value: string;
+}
+
+/** A clickable link over any rectangular region of the page. Baked into the
+ *  saved PDF as a native /Link annotation — a URI action for url/email/phone,
+ *  or a /Dest page jump for an internal page. */
+export interface LinkAnnotation extends BaseAnnotation, LinkTarget {
+  kind: "link";
 }
 
 /** A form field to be CREATED in the PDF when saving (form designer). */
@@ -268,6 +302,8 @@ export type Annotation =
   | ShapeAnnotation
   | InkAnnotation
   | ImageAnnotation
+  | MarkAnnotation
+  | LinkAnnotation
   | FormFieldAnnotation;
 
 /** Annotations keyed by 0-based page index. */
@@ -298,10 +334,44 @@ export interface ChatMessage {
   content: string;
 }
 
+export type SearchSource =
+  | "pdf-content"
+  | "annotation-text"
+  | "note-text"
+  | "form-value";
+
+export interface SearchOptions {
+  matchCase: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  preserveCase: boolean;
+  includePdfText: boolean;
+  includeAnnotations: boolean;
+  includeFormValues: boolean;
+}
+
+export interface SearchRange {
+  /** Text-layer run index for PDF content matches. */
+  itemIndex?: number;
+  start: number;
+  end: number;
+}
+
 export interface SearchMatch {
+  id: string;
   page: number; // 0-based
-  itemIndex: number;
+  source: SearchSource;
   snippet: string;
+  text: string;
+  ranges: SearchRange[];
+  replaceable: boolean;
+  start: number;
+  end: number;
+  /** 0-based ordinal within matches from the same page/source/index. */
+  ordinal: number;
+  annotationId?: string;
+  fieldName?: string;
+  skipReason?: string;
 }
 
 export interface OutlineNode {

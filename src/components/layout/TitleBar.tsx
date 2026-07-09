@@ -1,6 +1,7 @@
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   Bot,
+  CaseSensitive,
   ChevronDown,
   ChevronUp,
   Combine,
@@ -25,8 +26,13 @@ import {
   Scissors,
   Search,
   Settings,
+  SlidersHorizontal,
   SquarePen,
+  Regex,
+  Replace,
+  ReplaceAll,
   Wrench,
+  WholeWord,
   X,
 } from "lucide-react";
 import { Info } from "lucide-react";
@@ -38,10 +44,14 @@ import { SecurityModal } from "../viewer/SecurityModal";
 import {
   Menu,
   MenuContent,
+  MenuGroup,
   MenuItem,
+  MenuLabel,
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
+import { Checkbox } from "../ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { cn } from "../../lib/utils";
 import { isTauri } from "../../lib/tauri";
 import { WindowControls } from "./WindowControls";
@@ -79,26 +89,58 @@ function TitleBarImpl() {
       runSearch: s.runSearch,
       saveCurrent: s.saveCurrent,
       screen: s.screen,
+      searchError: s.searchError,
       searchMatches: s.searchMatches,
+      searchOptions: s.searchOptions,
       securityModalOpen: s.securityModalOpen,
       setAiOpen: s.setAiOpen,
+      setSearchOptions: s.setSearchOptions,
       setScreen: s.setScreen,
       setSecurityModalOpen: s.setSecurityModalOpen,
       setSidebarOpen: s.setSidebarOpen,
       sidebarOpen: s.sidebarOpen,
+      replaceMatch: s.replaceMatch,
+      replaceAll: s.replaceAll,
     }),
     shallowEqual,
   );
   const fileRef = useRef<HTMLInputElement>(null);
+  const searchFormRef = useRef<HTMLFormElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const [replaceOpen, setReplaceOpen] = useState(false);
   const [propsOpen, setPropsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
+
+  useEffect(() => {
+    const openReplace = () => {
+      setReplaceOpen(true);
+      requestAnimationFrame(() => {
+        replaceInputRef.current?.focus();
+        replaceInputRef.current?.select();
+      });
+    };
+    window.addEventListener("pdfwb:open-replace", openReplace);
+    return () => window.removeEventListener("pdfwb:open-replace", openReplace);
+  }, []);
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     void app.runSearch(query);
   };
+
+  const updateQuery = (value: string) => {
+    setQuery(value);
+    void app.runSearch(value);
+  };
+
+  const optionButtonClass = (active: boolean) =>
+    cn(
+      "rounded p-0.5 transition-colors hover:bg-accent",
+      active && "bg-accent text-foreground",
+    );
 
   const fileItems = (
     <>
@@ -290,23 +332,185 @@ function TitleBarImpl() {
       />
 
       <form
+        ref={searchFormRef}
         onSubmit={submitSearch}
-        className="mx-auto hidden h-7 w-full max-w-md items-center gap-1.5 rounded-md border border-sidebar-border bg-background/70 px-2 sm:flex"
+        className="mx-auto hidden h-7 w-full max-w-md items-center gap-1 rounded-md border border-sidebar-border bg-background/70 px-2 sm:flex"
       >
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
           id="doc-search-input"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => updateQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.shiftKey) {
+              e.preventDefault();
+              app.gotoMatch(app.activeMatch - 1);
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              app.gotoMatch(app.activeMatch + 1);
+            }
+          }}
           placeholder={app.pdf ? "Search in document…" : "Open a PDF to search"}
           disabled={!app.pdf}
-          className="h-full w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+          className="h-full min-w-24 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
         />
+        {app.searchError ? (
+          <span className="shrink-0 text-[11px] text-destructive" title={app.searchError}>
+            Error
+          </span>
+        ) : (
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            {app.searchMatches.length
+              ? `${app.activeMatch + 1}/${app.searchMatches.length}`
+              : query.trim()
+                ? "0/0"
+                : ""}
+          </span>
+        )}
+        <Menu>
+          <MenuTrigger
+            type="button"
+            className={optionButtonClass(
+              app.searchOptions.matchCase ||
+                app.searchOptions.wholeWord ||
+                app.searchOptions.regex ||
+                app.searchOptions.preserveCase ||
+                !app.searchOptions.includePdfText ||
+                !app.searchOptions.includeAnnotations ||
+                !app.searchOptions.includeFormValues,
+            )}
+            title="Search options"
+          >
+            <SlidersHorizontal className="h-3 w-3" />
+          </MenuTrigger>
+          <MenuContent align="end" className="min-w-60">
+            <MenuGroup>
+              <MenuLabel>Match</MenuLabel>
+              <MenuItem
+                onClick={() => app.setSearchOptions({ matchCase: !app.searchOptions.matchCase })}
+              >
+                <Checkbox checked={app.searchOptions.matchCase} />
+                <CaseSensitive className="h-4 w-4 text-muted-foreground" />
+                <span>Match case</span>
+              </MenuItem>
+              <MenuItem
+                onClick={() => app.setSearchOptions({ wholeWord: !app.searchOptions.wholeWord })}
+              >
+                <Checkbox checked={app.searchOptions.wholeWord} />
+                <WholeWord className="h-4 w-4 text-muted-foreground" />
+                <span>Whole word</span>
+              </MenuItem>
+              <MenuItem
+                onClick={() => app.setSearchOptions({ regex: !app.searchOptions.regex })}
+              >
+                <Checkbox checked={app.searchOptions.regex} />
+                <Regex className="h-4 w-4 text-muted-foreground" />
+                <span>Regular expression</span>
+              </MenuItem>
+              <MenuItem
+                onClick={() =>
+                  app.setSearchOptions({ preserveCase: !app.searchOptions.preserveCase })
+                }
+              >
+                <Checkbox checked={app.searchOptions.preserveCase} />
+                <span className="w-4 text-center text-[10px] font-semibold text-muted-foreground">
+                  AB
+                </span>
+                <span>Preserve case on replace</span>
+              </MenuItem>
+            </MenuGroup>
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuLabel>Search In</MenuLabel>
+              <MenuItem
+                onClick={() =>
+                  app.setSearchOptions({ includePdfText: !app.searchOptions.includePdfText })
+                }
+              >
+                <Checkbox checked={app.searchOptions.includePdfText} />
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <span>PDF text</span>
+              </MenuItem>
+              <MenuItem
+                onClick={() =>
+                  app.setSearchOptions({
+                    includeAnnotations: !app.searchOptions.includeAnnotations,
+                  })
+                }
+              >
+                <Checkbox checked={app.searchOptions.includeAnnotations} />
+                <SquarePen className="h-4 w-4 text-muted-foreground" />
+                <span>Annotations and comments</span>
+              </MenuItem>
+              <MenuItem
+                onClick={() =>
+                  app.setSearchOptions({
+                    includeFormValues: !app.searchOptions.includeFormValues,
+                  })
+                }
+              >
+                <Checkbox checked={app.searchOptions.includeFormValues} />
+                <FileOutput className="h-4 w-4 text-muted-foreground" />
+                <span>Form values</span>
+              </MenuItem>
+            </MenuGroup>
+          </MenuContent>
+        </Menu>
+        <Popover open={replaceOpen} onOpenChange={setReplaceOpen}>
+          <PopoverTrigger
+            type="button"
+            className={optionButtonClass(replaceOpen)}
+            title="Toggle replace"
+          >
+            <Replace className="h-3 w-3" />
+          </PopoverTrigger>
+          <PopoverContent
+            anchor={searchFormRef}
+            side="bottom"
+            align="center"
+            className="w-[min(28rem,calc(100vw-2rem))] p-2"
+          >
+            <div className="grid gap-2">
+              <div className="flex h-8 items-center gap-2 rounded-md border border-input bg-background px-2">
+                <Replace className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  ref={replaceInputRef}
+                  value={replacement}
+                  onChange={(e) => setReplacement(e.target.value)}
+                  placeholder="Replace"
+                  disabled={!app.pdf}
+                  className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-1.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={!app.searchMatches.length}
+                  onClick={() => void app.replaceMatch(replacement)}
+                >
+                  <Replace className="mr-1.5 h-3.5 w-3.5" />
+                  Replace
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={!app.searchMatches.length}
+                  onClick={() => void app.replaceAll(replacement)}
+                >
+                  <ReplaceAll className="mr-1.5 h-3.5 w-3.5" />
+                  All
+                </Button>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
         {app.searchMatches.length > 0 && (
           <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
-            <span className="tabular-nums">
-              {app.activeMatch + 1}/{app.searchMatches.length}
-            </span>
             <button
               type="button"
               className="rounded p-0.5 hover:bg-accent"

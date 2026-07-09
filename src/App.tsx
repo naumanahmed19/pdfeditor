@@ -441,6 +441,11 @@ function Shell() {
         input?.select();
         return;
       }
+      if (mod && e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("pdfwb:open-replace"));
+        return;
+      }
       if (mod && e.key.toLowerCase() === "s" && app.pdf) {
         e.preventDefault();
         void app.saveCurrent();

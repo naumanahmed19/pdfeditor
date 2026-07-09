@@ -23,6 +23,7 @@ export const ROTATABLE_KINDS: ReadonlySet<string> = new Set([
   "line",
   "arrow",
   "ink",
+  "mark",
   "whiteout",
 ]);
 

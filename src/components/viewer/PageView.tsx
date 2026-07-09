@@ -161,38 +161,44 @@ export function PageView({
         delete s.dataset.searchOriginal;
       }
     }
-    const q = app.searchQuery.trim().toLowerCase();
-    if (!q) return;
-    const pageMatches = app.searchMatches.filter((m) => m.page === pageIndex);
+    if (!app.searchQuery.trim()) return;
+    const pageMatches = app.searchMatches.filter(
+      (m) => m.page === pageIndex && m.source === "pdf-content",
+    );
     if (!pageMatches.length) return;
 
     const active = app.searchMatches[app.activeMatch];
-    const hitSpans = spans.filter((s) =>
-      s.textContent?.toLowerCase().includes(q),
-    );
 
-    hitSpans.forEach((span) => {
+    spans.forEach((span) => {
       // The active match is the one whose run index matches — not a DOM
       // position — so it stays correct even though spans render in reading
       // order rather than extraction order.
-      const isActive =
-        !!active &&
-        active.page === pageIndex &&
-        Number(span.dataset.run) === active.itemIndex;
+      const run = Number(span.dataset.run);
+      const ranges = pageMatches
+        .flatMap((match) =>
+          match.ranges
+            .filter((r) => r.itemIndex === run)
+            .map((range) => ({ ...range, matchId: match.id })),
+        )
+        .sort((a, b) => a.start - b.start || a.end - b.end);
+      if (!ranges.length) return;
       const text = span.textContent ?? "";
-      const lower = text.toLowerCase();
       span.dataset.searchOriginal = text;
       const frag = document.createDocumentFragment();
       let pos = 0;
-      let at: number;
-      while ((at = lower.indexOf(q, pos)) !== -1) {
-        if (at > pos) frag.appendChild(document.createTextNode(text.slice(pos, at)));
+      for (const range of ranges) {
+        if (range.end <= pos) continue;
+        const start = Math.max(pos, range.start);
+        const end = Math.min(text.length, range.end);
+        if (start > pos) frag.appendChild(document.createTextNode(text.slice(pos, start)));
         const mark = document.createElement("span");
         mark.className =
-          isActive ? "search-mark search-mark-active" : "search-mark";
-        mark.textContent = text.slice(at, at + q.length);
+          active?.id === range.matchId
+            ? "search-mark search-mark-active"
+            : "search-mark";
+        mark.textContent = text.slice(start, end);
         frag.appendChild(mark);
-        pos = at + q.length;
+        pos = end;
       }
       if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
       span.replaceChildren(frag);
