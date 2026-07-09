@@ -1734,6 +1734,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         setDocs((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
         setActiveTabId(doc.id);
+        // In split view, show the newly opened document in the focused pane —
+        // panes render from panes[].docId, so without this the new doc becomes
+        // the active tab but is visible in neither pane (mirrors openRecent).
+        if (activePaneId) {
+          setPanes((prev) =>
+            prev.map((p) => (p.id === activePaneId ? { ...p, docId: doc.id } : p)),
+          );
+        }
         setDocVersion((v) => v + 1);
         resetTransient();
         setScreen("viewer");
@@ -1804,7 +1812,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [resetTransient, refreshRecent, markProtected, requestPassword, noteAutosaveSkipped],
+    [resetTransient, refreshRecent, markProtected, requestPassword, noteAutosaveSkipped, activePaneId],
   );
 
   const openBytes = useCallback(
