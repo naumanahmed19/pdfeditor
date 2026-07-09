@@ -32,6 +32,7 @@ import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DropZone } from "./components/layout/DropZone";
+import { CommandPalette } from "./components/command/CommandPalette";
 import { Viewer } from "./components/viewer/Viewer";
 import { ReaderPane } from "./components/viewer/ReaderPane";
 import { EditorToolbar } from "./components/viewer/Toolbar";
@@ -548,6 +549,7 @@ function Shell() {
           />
         )}
       </div>
+      <CommandPalette />
       <SignatureModal />
       <DropZone />
       <Toaster />

@@ -53,6 +53,31 @@ function SidebarImpl() {
     setTab((t) => (app.formBuilder ? "form" : t === "form" ? "recent" : t));
   }, [app.formBuilder]);
 
+  useEffect(() => {
+    const openPanel = (event: Event) => {
+      const panel = (event as CustomEvent<{ panel?: SidebarTab }>).detail?.panel;
+      if (
+        panel !== "pages" &&
+        panel !== "outline" &&
+        panel !== "comments" &&
+        panel !== "attachments" &&
+        panel !== "form"
+      ) {
+        return;
+      }
+
+      setTab(panel);
+      if (panel === "form") {
+        if (!app.formBuilder) app.setFormBuilder(true);
+      } else if (app.formBuilder) {
+        app.setFormBuilder(false);
+      }
+    };
+
+    window.addEventListener("pdfwb:open-sidebar-panel", openPanel);
+    return () => window.removeEventListener("pdfwb:open-sidebar-panel", openPanel);
+  }, [app.formBuilder, app.setFormBuilder]);
+
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
   const activeTab = app.pdf ? tab : "recent";
 
