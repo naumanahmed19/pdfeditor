@@ -300,6 +300,20 @@ const DOCUMENT_SCREENS: Array<{
     aliases: ["pages"],
   },
   {
+    screen: "createimages",
+    label: "Images to PDF",
+    description: "Build a PDF from PNG or JPEG images, one page each.",
+    icon: FilePlus2,
+    aliases: ["create pdf", "png", "jpeg", "photos", "convert"],
+  },
+  {
+    screen: "createdoc",
+    label: "Word or text to PDF",
+    description: "Convert a .docx or plain-text file into a PDF.",
+    icon: FilePlus2,
+    aliases: ["create pdf", "docx", "word", "text", "convert"],
+  },
+  {
     screen: "merge",
     label: "Merge PDFs",
     description: "Combine PDFs and images into one document.",

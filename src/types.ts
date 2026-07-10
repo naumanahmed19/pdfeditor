@@ -424,6 +424,8 @@ export type Screen =
   | "viewer"
   | "templates"
   | "organize"
+  | "createimages"
+  | "createdoc"
   | "merge"
   | "split"
   | "watermark"
