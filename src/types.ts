@@ -20,6 +20,9 @@ export type ToolKind =
   | "polygon"
   | "polyline"
   | "cloud"
+  | "measuredist"
+  | "measureperim"
+  | "measurearea"
   | "callout"
   | "whiteout"
   | "eraser"
@@ -183,6 +186,23 @@ export interface PolyAnnotation extends BaseAnnotation {
   cloudy?: boolean;
 }
 
+/** A measurement drawn over the page. The value label is derived at render /
+ *  bake time from `points` × `scale` — never stored — so recalibrating the
+ *  document relabels every existing measurement. */
+export interface MeasureAnnotation extends BaseAnnotation {
+  kind: "measure";
+  /** "distance" (2 points), "perimeter" (open polyline), "area" (closed polygon). */
+  mode: "distance" | "perimeter" | "area";
+  /** Vertices relative to the annotation box, in PDF points (same convention as PolyAnnotation). */
+  points: Array<{ x: number; y: number }>;
+  color: string;
+  strokeWidth: number;
+  /** Real-world units per PDF point, e.g. 0.5 means 1pt = 0.5cm. */
+  scale: number;
+  /** Display unit label, e.g. "cm", "m", "in", "ft". */
+  unit: string;
+}
+
 export interface InkAnnotation extends BaseAnnotation {
   kind: "ink";
   /** Points relative to the annotation box, in PDF points. */
@@ -319,6 +339,7 @@ export type Annotation =
   | RedactAnnotation
   | ShapeAnnotation
   | PolyAnnotation
+  | MeasureAnnotation
   | InkAnnotation
   | ImageAnnotation
   | MarkAnnotation
