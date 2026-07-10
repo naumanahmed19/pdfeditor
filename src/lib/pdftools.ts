@@ -47,6 +47,7 @@ import type { OcrPage } from "./ocr";
 import type { RedactRect } from "./pdfium";
 import { hexToRgb01 } from "./utils";
 import { MARK_STROKE_FRAC, markSegments } from "./marks";
+import { CLOUD_RADIUS, cloudPathD, polyPathD } from "./poly";
 import {
   DEFAULT_LINE_HEIGHT,
   LIST_INDENT_PTS,
@@ -2255,6 +2256,28 @@ async function drawAnnotation(
       line(tail, head);
       line(wing(1), head);
       line(wing(-1), head);
+      break;
+    }
+    case "polygon":
+    case "polyline": {
+      const c = hexToRgb01(ann.color);
+      const f = ann.kind === "polygon" && ann.fill ? hexToRgb01(ann.fill) : null;
+      if (!f && ann.strokeWidth <= 0) break;
+      // The `d` string is in box-relative display coords (top-left origin,
+      // y down) — exactly drawSvgPath's semantics, whose origin option is
+      // the path's top-left in the y-up frame: the top edge of the box.
+      const d =
+        ann.kind === "polygon" && ann.cloudy
+          ? cloudPathD(ann.points, CLOUD_RADIUS)
+          : polyPathD(ann.points, ann.kind === "polygon");
+      page.drawSvgPath(d, {
+        x: r.x,
+        y: r.y + r.h,
+        color: f ? rgb(f.r, f.g, f.b) : undefined,
+        borderColor: ann.strokeWidth > 0 ? rgb(c.r, c.g, c.b) : undefined,
+        borderWidth: ann.strokeWidth > 0 ? ann.strokeWidth : undefined,
+        borderLineCap: 1 as any,
+      });
       break;
     }
     case "ink": {

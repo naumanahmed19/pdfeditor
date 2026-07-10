@@ -36,10 +36,19 @@ import type {
   LinkAnnotation,
   LinkTarget,
   NoteAnnotation,
+  PolyAnnotation,
   SearchMatch,
   ShapeAnnotation,
   TextAnnotation,
 } from "../../types";
+import {
+  CLOUD_RADIUS,
+  cloudPathD,
+  dedupeTail,
+  normalizePoly,
+  polyPathD,
+  scalePoints,
+} from "../../lib/poly";
 import {
   followLinkTarget,
   hasLinkTarget,
@@ -144,10 +153,17 @@ export function AnnotationLayer({
   const layerRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<DraftShape | null>(null);
   const [inkPoints, setInkPoints] = useState<Array<{ x: number; y: number }>>([]);
+  // Vertex-by-vertex draft for the polygon / polyline / cloud tools, plus the
+  // live cursor position the preview segment follows.
+  const [polyPts, setPolyPts] = useState<Array<{ x: number; y: number }>>([]);
+  const [polyCursor, setPolyCursor] = useState<{ x: number; y: number } | null>(null);
   const drawing = useRef(false);
   const notePending = useRef<{ x: number; y: number } | null>(null);
 
   const anns = app.annotations[pageIndex] ?? [];
+  const polyTool =
+    app.tool === "polygon" || app.tool === "polyline" || app.tool === "cloud";
+  const polyClosed = app.tool !== "polyline";
   // Note: underline / strikeout / squiggly mark existing text via selection
   // (handled on the text layer + mark-on-mouseup effect), not by dragging a box
   // here. Highlight free-draws a box only in "area" mode; in "text" mode it
@@ -158,6 +174,9 @@ export function AnnotationLayer({
       "ellipse",
       "line",
       "arrow",
+      "polygon",
+      "polyline",
+      "cloud",
       "callout",
       "whiteout",
       "redact",
@@ -181,6 +200,63 @@ export function AnnotationLayer({
       y: Math.max(0, Math.min(baseDims.height, (e.clientY - rect.top) / scale)),
     };
   };
+
+  const resetPolyDraft = () => {
+    setPolyPts([]);
+    setPolyCursor(null);
+  };
+
+  /** Commit the vertex draft as a polygon/polyline (or discard if too few
+   *  distinct points: 3 for polygon/cloud, 2 for polyline). */
+  const finishPoly = (raw: Array<{ x: number; y: number }>) => {
+    // A finishing double-click lands two near-identical trailing vertices.
+    const pts = dedupeTail(raw, 5 / scale);
+    resetPolyDraft();
+    if (pts.length < (polyClosed ? 3 : 2)) return;
+    const box = normalizePoly(pts);
+    const ann: PolyAnnotation = {
+      id: uid(),
+      kind: polyClosed ? "polygon" : "polyline",
+      ...box,
+      color: app.toolColor,
+      strokeWidth: app.strokeWidth,
+      ...(polyClosed && app.toolFill ? { fill: app.toolFill } : {}),
+      ...(app.tool === "cloud" ? { cloudy: true } : {}),
+    };
+    app.addAnnotation(pageIndex, ann);
+    app.setSelected({ page: pageIndex, id: ann.id });
+    app.setTool("select");
+  };
+
+  // Enter finishes / Escape cancels the vertex draft. Capture phase so the
+  // draft swallows the key before Viewer's global Escape (which would also
+  // disarm the tool) and before tool shortcuts.
+  const polyDraftRef = useRef(polyPts);
+  polyDraftRef.current = polyPts;
+  const finishPolyRef = useRef(finishPoly);
+  finishPolyRef.current = finishPoly;
+  useEffect(() => {
+    if (!polyTool || polyPts.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" && e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Enter") finishPolyRef.current(polyDraftRef.current);
+      else {
+        setPolyPts([]);
+        setPolyCursor(null);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polyTool, polyPts.length > 0]);
+
+  // Switching tools mid-draft abandons the unfinished shape.
+  useEffect(() => {
+    if (!polyTool) resetPolyDraft();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.tool]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -246,6 +322,23 @@ export function AnnotationLayer({
       return;
     }
 
+    // Polygon / polyline / cloud: each click places a vertex; clicking back
+    // near the first vertex (≈8px on screen) closes a polygon.
+    if (polyTool) {
+      e.preventDefault();
+      const p = toLocal(e);
+      if (polyClosed && polyPts.length >= 3) {
+        const first = polyPts[0];
+        if (Math.hypot(p.x - first.x, p.y - first.y) <= 8 / scale) {
+          finishPoly(polyPts);
+          return;
+        }
+      }
+      setPolyPts((pts) => [...pts, p]);
+      setPolyCursor(p);
+      return;
+    }
+
     if (!drawingTool) {
       app.setSelected(null);
       return;
@@ -267,6 +360,10 @@ export function AnnotationLayer({
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (polyTool) {
+      if (polyPts.length) setPolyCursor(toLocal(e));
+      return;
+    }
     if (!drawing.current) return;
     const p = toLocal(e);
     if (app.tool === "ink") {
@@ -531,6 +628,9 @@ export function AnnotationLayer({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onDoubleClick={() => {
+        if (polyTool && polyPts.length) finishPoly(polyPts);
+      }}
     >
       {/* form-builder grid (design aid only — never printed or saved) */}
       {app.formBuilder && app.gridEnabled && !app.formPreview && (
@@ -620,6 +720,62 @@ export function AnnotationLayer({
                     : "transparent",
           }}
         />
+      )}
+      {/* vertex draft for polygon / polyline / cloud */}
+      {polyTool && polyPts.length > 0 && (
+        <svg
+          className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+          viewBox={`0 0 ${baseDims.width} ${baseDims.height}`}
+        >
+          <polyline
+            points={polyPts.map((p) => `${p.x},${p.y}`).join(" ")}
+            fill="none"
+            stroke={app.toolColor}
+            strokeWidth={app.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {polyCursor && (
+            <line
+              x1={polyPts[polyPts.length - 1].x}
+              y1={polyPts[polyPts.length - 1].y}
+              x2={polyCursor.x}
+              y2={polyCursor.y}
+              stroke={app.toolColor}
+              strokeWidth={Math.max(1, app.strokeWidth) / 1.5}
+              strokeDasharray={`${5 / scale} ${4 / scale}`}
+            />
+          )}
+          {/* close-the-shape target: emphasized once clicking it would close */}
+          {polyClosed && (
+            <circle
+              cx={polyPts[0].x}
+              cy={polyPts[0].y}
+              r={
+                (polyPts.length >= 3 &&
+                polyCursor &&
+                Math.hypot(polyCursor.x - polyPts[0].x, polyCursor.y - polyPts[0].y) <=
+                  8 / scale
+                  ? 6
+                  : 3.5) / scale
+              }
+              fill="#ffffff"
+              stroke={app.toolColor}
+              strokeWidth={1.5 / scale}
+            />
+          )}
+          {polyPts.slice(1).map((p, i) => (
+            <circle
+              key={i}
+              cx={p.x}
+              cy={p.y}
+              r={2.5 / scale}
+              fill="#ffffff"
+              stroke={app.toolColor}
+              strokeWidth={1.25 / scale}
+            />
+          ))}
+        </svg>
       )}
       {inkPoints.length > 1 && (
         <svg
@@ -995,6 +1151,22 @@ function AnnotationItem({
             finalBox.x - ann.x,
             finalBox.y - ann.y,
           );
+        } else if (
+          mode === "resize" &&
+          (ann.kind === "polygon" || ann.kind === "polyline")
+        ) {
+          // Vertices are box-relative: bake the new size into the points so
+          // the shape stays stretched (the SVG preview stretches while
+          // dragging; without this the points would snap back on commit).
+          app.updateAnnotation(pageIndex, {
+            ...ann,
+            ...finalBox,
+            points: scalePoints(
+              ann.points,
+              finalBox.w / Math.max(1e-6, ann.w),
+              finalBox.h / Math.max(1e-6, ann.h),
+            ),
+          });
         } else {
           app.updateAnnotation(pageIndex, { ...ann, ...finalBox });
         }
@@ -1243,6 +1415,46 @@ function AnnotationItem({
             strokeLinecap="round"
             strokeLinejoin="round"
           />
+        </svg>
+      );
+      break;
+    }
+    case "polygon":
+    case "polyline": {
+      const ptsStr = ann.points.map((p) => `${p.x},${p.y}`).join(" ");
+      body = (
+        <svg
+          className="h-full w-full overflow-visible"
+          viewBox={`0 0 ${Math.max(1, ann.w)} ${Math.max(1, ann.h)}`}
+          preserveAspectRatio="none"
+        >
+          {ann.kind === "polygon" && ann.cloudy ? (
+            <path
+              d={cloudPathD(ann.points, CLOUD_RADIUS)}
+              fill={ann.fill ?? "none"}
+              stroke={ann.strokeWidth > 0 ? ann.color : "none"}
+              strokeWidth={ann.strokeWidth}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ) : ann.kind === "polygon" ? (
+            <polygon
+              points={ptsStr}
+              fill={ann.fill ?? "none"}
+              stroke={ann.strokeWidth > 0 ? ann.color : "none"}
+              strokeWidth={ann.strokeWidth}
+              strokeLinejoin="round"
+            />
+          ) : (
+            <polyline
+              points={ptsStr}
+              fill="none"
+              stroke={ann.color}
+              strokeWidth={ann.strokeWidth}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
         </svg>
       );
       break;
