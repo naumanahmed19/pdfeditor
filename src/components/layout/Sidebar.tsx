@@ -9,6 +9,7 @@ import {
   Columns2,
   Download,
   Files,
+  FileSignature,
   FileText,
   Folder,
   FolderOpen,
@@ -20,6 +21,9 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
   Trash2,
   X,
 } from "lucide-react";
@@ -31,6 +35,7 @@ import { cn, formatBytes } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
 import type { OutlineInput } from "../../lib/pdftools";
 import type { AttachmentInfo } from "../../lib/pdfium";
+import type { SignatureInfo } from "../../lib/signatures";
 import type { FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
@@ -61,6 +66,7 @@ function SidebarImpl() {
         panel !== "outline" &&
         panel !== "comments" &&
         panel !== "attachments" &&
+        panel !== "signatures" &&
         panel !== "form"
       ) {
         return;
@@ -133,6 +139,8 @@ function SidebarImpl() {
           <CommentsPanel />
         ) : app.pdf && activeTab === "attachments" ? (
           <AttachmentsPanel />
+        ) : app.pdf && activeTab === "signatures" ? (
+          <SignaturesPanel />
         ) : app.pdf && activeTab === "form" ? (
           <FormBuilderSidebar />
         ) : (
@@ -462,6 +470,7 @@ type SidebarTab =
   | "outline"
   | "comments"
   | "attachments"
+  | "signatures"
   | "form"
   | "recent";
 
@@ -472,6 +481,7 @@ const MORE_TABS: Array<{
 }> = [
   { key: "comments", label: "Comments", icon: MessageSquare },
   { key: "attachments", label: "Attachments", icon: Paperclip },
+  { key: "signatures", label: "Signatures", icon: FileSignature },
   { key: "form", label: "Form builder", icon: FormInput },
 ];
 
@@ -1165,6 +1175,130 @@ function AttachmentsPanel() {
               </div>
             ))}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Digital (certificate) signatures: per-signature validity, signer and
+ *  whether the file changed since signing. Verification runs entirely
+ *  locally against the in-memory bytes. */
+function SignaturesPanel() {
+  const app = useAppSelector(
+    (s) => ({
+      docBytes: s.docBytes,
+      docVersion: s.docVersion,
+      setSignModalOpen: s.setSignModalOpen,
+    }),
+    shallowEqual,
+  );
+  const [list, setList] = useState<SignatureInfo[] | null>(null);
+  const bytes = app.docBytes;
+
+  useEffect(() => {
+    let alive = true;
+    setList(null);
+    if (!bytes) return;
+    void import("../../lib/signatures")
+      .then((m) => m.verifySignatures(bytes))
+      .then((l) => {
+        if (alive) setList(l);
+      })
+      .catch(() => {
+        if (alive) setList([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bytes, app.docVersion]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1 px-3 pb-1 pt-2">
+        <span className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Digital signatures
+        </span>
+        <button
+          onClick={() => app.setSignModalOpen(true)}
+          title="Sign with a certificate (.p12/.pfx)"
+          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
+        {list === null ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">Verifying…</p>
+        ) : list.length === 0 ? (
+          <p className="px-2 py-2 text-[11px] text-muted-foreground">
+            No digital signatures. Use + above to sign with a certificate
+            (.p12/.pfx) — unlike a drawn signature, it proves the document
+            hasn't changed since signing.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {list.map((sig, i) => (
+              <SignatureRow key={`${sig.fieldName}-${i}`} sig={sig} />
+            ))}
+            <p className="px-2 pt-1 text-[10px] leading-snug text-muted-foreground">
+              Verified locally. Signer identity is not checked against a
+              trusted-authority store, so treat "who signed" as claimed, not
+              proven.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SignatureRow({ sig }: { sig: SignatureInfo }) {
+  const revisionNote = sig.status === "valid" && !sig.coversWholeDocument;
+  const [Icon, tone, headline] =
+    sig.status === "valid"
+      ? revisionNote
+        ? ([ShieldCheck, "text-amber-500", "Valid — earlier revision"] as const)
+        : ([ShieldCheck, "text-green-600", "Valid"] as const)
+      : sig.status === "modified"
+        ? ([ShieldAlert, "text-destructive", "Document modified"] as const)
+        : sig.status === "invalid"
+          ? ([ShieldAlert, "text-destructive", "Invalid"] as const)
+          : ([ShieldQuestion, "text-amber-500", "Not verifiable"] as const);
+
+  const when = sig.signingTime ? new Date(sig.signingTime).toLocaleString() : null;
+
+  return (
+    <div className="rounded-md border border-sidebar-border/60 px-2 py-1.5 text-xs">
+      <div className="flex items-center gap-1.5">
+        <Icon className={cn("h-3.5 w-3.5 shrink-0", tone)} />
+        <span className="min-w-0 flex-1 truncate font-medium" title={sig.fieldName}>
+          {sig.signerName ?? "(unknown signer)"}
+        </span>
+        <span className={cn("shrink-0 text-[10px] font-medium", tone)}>{headline}</span>
+      </div>
+      <p className="pt-1 text-[11px] leading-snug text-muted-foreground">
+        {sig.statusDetail}
+      </p>
+      <div className="flex flex-col gap-0.5 pt-1 text-[10px] leading-snug text-muted-foreground">
+        {sig.signerOrg && <span>Organization: {sig.signerOrg}</span>}
+        {when && <span>Signed: {when}</span>}
+        {sig.reason && <span>Reason: {sig.reason}</span>}
+        {sig.location && <span>Location: {sig.location}</span>}
+        {sig.selfSigned ? (
+          <span>Self-signed certificate</span>
+        ) : (
+          sig.certIssuer && <span>Issued by: {sig.certIssuer}</span>
+        )}
+        {sig.certOutsideValidity && (
+          <span className="text-destructive">
+            Certificate was outside its validity period at signing time
+          </span>
+        )}
+        {sig.digestAlgorithm && (
+          <span>
+            Field: {sig.fieldName} · {sig.digestAlgorithm}
+          </span>
         )}
       </div>
     </div>

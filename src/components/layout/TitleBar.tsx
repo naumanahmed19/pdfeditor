@@ -11,6 +11,7 @@ import {
   Droplets,
   FileOutput,
   FilePlus2,
+  FileSignature,
   FileText,
   FolderOpen,
   GitCompare,
@@ -42,6 +43,7 @@ import { useAppSelector, shallowEqual } from "../../store";
 import { Button } from "../ui/button";
 import { PropertiesModal } from "../viewer/PropertiesModal";
 import { SecurityModal } from "../viewer/SecurityModal";
+import { SignModal } from "../viewer/SignModal";
 import {
   Menu,
   MenuContent,
@@ -100,6 +102,8 @@ function TitleBarImpl() {
       setSearchOptions: s.setSearchOptions,
       setScreen: s.setScreen,
       setSecurityModalOpen: s.setSecurityModalOpen,
+      signModalOpen: s.signModalOpen,
+      setSignModalOpen: s.setSignModalOpen,
       setSidebarOpen: s.setSidebarOpen,
       sidebarOpen: s.sidebarOpen,
       replaceMatch: s.replaceMatch,
@@ -228,6 +232,10 @@ function TitleBarImpl() {
           <Lock className="h-4 w-4 text-muted-foreground" />
         )}
         {app.activeProtected ? "Document security…" : "Protect document…"}
+      </MenuItem>
+      <MenuItem disabled={!app.pdf} onClick={() => app.setSignModalOpen(true)}>
+        <FileSignature className="h-4 w-4 text-muted-foreground" />
+        Sign with certificate…
       </MenuItem>
       <MenuSeparator />
       <MenuItem disabled={!app.pdf} onClick={() => app.closeDocument()}>
@@ -694,6 +702,10 @@ function TitleBarImpl() {
       <SecurityModal
         open={app.securityModalOpen}
         onClose={() => app.setSecurityModalOpen(false)}
+      />
+      <SignModal
+        open={app.signModalOpen}
+        onClose={() => app.setSignModalOpen(false)}
       />
       <PasswordModal />
       <ConfirmModal />

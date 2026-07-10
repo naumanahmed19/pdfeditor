@@ -490,6 +490,10 @@ interface AppStore {
   securityModalOpen: boolean;
   setSecurityModalOpen: (v: boolean) => void;
 
+  /** Sign-with-certificate dialog visibility (File menu / Signatures panel). */
+  signModalOpen: boolean;
+  setSignModalOpen: (v: boolean) => void;
+
   /** Pending password prompt rendered by PasswordModal (null = closed). */
   passwordPrompt: PasswordRequest | null;
   /** Settle the pending prompt: the entered password, or null = cancelled. */
@@ -1142,6 +1146,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [signModalOpen, setSignModalOpen] = useState(false);
 
   // --- In-app password dialog (replaces window.prompt everywhere) ----------
   // Promise-based: flows await requestPassword(); the PasswordModal renders
@@ -3597,6 +3602,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     unlockPermissions,
     securityModalOpen,
     setSecurityModalOpen,
+    signModalOpen,
+    setSignModalOpen,
     passwordPrompt,
     answerPassword,
     confirmPrompt,
