@@ -37,6 +37,7 @@ import {
   effectiveBrowserModel,
 } from "../../lib/modelConfig";
 import { isHandheldDevice } from "../../lib/device";
+import { OCR_LANGUAGE_OPTIONS } from "../../lib/ocrLanguages";
 import { ACCENTS } from "../../lib/accents";
 import { FORM_FIELD_THEMES, setFormFieldSkin, useFormFieldSkin } from "../viewer/formFieldTheme";
 import type { ProviderKind } from "../../types";
@@ -354,6 +355,30 @@ export function SettingsScreen() {
               {[4000, 8000, 14000, 24000, 40000].map((n) => (
                 <option key={n} value={n}>
                   {n.toLocaleString()} chars
+                </option>
+              ))}
+            </Select>
+          </Row>
+        </Panel>
+
+        <Panel title="OCR">
+          <Row
+            title="Recognition language"
+            description={
+              "Used by “Make searchable (OCR)”. Each language's model downloads once, then " +
+              "recognition runs on your device. Right-to-left and vertical scripts (e.g. Arabic, " +
+              "Hebrew, Japanese) may come out less accurate."
+            }
+          >
+            <Select
+              value={app.ocrLanguage}
+              onChange={(e) => app.setOcrLanguage(e.target.value)}
+              aria-label="OCR recognition language"
+              className="h-8 w-full px-2 text-xs sm:w-56"
+            >
+              {OCR_LANGUAGE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
                 </option>
               ))}
             </Select>
