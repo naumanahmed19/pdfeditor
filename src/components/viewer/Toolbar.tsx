@@ -12,6 +12,7 @@ import {
   Check,
   ChevronDown,
   Circle,
+  Cloud,
   Copy,
   Eraser,
   FormInput,
@@ -19,6 +20,7 @@ import {
   Highlighter,
   Image as ImageIcon,
   Italic,
+  LandPlot,
   Link2,
   Lock,
   MessageSquare,
@@ -30,9 +32,13 @@ import {
   MoveUpRight,
   PaintBucket,
   Pencil,
+  Pentagon,
   Redo2,
   RotateCw,
+  Route,
+  Ruler,
   Signature,
+  Spline,
   SquareSlash,
   Square,
   Stamp,
@@ -74,6 +80,7 @@ import { Separator } from "../ui/separator";
 import { Tip, TooltipProvider } from "../ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn, ROTATABLE_KINDS } from "../../lib/utils";
+import { formatScale } from "../../lib/measure";
 import { STAMPS, makeStamp } from "../../lib/stamps";
 import type {
   Annotation,
@@ -112,7 +119,13 @@ const TOOLS: Array<ToolbarTool & { group: number }> = [
   { key: "ellipse", icon: Circle, name: "Ellipse", desc: "Drag to draw; fill optional", group: 3, shortcut: "O" },
   { key: "line", icon: Minus, name: "Line", desc: "Drag from start to end", group: 3, shortcut: "L" },
   { key: "arrow", icon: MoveUpRight, name: "Arrow", desc: "Drag from tail to head", group: 3, shortcut: "A" },
+  { key: "polygon", icon: Pentagon, name: "Polygon", desc: "Click to place corners; click the first corner, double-click or press Enter to close. Esc cancels", group: 3, shortcut: "P" },
+  { key: "polyline", icon: Spline, name: "Polyline", desc: "Click to place points; double-click or press Enter to finish. Esc cancels", group: 3 },
+  { key: "cloud", icon: Cloud, name: "Cloud", desc: "Review cloud — a polygon with a scalloped border. Click to place corners; double-click or Enter closes", group: 3 },
   { key: "callout", icon: MessageSquareQuote, name: "Callout", desc: "Drag from the target to where the note should sit", group: 3, shortcut: "K" },
+  { key: "measuredist", icon: Ruler, name: "Distance", desc: "Measure a straight-line distance: click two points or drag. Calibrate first for real-world units", group: 5 },
+  { key: "measureperim", icon: Route, name: "Perimeter", desc: "Measure along a path: click to place points; double-click or Enter finishes. Esc cancels", group: 5 },
+  { key: "measurearea", icon: LandPlot, name: "Area", desc: "Measure an enclosed area: click to place corners; click the first corner, double-click or Enter closes. Esc cancels", group: 5 },
   { key: "whiteout", icon: PaintBucket, name: "Whiteout", desc: "Cover page content with a filled box (hides, does not remove)", group: 4, shortcut: "W" },
   { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across an annotation you added to delete it" , group: 4 },
   { key: "redact", icon: SquareSlash, name: "Redact", desc: "Deletes text and images under the box, then paints it black (annotations and metadata are not removed) — draw boxes, then Apply", group: 4, shortcut: "X" },
@@ -132,7 +145,7 @@ const EDIT_TOOLS: ToolbarTool[] = [
 const ALL_TOOLS: ToolbarTool[] = [...TOOLS, ...EDIT_TOOLS];
 const BASIC_TOOLS = TOOLS.filter((t) => t.group === 0);
 
-type ToolFlyoutId = "text" | "markup" | "shapes" | "cleanup";
+type ToolFlyoutId = "text" | "markup" | "shapes" | "measure" | "cleanup";
 
 const TOOL_FLYOUTS: Array<{
   id: ToolFlyoutId;
@@ -158,9 +171,16 @@ const TOOL_FLYOUTS: Array<{
   {
     id: "shapes",
     label: "Shapes",
-    desc: "Draw rectangles, ellipses, lines, arrows and callouts",
+    desc: "Draw rectangles, ellipses, lines, arrows, polygons, clouds and callouts",
     defaultTool: "rect",
-    tools: ["rect", "ellipse", "line", "arrow", "callout"],
+    tools: ["rect", "ellipse", "line", "arrow", "polygon", "polyline", "cloud", "callout"],
+  },
+  {
+    id: "measure",
+    label: "Measure",
+    desc: "Measure distances, perimeters and areas — calibrate against a known length for real-world units",
+    defaultTool: "measuredist",
+    tools: ["measuredist", "measureperim", "measurearea"],
   },
   {
     id: "cleanup",
@@ -175,6 +195,7 @@ const INITIAL_LAST_TOOL_BY_GROUP: Record<ToolFlyoutId, ToolKind> = {
   text: "text",
   markup: "highlight",
   shapes: "rect",
+  measure: "measuredist",
   cleanup: "whiteout",
 };
 
@@ -476,6 +497,15 @@ export function EditorToolbar() {
     );
   }, [app.tool]);
 
+  // Leaving the distance tool aborts a pending calibration — otherwise the
+  // NEXT distance drawn (much later) would silently become the reference line.
+  useEffect(() => {
+    if (app.measureCalibrating && app.tool !== "measuredist") {
+      app.setMeasureCalibrating(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.tool, app.measureCalibrating]);
+
   // Live handle to an in-place "edit existing text" session, so its font /
   // size / color controls render in this toolbar's contextual row.
   useSyncExternalStore(activeInlineEdit.subscribe, activeInlineEdit.getVersion);
@@ -606,6 +636,9 @@ export function EditorToolbar() {
     ellipse: { icon: Circle, label: "Ellipse" },
     line: { icon: Minus, label: "Line" },
     arrow: { icon: MoveUpRight, label: "Arrow" },
+    polygon: { icon: Pentagon, label: "Polygon" },
+    polyline: { icon: Spline, label: "Polyline" },
+    measure: { icon: Ruler, label: "Measurement" },
     ink: { icon: Pencil, label: "Drawing" },
     mark: { icon: Check, label: "Check / cross" },
     link: { icon: Link2, label: "Link" },
@@ -672,7 +705,7 @@ export function EditorToolbar() {
   // no style). This replaces the old floating properties popover.
   const styleAnn =
     selectedAnn &&
-    ["rect", "ellipse", "line", "arrow", "ink", "highlight", "markup", "whiteout"].includes(selectedAnn.kind)
+    ["rect", "ellipse", "line", "arrow", "polygon", "polyline", "measure", "ink", "highlight", "markup", "whiteout"].includes(selectedAnn.kind)
       ? selectedAnn
       : null;
   const styleA = styleAnn as unknown as {
@@ -685,8 +718,14 @@ export function EditorToolbar() {
     styleAnn?.kind === "ellipse" ||
     styleAnn?.kind === "line" ||
     styleAnn?.kind === "arrow" ||
+    styleAnn?.kind === "polygon" ||
+    styleAnn?.kind === "polyline" ||
+    styleAnn?.kind === "measure" ||
     styleAnn?.kind === "ink";
-  const styleIsFillable = styleAnn?.kind === "rect" || styleAnn?.kind === "ellipse";
+  const styleIsFillable =
+    styleAnn?.kind === "rect" ||
+    styleAnn?.kind === "ellipse" ||
+    styleAnn?.kind === "polygon";
   const styleColorLabel =
     styleAnn?.kind === "whiteout" ? "Patch" : styleHasStroke ? "Stroke" : "Color";
   const patchStyleAnn = (p: Partial<ShapeAnnotation>) => {
@@ -708,12 +747,22 @@ export function EditorToolbar() {
   // stroke width only for drawing tools (armed-tool defaults; a *selected*
   // annotation is handled by the styleAnn branch instead).
   const showFontControls = app.tool === "text" || !!selectedText;
-  const showStroke = ["ink", "rect", "ellipse", "line", "arrow", "callout"].includes(app.tool);
+  const showStroke = ["ink", "rect", "ellipse", "line", "arrow", "polygon", "polyline", "cloud", "measuredist", "measureperim", "measurearea", "callout"].includes(app.tool);
+  const isPolyTool =
+    app.tool === "polygon" || app.tool === "polyline" || app.tool === "cloud";
+  const isMeasureTool =
+    app.tool === "measuredist" ||
+    app.tool === "measureperim" ||
+    app.tool === "measurearea";
   const isMarkupTool =
     app.tool === "underline" || app.tool === "strikeout" || app.tool === "squiggly";
   const showColor =
     showFontControls || showStroke || app.tool === "highlight" || isMarkupTool;
-  const showFill = app.tool === "rect" || app.tool === "ellipse";
+  const showFill =
+    app.tool === "rect" ||
+    app.tool === "ellipse" ||
+    app.tool === "polygon" ||
+    app.tool === "cloud";
   const fillValue = app.toolFill;
   const setFill = (v: string | null) => app.setToolFill(v);
 
@@ -1330,6 +1379,42 @@ export function EditorToolbar() {
             <Link2 className="h-3.5 w-3.5" />
             Drag a box over the page to create a link, then set its target.
           </span>
+        ) : isMeasureTool ? (
+          <>
+            <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />
+            <Separator orientation="vertical" className="h-6 shrink-0" />
+            <Button
+              variant={app.measureCalibrating ? "default" : "outline"}
+              size="sm"
+              className="h-7 shrink-0 gap-1.5 text-xs"
+              onClick={() => {
+                app.setMeasureCalibrating(true);
+                app.setTool("measuredist");
+              }}
+            >
+              <Ruler className="h-3.5 w-3.5" />
+              Calibrate
+            </Button>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {app.measureScale
+                ? `1 pt = ${formatScale(app.measureScale.scale)} ${app.measureScale.unit}`
+                : "Not calibrated — measuring in PDF points"}
+            </span>
+            <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground lg:flex">
+              {app.measureCalibrating
+                ? "· Draw a line over something of known length"
+                : app.tool === "measuredist"
+                  ? "· Click two points or drag"
+                  : "· Click to place points · double-click or Enter finishes · Esc cancels"}
+            </span>
+          </>
+        ) : isPolyTool ? (
+          <>
+            <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />
+            <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
+              Click to place points · double-click or Enter finishes · Esc cancels
+            </span>
+          </>
         ) : (
           showColor && (
             <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />

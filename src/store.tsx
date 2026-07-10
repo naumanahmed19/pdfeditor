@@ -141,6 +141,13 @@ export interface ConfirmRequest {
   };
 }
 
+/** Per-document measurement calibration: real-world units per PDF point
+ *  (e.g. scale 0.5, unit "cm" means 1pt reads as 0.5 cm). */
+export interface MeasureScale {
+  scale: number;
+  unit: string;
+}
+
 /** The document's base bytes + its parsed PDFium document at a point in history. */
 interface BaseState {
   bytes: Uint8Array;
@@ -172,6 +179,9 @@ interface OpenDoc {
   currentPage: number;
   /** AcroForm field values entered by the user, keyed by field name. */
   formValues: Record<string, unknown>;
+  /** Measurement calibration (real-world units per PDF point). Null/absent =
+   *  uncalibrated: measurements read in raw PDF points. */
+  measureScale?: MeasureScale | null;
   /** Pending move/rename/delete edits to existing AcroForm fields. */
   fieldOps: Record<string, ExistingFieldOp>;
   /**
@@ -635,6 +645,20 @@ interface AppStore {
   /** AcroForm values of the active tab. */
   formValues: Record<string, unknown>;
   setFormValue: (name: string, value: unknown) => void;
+
+  /** Measurement calibration of the active tab (units per PDF point). */
+  measureScale: MeasureScale | null;
+  /** Set (or clear) the calibration; existing measure annotations are
+   *  re-labelled in the same step. */
+  setMeasureScale: (s: MeasureScale | null) => void;
+  /** True while the next distance line is a calibration reference, not a
+   *  measurement. */
+  measureCalibrating: boolean;
+  setMeasureCalibrating: (v: boolean) => void;
+  /** Pending "this line is ___ units" dialog (opened after the calibration
+   *  line is drawn); ptLength is the drawn line's length in PDF points. */
+  calibrateRequest: { ptLength: number } | null;
+  setCalibrateRequest: (r: { ptLength: number } | null) => void;
 
   /** Pending edits to existing form fields (active tab). */
   fieldOps: Record<string, ExistingFieldOp>;
@@ -1174,6 +1198,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
+  // Measurement calibration flow: armed flag + the pending "known length" dialog.
+  const [measureCalibrating, setMeasureCalibrating] = useState(false);
+  const [calibrateRequest, setCalibrateRequest] = useState<{
+    ptLength: number;
+  } | null>(null);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [signModalOpen, setSignModalOpen] = useState(false);
 
@@ -2378,6 +2407,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
         formValues: { ...d.formValues, [name]: value },
         rev: bumpRevision(d.rev),
       }));
+    },
+    [activeTabId, updateDoc],
+  );
+
+  const setMeasureScale = useCallback(
+    (s: MeasureScale | null) => {
+      if (!activeTabId) return;
+      updateDoc(activeTabId, (d) => {
+        // Labels derive from each annotation's stored scale/unit at render
+        // time, so recalibration must rewrite them (one undoable step) —
+        // otherwise old measurements would keep reading in stale units.
+        const scale = s?.scale ?? 1;
+        const unit = s?.unit ?? "pt";
+        let changed = false;
+        const next: AnnotationMap = {};
+        for (const [page, list] of Object.entries(d.annotations)) {
+          next[Number(page)] = list.map((a) => {
+            if (a.kind !== "measure" || (a.scale === scale && a.unit === unit)) {
+              return a;
+            }
+            changed = true;
+            return { ...a, scale, unit };
+          });
+        }
+        return changed
+          ? { measureScale: s, ...pushHistory(d, next) }
+          : { measureScale: s };
+      });
     },
     [activeTabId, updateDoc],
   );
@@ -3847,6 +3904,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPendingStamp,
     formValues: active?.formValues ?? {},
     setFormValue,
+    measureScale: active?.measureScale ?? null,
+    setMeasureScale,
+    measureCalibrating,
+    setMeasureCalibrating,
+    calibrateRequest,
+    setCalibrateRequest,
     fieldOps: active?.fieldOps ?? {},
     upsertFieldOp,
     selectedField,
