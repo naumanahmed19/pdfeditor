@@ -28,11 +28,20 @@ const isDocxName = (name: string) => /\.docx$/i.test(name);
 const isTextName = (name: string) => /\.(txt|md|markdown)$/i.test(name);
 
 /**
- * Create a new PDF from other file types: PNG/JPEG images (one page each,
- * with a page-sizing choice), or a basic .docx / plain-text conversion typeset
- * with Helvetica. The result opens as a new document tab.
+ * Create a new PDF from other file types, split into two dedicated tools:
+ * PNG/JPEG images (one page each, with a page-sizing choice) and a basic
+ * .docx / plain-text conversion typeset with Helvetica. The result opens as
+ * a new document tab.
  */
-export function CreatePdfScreen() {
+export function ImagesToPdfScreen() {
+  return <CreatePdfBase mode="images" />;
+}
+
+export function DocToPdfScreen() {
+  return <CreatePdfBase mode="doc" />;
+}
+
+function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
   const app = useApp();
   const [images, setImages] = useState<ImageEntry[]>([]);
   const [pageSize, setPageSize] = useState<ImagePageSize>("fit");
@@ -126,16 +135,18 @@ export function CreatePdfScreen() {
     }
   };
 
-  // Screen-wide drop: images stack up in the list, a document converts
-  // immediately, anything else (including PDFs) gets a pointer.
+  // Screen-wide drop, scoped to this tool's input type: images stack up in
+  // the list, a document converts immediately, anything else gets a pointer.
   const onDrop = async (files: File[]) => {
-    const imgs = files.filter((f) => f.type === "image/png" || f.type === "image/jpeg");
-    const doc = files.find((f) => isDocxName(f.name) || isTextName(f.name));
-    if (imgs.length) await addImages(imgs);
-    if (doc) await convertDocument(doc);
-    if (!imgs.length && !doc) {
-      toast.error("Drop PNG/JPEG images, or a .docx / .txt file (PDFs open via File → Open)");
+    if (mode === "images") {
+      const imgs = files.filter((f) => f.type === "image/png" || f.type === "image/jpeg");
+      if (imgs.length) await addImages(imgs);
+      else toast.error("Drop PNG or JPEG images (PDFs open via File → Open)");
+      return;
     }
+    const doc = files.find((f) => isDocxName(f.name) || isTextName(f.name));
+    if (doc) await convertDocument(doc);
+    else toast.error("Drop a .docx or .txt file (PDFs open via File → Open)");
   };
 
   return (
@@ -153,13 +164,16 @@ export function CreatePdfScreen() {
       }}
     >
       <div className="mx-auto max-w-3xl">
-        <h1 className="text-lg font-semibold">Create PDF</h1>
+        <h1 className="text-lg font-semibold">
+          {mode === "images" ? "Images to PDF" : "Word or text to PDF"}
+        </h1>
         <p className="pb-5 pt-1 text-sm text-muted-foreground">
-          Build a new PDF from images, a Word document or plain text. Everything is converted
-          locally — files never leave this device.
+          {mode === "images"
+            ? "Build a new PDF from PNG or JPEG images. Everything is converted locally — files never leave this device."
+            : "Convert a Word document or plain text into a PDF. Everything is converted locally — files never leave this device."}
         </p>
 
-        {/* Images → PDF */}
+        {mode === "images" && (
         <div
           className={cn(
             "rounded-xl border bg-card p-4 shadow-shell transition-colors",
@@ -273,13 +287,20 @@ export function CreatePdfScreen() {
             }}
           />
         </div>
+        )}
 
-        {/* Document → PDF */}
-        <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
+        {mode === "doc" && (
+        <div
+          className={cn(
+            "rounded-xl border bg-card p-4 shadow-shell transition-colors",
+            dragOver && "border-blue-500 ring-1 ring-blue-500/50",
+          )}
+        >
           <p className="text-sm font-medium">Word or text document to PDF</p>
           <p className="pb-3 pt-1 text-xs text-muted-foreground">
             Basic conversion for .docx and .txt files: headings, paragraphs, bold/italic and
             lists are kept. Complex layout — tables, images, columns, fonts — is not preserved.
+            Drop a file anywhere on this screen or use the button below.
           </p>
           <Button
             variant="outline"
@@ -302,6 +323,7 @@ export function CreatePdfScreen() {
             }}
           />
         </div>
+        )}
       </div>
     </div>
   );
