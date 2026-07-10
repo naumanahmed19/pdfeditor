@@ -403,6 +403,7 @@ export type Screen =
   | "viewer"
   | "templates"
   | "organize"
+  | "create"
   | "merge"
   | "split"
   | "watermark"
