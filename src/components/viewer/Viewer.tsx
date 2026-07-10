@@ -12,6 +12,7 @@ import {
   Combine,
   Crop,
   Droplets,
+  FileCheck2,
   FileOutput,
   FilePlus2,
   FileText,
@@ -554,6 +555,7 @@ const QUICK_TOOLS: Array<{
   { screen: "crop", label: "Crop", desc: "Crop pages and adjust page size", icon: Crop, color: "text-purple-500" },
   { screen: "export", label: "Export", desc: "Convert to text, HTML or images", icon: FileOutput, color: "text-indigo-500" },
   { screen: "compare", label: "Compare", desc: "Compare two PDFs side by side", icon: GitCompare, color: "text-teal-500" },
+  { screen: "pdfa", label: "PDF/A check", desc: "Preflight for archival readiness", icon: FileCheck2, color: "text-lime-600" },
 ];
 
 /** How many tools show before the "Show more" toggle on the welcome screen. */

@@ -22,19 +22,22 @@ type PopoverContentProps = React.ComponentPropsWithoutRef<typeof BasePopover.Pop
   sideOffset?: React.ComponentPropsWithoutRef<typeof BasePopover.Positioner>["sideOffset"];
   /** Anchor element/ref/virtual — for popovers not opened from a Trigger. */
   anchor?: React.ComponentPropsWithoutRef<typeof BasePopover.Positioner>["anchor"];
+  /** Extra classes for the positioner — e.g. a higher z-index when the
+   *  popover must sit above a modal overlay (which uses z-[60]). */
+  positionerClassName?: string;
 };
 
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof BasePopover.Popup>,
   PopoverContentProps
->(({ className, side = "bottom", align = "center", sideOffset = 6, anchor, ...props }, ref) => (
+>(({ className, side = "bottom", align = "center", sideOffset = 6, anchor, positionerClassName, ...props }, ref) => (
   <BasePopover.Portal>
     <BasePopover.Positioner
       side={side}
       align={align}
       sideOffset={sideOffset}
       anchor={anchor}
-      className="z-50"
+      className={cn("z-50", positionerClassName)}
     >
       <BasePopover.Popup
         ref={ref}

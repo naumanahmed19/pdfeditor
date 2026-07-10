@@ -5,12 +5,14 @@ import {
   CaseSensitive,
   Check,
   Circle,
+  Cloud,
   Combine,
   Crop,
   Download,
   Droplets,
   Eraser,
   FileOutput,
+  FileCheck2,
   FilePlus2,
   FileSignature,
   FolderOpen,
@@ -20,6 +22,7 @@ import {
   Highlighter,
   Image as ImageIcon,
   Info,
+  Layers,
   Layers2,
   Link2,
   Lock,
@@ -36,6 +39,7 @@ import {
   PaintBucket,
   Paperclip,
   Pencil,
+  Pentagon,
   Printer,
   Save,
   ScanText,
@@ -43,6 +47,7 @@ import {
   Search,
   Settings,
   Signature,
+  Spline,
   Square,
   SquareSlash,
   Stamp,
@@ -229,6 +234,27 @@ const EDITOR_TOOLS: Array<{
     shortcut: "A",
   },
   {
+    key: "polygon",
+    label: "Polygon",
+    description: "Click to place corners; Enter or double-click closes.",
+    icon: Pentagon,
+    shortcut: "P",
+  },
+  {
+    key: "polyline",
+    label: "Polyline",
+    description: "Click to place points; Enter or double-click finishes.",
+    icon: Spline,
+    aliases: ["multiline", "path"],
+  },
+  {
+    key: "cloud",
+    label: "Cloud",
+    description: "Draw a review cloud (scalloped polygon).",
+    icon: Cloud,
+    aliases: ["revision", "scallop"],
+  },
+  {
     key: "callout",
     label: "Callout",
     description: "Draw a callout note with a pointer.",
@@ -344,6 +370,14 @@ const DOCUMENT_SCREENS: Array<{
     icon: GitCompare,
     needsPdf: true,
     aliases: ["diff"],
+  },
+  {
+    screen: "pdfa",
+    label: "PDF/A check",
+    description: "Preflight the open PDF against PDF/A-2b rules.",
+    icon: FileCheck2,
+    needsPdf: true,
+    aliases: ["preflight", "archive", "validate"],
   },
 ];
 
@@ -534,7 +568,7 @@ export function CommandPalette() {
   };
 
   const openSidebarPanel = (
-    panel: "pages" | "outline" | "comments" | "attachments" | "form" | "signatures",
+    panel: "pages" | "outline" | "comments" | "attachments" | "form" | "signatures" | "layers",
   ) => {
     app.setScreen("viewer");
     app.setSidebarOpen(true);
@@ -811,6 +845,16 @@ export function CommandPalette() {
         disabledReason: hasPdfReason,
         aliases: ["digital signatures", "verify", "certificate"],
         action: () => openSidebarPanel("signatures"),
+      },
+      {
+        id: "layers-panel",
+        group: "sidebar",
+        label: "Layers panel",
+        description: "Show or hide optional content layers (OCG).",
+        icon: Layers,
+        disabledReason: hasPdfReason,
+        aliases: ["ocg", "optional content", "layer visibility"],
+        action: () => openSidebarPanel("layers"),
       },
       {
         id: "form-builder-panel",

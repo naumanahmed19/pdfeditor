@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { ImageUp, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
@@ -94,6 +94,7 @@ function ObjectProperties({
   onFillPreview,
   onStyle,
   onDelete,
+  onReplaceImage,
 }: {
   obj: ScreenObj;
   busy: boolean;
@@ -104,7 +105,10 @@ function ObjectProperties({
     strokeWidth?: number;
   }) => void;
   onDelete: () => void;
+  /** Swap the bitmap of an existing image object (same box, new pixels). */
+  onReplaceImage: (data: Uint8Array, png: boolean) => void;
 }) {
+  const replaceRef = useRef<HTMLInputElement>(null);
   const wPt = Math.round(obj.pdf.right - obj.pdf.left);
   const hPt = Math.round(obj.pdf.top - obj.pdf.bottom);
   const kindLabel = obj.kind === "text" ? "Text" : obj.kind === "image" ? "Image" : "Shape";
@@ -162,6 +166,34 @@ function ObjectProperties({
         {wPt}×{hPt} pt
       </span>
       <div className="h-4 w-px bg-border" />
+      {obj.kind === "image" && (
+        <>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground"
+            title="Replace image (keeps position and size)"
+            disabled={busy}
+            onClick={() => replaceRef.current?.click()}
+          >
+            <ImageUp className="h-3.5 w-3.5" />
+          </Button>
+          <input
+            ref={replaceRef}
+            type="file"
+            accept="image/png,image/jpeg"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              void file.arrayBuffer().then((buf) => {
+                onReplaceImage(new Uint8Array(buf), file.type.includes("png"));
+              });
+            }}
+          />
+        </>
+      )}
       <Button
         variant="ghost"
         size="icon"
@@ -587,6 +619,17 @@ export function ObjectLayer({
                 app
                   .removeObjectAt(pageIndex, idx)
                   .catch(() => toast.error("Couldn't delete that object."))
+                  .finally(() => setBusy(false));
+              }}
+              onReplaceImage={(data, png) => {
+                const idx = selObj.index;
+                setSel(null);
+                setBusy(true);
+                app
+                  .applyBytesOp(async (bytes) => {
+                    const { replaceImageObject } = await import("../../lib/pdfium");
+                    return replaceImageObject(bytes, pageIndex, idx, data, png);
+                  }, "Image replaced")
                   .finally(() => setBusy(false));
               }}
             />

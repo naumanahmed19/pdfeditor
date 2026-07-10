@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, HelpCircle, X } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
+import { Combobox } from "../ui/combobox";
 
 /**
  * In-app confirmation dialog — replaces window.confirm for every destructive
@@ -14,6 +15,13 @@ export function ConfirmModal() {
   const app = useApp();
   const req = app.confirmPrompt;
   const confirmRef = useRef<HTMLButtonElement>(null);
+
+  // The request object is inert, so the optional dropdown needs local state;
+  // changes are pushed out through req.select.onChange as they happen.
+  const [selectValue, setSelectValue] = useState(req?.select?.value ?? "");
+  useEffect(() => {
+    setSelectValue(req?.select?.value ?? "");
+  }, [req]);
 
   useEffect(() => {
     if (!req) return;
@@ -75,6 +83,24 @@ export function ConfirmModal() {
         <p className="whitespace-pre-line pb-3 pt-1 text-sm text-muted-foreground">
           {req.message}
         </p>
+
+        {req.select && (
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <span className="text-sm">{req.select.label}</span>
+            <Combobox
+              value={selectValue}
+              options={[...req.select.options]}
+              onValueChange={(v) => {
+                setSelectValue(v);
+                req.select?.onChange(v);
+              }}
+              showLabel
+              searchPlaceholder="Search…"
+              aria-label={req.select.label}
+              className="h-8 w-52 text-xs"
+            />
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 pt-4">
           <Button

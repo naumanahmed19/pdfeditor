@@ -17,6 +17,9 @@ export type ToolKind =
   | "ellipse"
   | "line"
   | "arrow"
+  | "polygon"
+  | "polyline"
+  | "cloud"
   | "callout"
   | "whiteout"
   | "eraser"
@@ -134,6 +137,9 @@ export interface NoteAnnotation extends BaseAnnotation {
   kind: "note";
   text: string;
   color: string;
+  /** Original author of an imported comment (written back as /T on save;
+   *  our own notes omit it and bake as "PickPDF"). */
+  author?: string;
 }
 
 export interface WhiteoutAnnotation extends BaseAnnotation {
@@ -164,6 +170,20 @@ export interface ShapeAnnotation extends BaseAnnotation {
   ay?: number;
   bx?: number;
   by?: number;
+}
+
+/** Multi-vertex shape placed click-by-click. The "cloud" TOOL creates a
+ *  polygon with `cloudy` set — there is no separate cloud kind. */
+export interface PolyAnnotation extends BaseAnnotation {
+  kind: "polygon" | "polyline";
+  /** Vertices relative to the annotation box, in PDF points. */
+  points: Array<{ x: number; y: number }>;
+  color: string;
+  strokeWidth: number;
+  /** Polygon only: optional fill. */
+  fill?: string;
+  /** Polygon only: cloud (scalloped) border — review-markup style. */
+  cloudy?: boolean;
 }
 
 export interface InkAnnotation extends BaseAnnotation {
@@ -301,6 +321,7 @@ export type Annotation =
   | WhiteoutAnnotation
   | RedactAnnotation
   | ShapeAnnotation
+  | PolyAnnotation
   | InkAnnotation
   | ImageAnnotation
   | MarkAnnotation
@@ -413,4 +434,5 @@ export type Screen =
   | "headerfooter"
   | "export"
   | "compare"
+  | "pdfa"
   | "settings";

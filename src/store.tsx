@@ -33,6 +33,7 @@ import {
   setPasswordPrompter,
   hasRasterImages,
 } from "./lib/pdf";
+import { OCR_LANGUAGE_OPTIONS, normalizeOcrLanguage } from "./lib/ocrLanguages";
 import {
   DEFAULT_SEARCH_OPTIONS,
   buildSearchIndex,
@@ -129,6 +130,15 @@ export interface ConfirmRequest {
   cancelLabel?: string;
   /** "danger" renders the confirm button in destructive style. */
   tone?: "default" | "danger";
+  /** Optional dropdown between message and buttons (e.g. OCR language).
+   *  Changes report immediately via onChange — the request object stays
+   *  inert, so cancelling never rolls a selection back. */
+  select?: {
+    label: string;
+    value: string;
+    options: ReadonlyArray<{ value: string; label: string }>;
+    onChange: (value: string) => void;
+  };
 }
 
 /** The document's base bytes + its parsed PDFium document at a point in history. */
@@ -511,6 +521,9 @@ interface AppStore {
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
   runOcrText: () => Promise<void>;
+  /** OCR recognition language (Tesseract traineddata code, e.g. "eng"). */
+  ocrLanguage: string;
+  setOcrLanguage: (code: string) => void;
 
   currentPage: number;
   setCurrentPage: (p: number) => void;
@@ -1059,6 +1072,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const size = Math.max(4, Math.min(72, Math.round(n)));
     setGridSizeState(size);
     localStorage.setItem("pdfwb.formGridSize", String(size));
+  }, []);
+
+  // OCR recognition language survives restarts. A ref mirrors the state so
+  // runOcrText reads the value picked in its confirm dialog, not the one the
+  // closure captured before the dialog opened.
+  const [ocrLanguage, setOcrLanguageState] = useState(() =>
+    normalizeOcrLanguage(localStorage.getItem("pdfwb.ocrLang")),
+  );
+  const ocrLanguageRef = useRef(ocrLanguage);
+  const setOcrLanguage = useCallback((code: string) => {
+    const lang = normalizeOcrLanguage(code);
+    ocrLanguageRef.current = lang;
+    setOcrLanguageState(lang);
+    localStorage.setItem("pdfwb.ocrLang", lang);
   }, []);
 
   /** Shift-click membership toggle. The last-clicked id becomes the primary
@@ -1667,12 +1694,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // hand a session restore an unprotected copy.
       if (protectionInfo.current.has(id) || encryptedAtOpen.current.has(id))
         return;
-      void persistDoc({ id, name, bytes, lastOpened: Date.now(), open: true }).then(
-        (result) => noteAutosaveSkipped(id, result),
+      // Byte edits must not wipe the record's overlay annotations (imported
+      // markup lives ONLY there — the working bytes are stripped): carry the
+      // previously stored map forward; the annotation autosave effect below
+      // keeps it fresh on overlay edits.
+      void getStoredDoc(id).then((prev) =>
+        persistDoc({
+          id,
+          name,
+          bytes,
+          ...(prev?.annotations ? { annotations: prev.annotations } : {}),
+          lastOpened: Date.now(),
+          open: true,
+        }).then((result) => noteAutosaveSkipped(id, result)),
       );
     },
     [noteAutosaveSkipped],
   );
+
+  // Overlay-annotation autosave: bytes-only persistence would lose imported
+  // (and freshly authored) markup on a session restore, so annotation changes
+  // debounce into the doc's stored record. Protected docs are excluded — their
+  // record keeps the protected on-disk form and never stores overlay content.
+  useEffect(() => {
+    if (!active) return;
+    if (
+      protectionInfo.current.has(active.id) ||
+      encryptedAtOpen.current.has(active.id)
+    )
+      return;
+    const { id, name, bytes, annotations } = active;
+    const t = setTimeout(() => {
+      void persistDoc({
+        id,
+        name,
+        bytes,
+        annotations,
+        lastOpened: Date.now(),
+        open: true,
+      });
+    }, 1200);
+    return () => clearTimeout(t);
+    // Keyed on the map identity — every overlay edit replaces it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.annotations]);
 
   const refreshRecent = useCallback(async () => {
     const stored = await listStoredDocs();
@@ -1692,6 +1757,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       name: string,
       id?: string,
       persist = true,
+      storedAnnotations?: AnnotationMap,
     ): Promise<string | null> => {
       try {
         let pdfDoc = await loadPdf(bytes);
@@ -1739,13 +1805,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        // Round-trip: absorb the file's standard markup annotations (ours
+        // from a previous save, or Acrobat/Foxit ones) into the editable
+        // overlay, stripping the source dicts so nothing renders twice.
+        // `storedAnnotations` seeds the overlay on session restore — those
+        // stored bytes are already stripped, so the import finds nothing and
+        // this stays idempotent. Skipped while encrypted (the reprotect flow
+        // owns those bytes); annotimport itself refuses signed documents.
+        const overlaySeed: AnnotationMap = {};
+        for (const [p, list] of Object.entries(storedAnnotations ?? {})) {
+          if (list.length) overlaySeed[Number(p)] = [...list];
+        }
+        if (!pdfDoc.isEncrypted()) {
+          try {
+            const { importAnnotations } = await import("./lib/annotimport");
+            const imported = await importAnnotations(realBytes);
+            if (imported) {
+              for (const [p, list] of Object.entries(imported.annotations)) {
+                const k = Number(p);
+                overlaySeed[k] = [...(overlaySeed[k] ?? []), ...list];
+              }
+              await pdfDoc.destroy();
+              realBytes = imported.cleanedBytes;
+              pdfDoc = await loadPdf(realBytes);
+              toast.info(
+                `${imported.count} ${imported.count === 1 ? "annotation" : "annotations"} imported for editing`,
+                {
+                  description:
+                    "The document's highlights, comments and shapes are now editable objects. Saving writes them back as real annotations.",
+                  duration: 6000,
+                },
+              );
+            }
+          } catch {
+            /* best-effort — the doc opens with its annotations read-only, as before */
+          }
+        }
+
         const doc: OpenDoc = {
           id: id ?? uid(),
           name,
           bytes: realBytes,
           pdf: pdfDoc,
-          annotations: {},
-          history: [{}],
+          annotations: overlaySeed,
+          history: [overlaySeed],
           bytesHistory: [{ bytes: realBytes, pdf: pdfDoc }],
           historyIndex: 0,
           currentPage: 0,
@@ -1819,10 +1922,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
         if (persist) {
+          // Protected docs persist their original protected form (restore
+          // re-prompts and re-imports after unlock) and never store the
+          // overlay — note text in IndexedDB would leak the locked content.
+          // Plain docs persist the stripped bytes + the overlay, so the
+          // imported annotations survive a session restore.
+          const isProtected = wrapperPw !== null || pdfDoc.isEncrypted();
           void persistDoc({
             id: doc.id,
             name,
-            bytes,
+            bytes: isProtected ? bytes : realBytes,
+            ...(isProtected ? {} : { annotations: overlaySeed }),
             lastOpened: Date.now(),
             open: true,
           }).then((result) => {
@@ -1987,7 +2097,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // standard-encrypted) — it would pop a password dialog on startup. It
       // unlocks lazily when the user activates it.
       if (active && !(await needsPasswordToOpen(active.bytes))) {
-        await openBytesInternal(active.bytes, active.name, active.id, true);
+        await openBytesInternal(
+          active.bytes,
+          active.name,
+          active.id,
+          true,
+          active.annotations,
+        );
       }
       await refreshRecent();
       setRecentLoading(false);
@@ -2024,7 +2140,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         void refreshRecent();
         return;
       }
-      await openBytesInternal(stored.bytes, stored.name, stored.id);
+      await openBytesInternal(
+        stored.bytes,
+        stored.name,
+        stored.id,
+        true,
+        stored.annotations,
+      );
     },
     [docs, panes, activePaneId, activeTabId, openBytesInternal, resetTransient, refreshRecent],
   );
@@ -3097,11 +3219,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const runOcrText = useCallback(async () => {
     if (!active || ocrBusy) return;
     const id = active.id;
+    // Language is picked at the moment of use (and remembered in Settings).
+    const proceed = await requestConfirm({
+      title: "Make searchable (OCR)",
+      message:
+        "Recognizes the text in this document so search, copy and AI work on it. " +
+        "The first run per language downloads a recognition model; the recognition itself runs on your device. " +
+        "Right-to-left and vertical scripts (e.g. Arabic, Hebrew, Japanese) may come out less accurate.",
+      confirmLabel: "Run OCR",
+      select: {
+        label: "Document language",
+        value: ocrLanguageRef.current,
+        options: OCR_LANGUAGE_OPTIONS,
+        onChange: setOcrLanguage,
+      },
+    });
+    if (!proceed) return;
+    const lang = ocrLanguageRef.current;
     setOcrBusy(true);
     const toastId = toast.loading("Preparing OCR… (first run downloads a model)");
     try {
       const { runOcr } = await import("./lib/ocr");
-      const ocr = await runOcr(active.pdf, (page, total, phase) => {
+      const ocr = await runOcr(active.pdf, lang, (page, total, phase) => {
         toast.loading(
           phase === "prepare"
             ? "Preparing OCR…"
@@ -3154,7 +3293,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       setOcrBusy(false);
     }
-  }, [active, ocrBusy, updateDoc, persistWorking]);
+  }, [active, ocrBusy, updateDoc, persistWorking, requestConfirm, setOcrLanguage]);
 
   useEffect(() => {
     runOcrRef.current = runOcrText;
@@ -3629,6 +3768,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     printWith,
     ocrBusy,
     runOcrText,
+    ocrLanguage,
+    setOcrLanguage,
     currentPage: active?.currentPage ?? 0,
     setCurrentPage,
     scrollToPage,
