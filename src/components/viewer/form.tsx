@@ -1,16 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  AlignCenterHorizontal,
-  AlignCenterVertical,
-  AlignEndHorizontal,
-  AlignEndVertical,
-  AlignHorizontalSpaceAround,
-  AlignStartHorizontal,
-  AlignStartVertical,
-  AlignVerticalSpaceAround,
-  Pencil,
-  PenLine,
-} from "lucide-react";
+import { Pencil, PenLine } from "lucide-react";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
@@ -21,7 +10,8 @@ import {
 } from "../../lib/formbuilder";
 import { useFormFieldTheme } from "./formFieldTheme";
 import { type FieldFormat, fieldValueError, formatFieldValue } from "../../lib/fieldFormat";
-import type { Annotation, FormFieldAnnotation } from "../../types";
+import type { FormFieldAnnotation } from "../../types";
+import { AlignmentButtons } from "./AlignTools";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { ColorSwatch } from "../ui/color-swatch";
@@ -1024,81 +1014,12 @@ export function FieldPreviewInput({
 export function MultiFieldTools({ page }: { page: number }) {
   const app = useApp();
   const ms = app.multiSelected;
-  const anns = (app.annotations[page] ?? []).filter((a) =>
-    ms?.ids.includes(a.id),
-  );
-  if (!ms || anns.length < 2) return null;
+  if (!ms || ms.ids.length < 2) return null;
 
-  const minX = Math.min(...anns.map((a) => a.x));
-  const maxX = Math.max(...anns.map((a) => a.x + a.w));
-  const minY = Math.min(...anns.map((a) => a.y));
-  const maxY = Math.max(...anns.map((a) => a.y + a.h));
-
-  const apply = (fn: (a: Annotation) => Partial<Annotation>) =>
-    app.updateAnnotations(
-      page,
-      anns.map((a) => ({ ...a, ...fn(a) }) as Annotation),
-    );
-
-  const distribute = (axis: "x" | "y") => {
-    const sorted = [...anns].sort((a, b) =>
-      axis === "x" ? a.x - b.x : a.y - b.y,
-    );
-    const sizes = sorted.reduce((n, a) => n + (axis === "x" ? a.w : a.h), 0);
-    const span = axis === "x" ? maxX - minX : maxY - minY;
-    const gap = (span - sizes) / (sorted.length - 1);
-    let pos = axis === "x" ? minX : minY;
-    const moved = sorted.map((a) => {
-      const out = { ...a, [axis]: pos } as Annotation;
-      pos += (axis === "x" ? a.w : a.h) + gap;
-      return out;
-    });
-    app.updateAnnotations(page, moved);
-  };
-
-  const btn =
-    "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
   return (
     <>
-      <div className="text-[11px] font-semibold">{anns.length} fields selected</div>
-      <div className="flex flex-wrap gap-0.5">
-        <button className={btn} title="Align left edges" onClick={() => apply(() => ({ x: minX }))}>
-          <AlignStartVertical className="h-4 w-4" />
-        </button>
-        <button
-          className={btn}
-          title="Align horizontal centers"
-          onClick={() => apply((a) => ({ x: (minX + maxX) / 2 - a.w / 2 }))}
-        >
-          <AlignCenterVertical className="h-4 w-4" />
-        </button>
-        <button className={btn} title="Align right edges" onClick={() => apply((a) => ({ x: maxX - a.w }))}>
-          <AlignEndVertical className="h-4 w-4" />
-        </button>
-        <button className={btn} title="Align top edges" onClick={() => apply(() => ({ y: minY }))}>
-          <AlignStartHorizontal className="h-4 w-4" />
-        </button>
-        <button
-          className={btn}
-          title="Align vertical centers"
-          onClick={() => apply((a) => ({ y: (minY + maxY) / 2 - a.h / 2 }))}
-        >
-          <AlignCenterHorizontal className="h-4 w-4" />
-        </button>
-        <button className={btn} title="Align bottom edges" onClick={() => apply((a) => ({ y: maxY - a.h }))}>
-          <AlignEndHorizontal className="h-4 w-4" />
-        </button>
-        {anns.length > 2 && (
-          <>
-            <button className={btn} title="Distribute horizontally" onClick={() => distribute("x")}>
-              <AlignHorizontalSpaceAround className="h-4 w-4" />
-            </button>
-            <button className={btn} title="Distribute vertically" onClick={() => distribute("y")}>
-              <AlignVerticalSpaceAround className="h-4 w-4" />
-            </button>
-          </>
-        )}
-      </div>
+      <div className="text-[11px] font-semibold">{ms.ids.length} fields selected</div>
+      <AlignmentButtons page={page} />
       <div className="flex gap-1.5 border-t pt-2">
         <Button
           variant="outline"
