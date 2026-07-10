@@ -20,6 +20,7 @@ import {
   Highlighter,
   Image as ImageIcon,
   Info,
+  Layers,
   Layers2,
   Link2,
   Lock,
@@ -520,7 +521,7 @@ export function CommandPalette() {
   };
 
   const openSidebarPanel = (
-    panel: "pages" | "outline" | "comments" | "attachments" | "form" | "signatures",
+    panel: "pages" | "outline" | "comments" | "attachments" | "form" | "signatures" | "layers",
   ) => {
     app.setScreen("viewer");
     app.setSidebarOpen(true);
@@ -797,6 +798,16 @@ export function CommandPalette() {
         disabledReason: hasPdfReason,
         aliases: ["digital signatures", "verify", "certificate"],
         action: () => openSidebarPanel("signatures"),
+      },
+      {
+        id: "layers-panel",
+        group: "sidebar",
+        label: "Layers panel",
+        description: "Show or hide optional content layers (OCG).",
+        icon: Layers,
+        disabledReason: hasPdfReason,
+        aliases: ["ocg", "optional content", "layer visibility"],
+        action: () => openSidebarPanel("layers"),
       },
       {
         id: "form-builder-panel",
