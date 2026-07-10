@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, HelpCircle, X } from "lucide-react";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
-import { Select } from "../ui/select";
+import { Combobox } from "../ui/combobox";
 
 /**
  * In-app confirmation dialog — replaces window.confirm for every destructive
@@ -87,21 +87,18 @@ export function ConfirmModal() {
         {req.select && (
           <div className="flex items-center justify-between gap-3 pt-1">
             <span className="text-sm">{req.select.label}</span>
-            <Select
+            <Combobox
               value={selectValue}
-              onChange={(e) => {
-                setSelectValue(e.target.value);
-                req.select?.onChange(e.target.value);
+              options={[...req.select.options]}
+              onValueChange={(v) => {
+                setSelectValue(v);
+                req.select?.onChange(v);
               }}
+              showLabel
+              searchPlaceholder="Search…"
               aria-label={req.select.label}
-              className="h-8 w-52 px-2 text-xs"
-            >
-              {req.select.options.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </Select>
+              className="h-8 w-52 text-xs"
+            />
           </div>
         )}
 

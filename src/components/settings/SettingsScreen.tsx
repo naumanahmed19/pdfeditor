@@ -370,18 +370,16 @@ export function SettingsScreen() {
               "Hebrew, Japanese) may come out less accurate."
             }
           >
-            <Select
+            <Combobox
               value={app.ocrLanguage}
-              onChange={(e) => app.setOcrLanguage(e.target.value)}
+              options={[...OCR_LANGUAGE_OPTIONS]}
+              onValueChange={app.setOcrLanguage}
+              showLabel
+              searchPlaceholder="Search languages…"
+              emptyText="No matching language."
               aria-label="OCR recognition language"
-              className="h-8 w-full px-2 text-xs sm:w-56"
-            >
-              {OCR_LANGUAGE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </Select>
+              className="h-8 w-full text-xs sm:w-56"
+            />
           </Row>
         </Panel>
 
