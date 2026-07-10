@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { PdfDoc, PdfPage } from "../../lib/pdf";
 import { renderTextLayer } from "../../lib/pdf";
-import type { TextRunEdit } from "../../lib/pdfium";
+import type { ReflowLine, TextRunEdit } from "../../lib/pdfium";
 import { FIELD_META, buildFormField, paletteDrag } from "../../lib/formbuilder";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
@@ -11,6 +11,8 @@ import type { PageDims } from "./types";
 import {
   type InlineEdit,
   type InlineEditRun,
+  type ReflowMeta,
+  FONT_CSS,
   styleKey,
   familyRoot,
   collectLine,
@@ -20,6 +22,7 @@ import {
   trustedStandardFont,
 } from "./textedit";
 import { collectParagraph } from "./paragraph";
+import { makeParagraphMeasure, planReflow } from "./reflow";
 import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
 import { InlineTextEditor } from "./InlineTextEditor";
 import { ObjectLayer } from "./objectlayer";
@@ -238,8 +241,10 @@ export function PageView({
   // to single-line editing), and the inline editor shows the joined text with
   // one row per visual line. On commit the diff is mapped back onto the
   // underlying content-stream objects and rewritten in place — no whiteout
-  // patch, no overlay copy, original text truly gone. Line breaks are fixed
-  // for now: text can't flow between lines until reflow lands.
+  // patch, no overlay copy, original text truly gone. When the paragraph is
+  // uniform (one face/size) the commit may REFLOW it: edits that add/remove
+  // breaks or overflow a line re-wrap to the column width (see reflow.ts);
+  // mixed-style paragraphs and line scope keep the document's fixed breaks.
   const onTextLayerClick = async (e: React.MouseEvent) => {
     if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
     // A click while an edit is open (or still committing) is the gesture that
@@ -375,6 +380,41 @@ export function PageView({
       /* keep the CSS fallback */
     }
 
+    // Reflow eligibility: paragraph/block scope with ONE face and size across
+    // every run. Mixed-style paragraphs (a bold word, a footnote mark) keep
+    // fixed breaks — words crossing lines can't carry per-run styles yet.
+    let reflow: ReflowMeta | undefined;
+    if (
+      app.editTextScope !== "line" &&
+      allRuns.every(
+        (o) =>
+          o.fontName === hit.fontName &&
+          Math.abs(o.fontSize - hit.fontSize) < 0.2,
+      )
+    ) {
+      const lineMeta = paraLines.map((lineRuns) => ({
+        objectIndexes: lineRuns.map((o) => o.index),
+        originX: lineRuns[0].originX,
+        originY: lineRuns[0].originY,
+      }));
+      // Leading from the baseline steps; a single-line paragraph gets the
+      // typographic default so it can still grow a second line.
+      const steps = lineMeta
+        .slice(1)
+        .map((l, i) => lineMeta[i].originY - l.originY)
+        .filter((d) => d > 0)
+        .sort((a, b) => a - b);
+      reflow = {
+        lines: lineMeta,
+        width:
+          Math.max(...allRuns.map((o) => o.right)) -
+          Math.min(...allRuns.map((o) => o.left)),
+        leading: steps.length
+          ? steps[Math.floor(steps.length / 2)]
+          : hit.fontSize * 1.2,
+      };
+    }
+
     setInlineEdit({
       runs,
       original: joined,
@@ -394,6 +434,7 @@ export function PageView({
       anchor: [runs[0].originX, runs[0].originY],
       fontChars,
       siblings,
+      reflow,
     });
   };
 
@@ -456,16 +497,9 @@ export function PageView({
   ): Promise<boolean> => {
     const edit = inlineEdit;
     if (!edit) return true;
-    // Line breaks are the document's own layout (no reflow yet): a commit
-    // that adds or removes lines is rejected and the editor stays open. This
-    // also covers pasted text with newlines and Shift+Enter in a single line.
-    if (text.split("\n").length !== edit.original.split("\n").length) {
-      toast.info(
-        "Line breaks can't be added or removed yet — edit the text within its existing lines.",
-      );
-      return false;
-    }
-    const textChanged = text !== edit.original && text.trim().length > 0;
+    const oldLines = edit.original.split("\n");
+    let committed = text;
+    let textChanged = committed !== edit.original && committed.trim().length > 0;
     const colorChanged = colorHex.toLowerCase() !== edit.colorHex.toLowerCase();
     const sizeChanged = fontSize > 0 && fontSize !== Math.round(edit.fontSize);
     const familyReplaced = family !== "original";
@@ -473,6 +507,43 @@ export function PageView({
     const boldOff = !bold && edit.bold;
     const italicOn = italic && !edit.italic;
     const italicOff = !italic && edit.italic;
+
+    // Reflow: in paragraph/block scope over a uniform face, an edit that
+    // adds/removes line breaks or overflows its line re-wraps the paragraph
+    // to the column width. Only when text (± color) is what changed — size
+    // and face changes keep today's fixed-break per-run path.
+    let plan: string[] | null = null;
+    if (
+      edit.reflow &&
+      textChanged &&
+      !sizeChanged &&
+      !familyReplaced &&
+      !boldOn &&
+      !boldOff &&
+      !italicOn &&
+      !italicOff
+    ) {
+      const measure = await makeParagraphMeasure(
+        edit.embeddedFont,
+        FONT_CSS[edit.fallbackFamily] ?? "Helvetica, Arial, sans-serif",
+        edit.fontSize,
+      );
+      plan = planReflow(oldLines, committed.split("\n"), edit.reflow.width, measure);
+      if (!plan && committed.split("\n").length !== oldLines.length) {
+        // The wrap settled back into the document's own breaks (a Shift+Enter
+        // that changed nothing) — commit as if the text were untouched.
+        committed = edit.original;
+        textChanged = false;
+      }
+    }
+    // Structural change that can't reflow: line scope, mixed faces/sizes, or
+    // combined with a size/face change. The editor stays open.
+    if (!plan && committed.split("\n").length !== oldLines.length) {
+      toast.info(
+        "Line breaks here are fixed — reflow needs Paragraph or Block scope with a single font, and no size or font change in the same edit.",
+      );
+      return false;
+    }
     if (
       !textChanged &&
       !colorChanged &&
@@ -492,7 +563,7 @@ export function PageView({
       parseInt(colorHex.slice(5, 7), 16),
       255,
     ];
-    const runEdits = mapLineEditToRuns(edit, textChanged ? text : edit.original);
+    const runEdits = mapLineEditToRuns(edit, textChanged ? committed : edit.original);
     const newFill = colorChanged ? fill : undefined;
     const newSize = sizeChanged ? fontSize : undefined;
     // Turning OFF a real bold/italic needs a different face — recreate.
@@ -500,6 +571,77 @@ export function PageView({
 
     setSavingEdit(true);
     try {
+      if (plan) {
+        const meta = edit.reflow!;
+        const lines: ReflowLine[] = meta.lines.map((l, i) => ({
+          objectIndexes: l.objectIndexes,
+          text: plan[i] === oldLines[i] ? null : (plan[i] ?? ""),
+        }));
+        // Grown lines continue the column: the X the paragraph's own
+        // continuation lines use, one leading step down per line. Growth
+        // extends into whatever lies below — reflow is paragraph-contained.
+        const contX =
+          meta.lines.length > 1
+            ? Math.min(...meta.lines.slice(1).map((l) => l.originX))
+            : meta.lines[0].originX;
+        const lastY = meta.lines[meta.lines.length - 1].originY;
+        const extras = plan.slice(meta.lines.length).map((t, k) => ({
+          text: t,
+          originX: contX,
+          originY: lastY - meta.leading * (k + 1),
+        }));
+        if (extras.some((e) => e.originY < 0)) {
+          toast.info("This edit would push the paragraph past the bottom of the page.");
+          return false;
+        }
+        const lastKept = [...lines].reverse().find((l) => l.text !== "");
+        const templateIndex = (lastKept ?? lines[0]).objectIndexes[0];
+
+        // Glyph preflight over the paragraph's (uniform) face — words move
+        // between lines, so coverage is checked against the whole result.
+        const face = edit.runs[0].fontName;
+        const fresh = newCharacters(
+          plan.join("\n"),
+          edit.original,
+          edit.fontChars[face] ?? "",
+        );
+        let font: { standardName?: string; bytes?: Uint8Array } | undefined;
+        if (fresh.length) {
+          const info = await app.getTextFontInfo(pageIndex, edit.runs[0].objectIndex);
+          const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
+          const bad =
+            missing === null
+              ? trustedStandardFont(face, fresh)
+                ? []
+                : fresh
+              : missing;
+          if (bad.length) {
+            const chars = [...new Set(bad)].map((c) => `"${c}"`).join(" ");
+            const ok = await app.requestConfirm({
+              title: "Substitute font?",
+              message: `The embedded font "${face.replace(/^[A-Z]{6}\+/, "")}" doesn't include ${chars}, so the reflowed paragraph would be set in a close matching font.`,
+              confirmLabel: "Use substitute",
+            });
+            if (!ok) return false;
+            font = await resolveTextFont(edit.fallbackFamily, bold, italic);
+            // Face replacement recreates every line — explicit text throughout.
+            lines.forEach((l, i) => {
+              if (l.text === null) l.text = oldLines[i];
+            });
+          }
+        }
+
+        await app.applyTextReflow(pageIndex, {
+          lines,
+          extras,
+          templateIndex,
+          fill: newFill,
+          font,
+        });
+        setInlineEdit(null);
+        return true;
+      }
+
       if (needsRecreate) {
         await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic);
         setInlineEdit(null);

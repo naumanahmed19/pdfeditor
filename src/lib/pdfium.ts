@@ -1062,6 +1062,195 @@ export async function styleTextRuns(
   });
 }
 
+/** One visual line of a paragraph reflow, top→bottom. */
+export interface ReflowLine {
+  /** The line's existing runs, left→right (page object indexes). */
+  objectIndexes: number[];
+  /**
+   * New full-line text: null keeps the line untouched, "" removes it, any
+   * other string is written into the FIRST run (its siblings are removed —
+   * the rewrapped line is one run; per-run kerning splits can't survive a
+   * text that moved across lines anyway).
+   */
+  text: string | null;
+}
+
+/** A line the paragraph grew — no existing object, created from scratch. */
+export interface ReflowExtraLine {
+  text: string;
+  /** Baseline origin (text-matrix e,f) in page space. */
+  originX: number;
+  originY: number;
+}
+
+export interface ReflowSpec {
+  lines: ReflowLine[];
+  extras: ReflowExtraLine[];
+  /**
+   * Run whose font, size, matrix and color the extra lines inherit. Must be
+   * a run of a KEPT or REWRITTEN line so it survives the operation.
+   */
+  templateIndex: number;
+  /** New ink color for the whole paragraph (kept lines included). */
+  fill?: [number, number, number, number];
+  /**
+   * Replace the paragraph's face (glyph-coverage fallback). Every line must
+   * then carry explicit text — a kept line can't keep a face that's going
+   * away.
+   */
+  font?: TextFont;
+  /** Absolute size (pt) for the font-replacement path. */
+  fontSize?: number;
+}
+
+/**
+ * Rewrite a paragraph's line layout in one pass: per-line text replacement /
+ * removal (reflow moved words across lines), plus newly created line objects
+ * when the paragraph grew. Same fail-closed contract as styleTextRuns — any
+ * PDFium failure throws before bytes are saved.
+ */
+export async function reflowTextLines(
+  bytes: Uint8Array,
+  pageIndex: number,
+  spec: ReflowSpec,
+): Promise<Uint8Array> {
+  if (spec.font && spec.lines.some((l) => l.text == null)) {
+    throw new Error("reflowTextLines: font replacement needs explicit text per line");
+  }
+  return editPage(bytes, pageIndex, (mod, page, doc) => {
+    const rt = rtx(mod);
+    // Resolve every handle up front — removals don't disturb other handles,
+    // and inserts append at the end of the object list.
+    const lineObjs = spec.lines.map((l) =>
+      l.objectIndexes.map((idx) => {
+        const obj = mod.FPDFPage_GetObject(page, idx);
+        if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+          throw new Error(`PDFium: object ${idx} is not a text object`);
+        }
+        return obj;
+      }),
+    );
+    const template = mod.FPDFPage_GetObject(page, spec.templateIndex);
+    if (!template || mod.FPDFPageObj_GetType(template) !== FPDF_PAGEOBJ_TEXT) {
+      throw new Error(`PDFium: template ${spec.templateIndex} is not a text object`);
+    }
+    const removeObj = (obj: number) => {
+      if (mod.FPDFPage_RemoveObject(page, obj)) mod.FPDFPageObj_Destroy(obj);
+    };
+
+    const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
+    const fs = rt.wasmExports.malloc(4);
+    let loadedFont = 0;
+    try {
+      // Template properties FIRST — extras are created before any removal so
+      // the template's font handle is read while its owner is alive.
+      mod.FPDFPageObj_GetMatrix(template, mPtr);
+      const tMatrix = Array.from({ length: 6 }, (_, i) =>
+        rt.getValue(mPtr + i * 4, "float"),
+      );
+      mod.FPDFTextObj_GetFontSize(template, fs);
+      const tSize = rt.getValue(fs, "float");
+      const tFill = spec.fill ?? readFillColor(mod, template);
+
+      if (spec.font) {
+        if (spec.font.bytes) {
+          const fp = toHeap(mod, spec.font.bytes);
+          loadedFont = mod.FPDFText_LoadFont(
+            doc,
+            fp,
+            spec.font.bytes.length,
+            sniffFontType(spec.font.bytes),
+            false,
+          );
+          rt.wasmExports.free(fp);
+        } else {
+          loadedFont = mod.FPDFText_LoadStandardFont(
+            doc,
+            spec.font.standardName ?? "Helvetica",
+          );
+        }
+        if (!loadedFont) throw new Error("PDFium: could not load replacement font");
+      }
+      const extraFont = spec.font ? loadedFont : mod.FPDFTextObj_GetFont(template);
+      if (!extraFont) throw new Error("PDFium: template has no font");
+
+      const writeMatrix = (m: number[]) => {
+        for (let i = 0; i < 6; i++) rt.setValue(mPtr + i * 4, m[i], "float");
+      };
+      const createLine = (
+        text: string,
+        font: number,
+        size: number,
+        matrix: number[],
+        fill: [number, number, number, number],
+      ) => {
+        const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
+        if (!next) throw new Error("PDFium: could not create text object");
+        const sp = allocUtf16(mod, text);
+        const ok = mod.FPDFText_SetText(next, sp);
+        rt.wasmExports.free(sp);
+        if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
+        writeMatrix(matrix);
+        mod.FPDFPageObj_SetMatrix(next, mPtr);
+        mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
+        mod.FPDFPage_InsertObject(page, next);
+      };
+
+      // Extra lines before any removal (see template note above).
+      for (const extra of spec.extras) {
+        const m = tMatrix.slice();
+        m[4] = extra.originX;
+        m[5] = extra.originY;
+        createLine(
+          extra.text,
+          extraFont,
+          spec.fontSize ?? tSize,
+          m,
+          tFill,
+        );
+      }
+
+      // Existing lines: keep / rewrite-into-first-run / remove.
+      spec.lines.forEach((line, li) => {
+        const objs = lineObjs[li];
+        if (line.text === null) {
+          if (spec.fill) {
+            for (const obj of objs) mod.FPDFPageObj_SetFillColor(obj, ...spec.fill);
+          }
+          return;
+        }
+        if (line.text === "") {
+          objs.forEach(removeObj);
+          return;
+        }
+        if (spec.font) {
+          // Face replacement: recreate the line at its first run's matrix.
+          const first = objs[0];
+          mod.FPDFPageObj_GetMatrix(first, mPtr);
+          const m = Array.from({ length: 6 }, (_, i) =>
+            rt.getValue(mPtr + i * 4, "float"),
+          );
+          mod.FPDFTextObj_GetFontSize(first, fs);
+          const size = spec.fontSize ?? rt.getValue(fs, "float");
+          const fill = spec.fill ?? readFillColor(mod, first);
+          createLine(line.text, loadedFont, size, m, fill);
+          objs.forEach(removeObj);
+          return;
+        }
+        const sp = allocUtf16(mod, line.text);
+        const ok = mod.FPDFText_SetText(objs[0], sp);
+        rt.wasmExports.free(sp);
+        if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
+        if (spec.fill) mod.FPDFPageObj_SetFillColor(objs[0], ...spec.fill);
+        objs.slice(1).forEach(removeObj);
+      });
+    } finally {
+      rt.wasmExports.free(mPtr);
+      rt.wasmExports.free(fs);
+    }
+  });
+}
+
 /** The font behind a text run: its base name and decoded font program. */
 export interface FontInfo {
   /** Base font name, possibly with a subset prefix ("ABCDEF+Lato-Bold"). */
