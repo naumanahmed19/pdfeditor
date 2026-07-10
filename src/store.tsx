@@ -60,6 +60,8 @@ import {
   listStoredDocs,
   markDocClosed,
   persistDoc,
+  MAX_PERSIST_BYTES,
+  type PersistResult,
 } from "./lib/persist";
 import { applyAccent, type AccentId } from "./lib/accents";
 
@@ -1486,6 +1488,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return next;
     });
   }, []);
+  /** Docs already warned about the autosave size cutoff — the notice shows
+   *  once per document, not on every edit. */
+  const autosaveLimitNotified = useRef(new Set<string>());
+  /**
+   * Persistence deliberately skips documents over `MAX_PERSIST_BYTES` — tell
+   * the user once per document instead of silently losing crash recovery.
+   */
+  const noteAutosaveSkipped = useCallback(
+    (id: string, result: PersistResult) => {
+      if (result !== "too-large" || autosaveLimitNotified.current.has(id)) return;
+      autosaveLimitNotified.current.add(id);
+      toast.info(
+        `This document is larger than ${Math.round(MAX_PERSIST_BYTES / (1024 * 1024))} MB — autosave and crash recovery are disabled for it.`,
+        {
+          description: "Your edits still work normally; save to keep them.",
+          duration: 8000,
+        },
+      );
+    },
+    [],
+  );
   /**
    * Persist working bytes for a doc — but never write a decrypted copy of a
    * protected document to IndexedDB. Its restore record stays the protected
@@ -1495,9 +1518,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const persistWorking = useCallback(
     (id: string, name: string, bytes: Uint8Array) => {
       if (protectionInfo.current.has(id)) return;
-      void persistDoc({ id, name, bytes, lastOpened: Date.now(), open: true });
+      void persistDoc({ id, name, bytes, lastOpened: Date.now(), open: true }).then(
+        (result) => noteAutosaveSkipped(id, result),
+      );
     },
-    [],
+    [noteAutosaveSkipped],
   );
 
   const refreshRecent = useCallback(async () => {
@@ -1621,7 +1646,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             bytes,
             lastOpened: Date.now(),
             open: true,
-          }).then(refreshRecent);
+          }).then((result) => {
+            noteAutosaveSkipped(doc.id, result);
+            return refreshRecent();
+          });
         }
         // Offer OCR only for a genuine scan: essentially no extractable text
         // AND actual raster image content. A blank/vector page has neither, so
@@ -1656,7 +1684,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [resetTransient, refreshRecent, markProtected, requestPassword],
+    [resetTransient, refreshRecent, markProtected, requestPassword, noteAutosaveSkipped],
   );
 
   const openBytes = useCallback(
@@ -2360,7 +2388,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           bytes: active.bytes,
           lastOpened: Date.now(),
           open: true,
-        }).then(refreshRecent);
+        }).then((result) => {
+          noteAutosaveSkipped(active.id, result);
+          return refreshRecent();
+        });
       }
       // Browsers can't rename a file through its handle — be explicit about
       // what the rename actually affects.
@@ -2370,7 +2401,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : `Renamed to ${next} — saved copies will use this name`,
       );
     },
-    [active, updateDoc, refreshRecent],
+    [active, updateDoc, refreshRecent, noteAutosaveSkipped],
   );
 
   const saveCurrent = useCallback(async () => {
@@ -2422,7 +2453,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         bytes: out,
         lastOpened: Date.now(),
         open: true,
-      });
+      }).then((result) => noteAutosaveSkipped(active.id, result));
       // Saving ends the editing session — no separate "Done" needed.
       setEditModeState(false);
     } catch (err) {
@@ -2431,7 +2462,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       await downloadCurrent();
     }
-  }, [active, bakeToBytes, downloadCurrent, updateDoc, protectForDisk]);
+  }, [active, bakeToBytes, downloadCurrent, updateDoc, protectForDisk, noteAutosaveSkipped]);
 
   const activeEncrypted = useMemo(
     () => !!active?.pdf.isEncrypted(),
@@ -2545,7 +2576,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           bytes: protectedBytes,
           lastOpened: Date.now(),
           open: true,
-        });
+        }).then((result) => noteAutosaveSkipped(id, result));
         setEditModeState(false);
       } catch (err) {
         toast.error(
@@ -2553,7 +2584,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
       }
     },
-    [active, bakeToBytes, updateDoc, setEditModeState, markProtected],
+    [active, bakeToBytes, updateDoc, setEditModeState, markProtected, noteAutosaveSkipped],
   );
 
   /**

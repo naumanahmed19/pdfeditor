@@ -11,7 +11,21 @@ export interface StoredDoc {
 const DB_NAME = "pickpdf";
 const STORE = "docs";
 const MAX_STORED = 10;
-const MAX_BYTES = 80 * 1024 * 1024;
+/** Documents above this size are never written to IndexedDB — autosave and
+ *  crash recovery are effectively off for them, so callers must be able to
+ *  tell the user (see `persistDoc`'s return value). */
+export const MAX_PERSIST_BYTES = 80 * 1024 * 1024;
+
+/** Pure size gate for the autosave limit, split out so it's unit-testable
+ *  without an IndexedDB shim. */
+export function exceedsPersistLimit(byteLength: number): boolean {
+  return byteLength > MAX_PERSIST_BYTES;
+}
+
+/** Outcome of a persist attempt. `"too-large"` means the document exceeds
+ *  `MAX_PERSIST_BYTES` and was intentionally skipped — surface that to the
+ *  user; `"error"` is a best-effort storage failure (quota, private mode…). */
+export type PersistResult = "stored" | "too-large" | "error";
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -42,13 +56,15 @@ function tx<T>(
   );
 }
 
-export async function persistDoc(doc: StoredDoc): Promise<void> {
-  if (doc.bytes.length > MAX_BYTES) return;
+export async function persistDoc(doc: StoredDoc): Promise<PersistResult> {
+  if (exceedsPersistLimit(doc.bytes.length)) return "too-large";
   try {
     await tx("readwrite", (s) => s.put(doc));
     await pruneOld();
+    return "stored";
   } catch {
     /* persistence is best-effort */
+    return "error";
   }
 }
 
