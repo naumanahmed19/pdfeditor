@@ -8,6 +8,8 @@ import {
   ChevronRight,
   Columns2,
   Download,
+  Eye,
+  EyeOff,
   Files,
   FileSignature,
   FileText,
@@ -15,6 +17,7 @@ import {
   FolderOpen,
   FormInput,
   History,
+  Layers,
   Loader2,
   MessageSquare,
   MoreVertical,
@@ -35,9 +38,11 @@ import { cn, formatBytes } from "../../lib/utils";
 import { renderPageToCanvas, getOutline } from "../../lib/pdf";
 import type { OutlineInput } from "../../lib/pdftools";
 import type { AttachmentInfo } from "../../lib/pdfium";
+import type { LayerInfo } from "../../lib/ocg";
 import type { SignatureInfo } from "../../lib/signatures";
 import type { FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 import { FormBuilderSidebar } from "../form/FormBuilderPanel";
+import { Button } from "../ui/button";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 
@@ -67,6 +72,7 @@ function SidebarImpl() {
         panel !== "comments" &&
         panel !== "attachments" &&
         panel !== "signatures" &&
+        panel !== "layers" &&
         panel !== "form"
       ) {
         return;
@@ -141,6 +147,8 @@ function SidebarImpl() {
           <AttachmentsPanel />
         ) : app.pdf && activeTab === "signatures" ? (
           <SignaturesPanel />
+        ) : app.pdf && activeTab === "layers" ? (
+          <LayersPanel />
         ) : app.pdf && activeTab === "form" ? (
           <FormBuilderSidebar />
         ) : (
@@ -471,6 +479,7 @@ type SidebarTab =
   | "comments"
   | "attachments"
   | "signatures"
+  | "layers"
   | "form"
   | "recent";
 
@@ -482,6 +491,7 @@ const MORE_TABS: Array<{
   { key: "comments", label: "Comments", icon: MessageSquare },
   { key: "attachments", label: "Attachments", icon: Paperclip },
   { key: "signatures", label: "Signatures", icon: FileSignature },
+  { key: "layers", label: "Layers", icon: Layers },
   { key: "form", label: "Form builder", icon: FormInput },
 ];
 
@@ -1172,6 +1182,128 @@ function AttachmentsPanel() {
                     <Trash2 className="h-3 w-3" />
                   </button>
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Optional-content groups (OCG layers): list with /Order indentation and
+ *  per-layer visibility toggles. Toggling rewrites the catalog's
+ *  /OCProperties and reloads the bytes via applyBytesOp — layer visibility
+ *  is document state that persists in the saved file (Acrobat does the
+ *  same on save), so it participates in undo/edited tracking. */
+function LayersPanel() {
+  const app = useAppSelector(
+    (s) => ({ docBytes: s.docBytes, docVersion: s.docVersion, applyBytesOp: s.applyBytesOp }),
+    shallowEqual,
+  );
+  const [layers, setLayers] = useState<LayerInfo[] | null>(null);
+  const bytes = app.docBytes;
+
+  useEffect(() => {
+    let alive = true;
+    setLayers(null);
+    if (!bytes) return;
+    void import("../../lib/ocg")
+      .then((m) => m.listLayers(bytes))
+      .then((l) => {
+        if (alive) setLayers(l);
+      })
+      .catch(() => {
+        if (alive) setLayers([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bytes, app.docVersion]);
+
+  const setVisibility = (ids: string[], visible: boolean, label: string) => {
+    void app.applyBytesOp(async (b) => {
+      const { setLayerVisibility } = await import("../../lib/ocg");
+      return setLayerVisibility(b, ids, visible);
+    }, label);
+  };
+
+  const allVisible = !!layers?.length && layers.every((l) => l.visible);
+  const allHidden = !!layers?.length && layers.every((l) => !l.visible);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1 px-3 pb-1 pt-2">
+        <span className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Layers
+        </span>
+        {!!layers?.length && (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-1.5 text-[11px] text-muted-foreground hover:bg-sidebar-accent"
+              disabled={allVisible}
+              onClick={() =>
+                setVisibility(layers.map((l) => l.id), true, "All layers shown")
+              }
+            >
+              Show all
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-1.5 text-[11px] text-muted-foreground hover:bg-sidebar-accent"
+              disabled={allHidden}
+              onClick={() =>
+                setVisibility(layers.map((l) => l.id), false, "All layers hidden")
+              }
+            >
+              Hide all
+            </Button>
+          </>
+        )}
+      </div>
+      <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
+        {layers === null ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>
+        ) : layers.length === 0 ? (
+          <p className="px-2 py-2 text-[11px] text-muted-foreground">
+            No layers in this document. Layers (optional content groups) are
+            typically found in CAD exports and print-production PDFs.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            {layers.map((l) => (
+              <div
+                key={l.id}
+                className="flex items-center gap-1.5 rounded-md py-0.5 pr-1 text-xs hover:bg-sidebar-accent"
+                style={{ paddingLeft: 4 + l.depth * 14 }}
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  title={l.visible ? "Hide layer" : "Show layer"}
+                  aria-label={`${l.visible ? "Hide" : "Show"} layer ${l.name}`}
+                  aria-pressed={l.visible}
+                  onClick={() => setVisibility([l.id], !l.visible, "Layer visibility changed")}
+                >
+                  {l.visible ? (
+                    <Eye className="h-3.5 w-3.5" />
+                  ) : (
+                    <EyeOff className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate",
+                    !l.visible && "text-muted-foreground",
+                  )}
+                  title={l.name}
+                >
+                  {l.name}
+                </span>
               </div>
             ))}
           </div>
