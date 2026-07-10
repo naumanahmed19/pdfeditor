@@ -1,5 +1,7 @@
 # PickPDF Prioritized Action Plan
 
+> **Verification status (2026-07-09):** Phase 0 technical claims were verified against the current source. 12 of 15 verifiable claims confirmed as written; items 1, 3, and 6 were rescoped to match what the code actually does (see inline notes in those sections).
+
 ## Objective
 
 Build PickPDF into the category leader for **private, local-first PDF editing**, then expand into professional and enterprise workflows. The plan is ordered by dependency: correctness and trust first, reliable release/distribution second, growth third, professional breadth fourth.
@@ -16,10 +18,10 @@ The north-star metric should be:
 **Effort:** medium  
 **Owner:** PDF engine/state
 
-- Replace `docHasEdits()` with an explicit saved revision/hash.
-- Every byte, annotation, form, metadata, protection, OCR, redaction, page, and object mutation must advance the working revision.
-- Save must update the saved revision only after the disk/download write succeeds.
-- Close, refresh, dirty dots, Discard, split-pane Save, recovery, and autosave must use the same state model.
+- Replace `docHasEdits()` (`src/store.tsx:724` — a heuristic over the annotation/form/fieldOps maps only) with an explicit saved revision/hash.
+- Every byte, annotation, form, metadata, protection, OCR, redaction, page, and object mutation must advance the working revision. Today the byte-level paths (page ops, OCR, protect, redaction, in-place text/object edits) commit new bytes and *clear* those maps, so the doc reads clean with unsaved changes.
+- Save must update the saved revision only after the write succeeds. *Verified scope:* the file-handle path already awaits write+close before committing (`store.tsx:2392-2416`); the gap is the browser anchor-download path (`store.tsx:2397`, `src/lib/utils.ts:30-36`), which is fire-and-forget.
+- Close, refresh, dirty dots, Discard, split-pane Save, recovery, and autosave must use the same state model. *Verified scope:* the dirty-indicator surfaces (dots, beforeunload, close confirm, Discard) already share `docHasEdits`; the real split is between that indicator model and the byte-level persistence/undo model — autosave/recovery see byte edits the dirty indicator misses, and Discard (`store.tsx:1383-1394`) cannot revert committed byte edits.
 - Add tests for edit → close, edit → refresh, redact → close, OCR → close, page reorder → close, save failure, and Discard.
 
 **Exit metric:** no mutating command can leave the document visually “clean” before a successful save.
@@ -46,8 +48,9 @@ The north-star metric should be:
 **Effort:** medium  
 **Owner:** PDF engine
 
-- Replace duplicated 0/90/180/270 formulas with one PDFium-backed transform.
-- Cover points, rectangles, matrices, CropBox offsets, MediaBox offsets, and non-square pages.
+- *Verified scope:* most paths already share one transform, `toPdfRect()` (`src/lib/pdftools.ts:460-477`) — this is not per-module duplication. The actual work: consolidate `toPdfRect()`, the near-identical `displayPointToPdf()` (`pdftools.ts:1804-1820`), and the rotation-blind OCR text-layer math (`pdftools.ts:1849`) into one PDFium-backed converter.
+- Fix the rotated-page mapping. (Resolved during implementation: derivation against the pdf.js viewport transform proved the 90° branch was *correct* — the **270° branches** of both `toPdfRect` and `displayPointToPdf` had `pw`/`ph` swapped in their offset terms, displacing content diagonally on non-square pages; square pages masked it. Fixed in PR #46.)
+- Cover points, rectangles, matrices, CropBox offsets, MediaBox offsets, and non-square pages. Today crop uses CropBox with origin offset (`pdftools.ts:249-253`) while redaction/annotations/OCR use MediaBox with no CropBox offset (`pdftools.ts:498-499, 809`), so shifted-CropBox pages diverge between features.
 - Apply the same converter to crop, redaction, form placement, annotation baking, object movement, and OCR.
 
 **Exit metric:** property/fixture tests pass for all rotations and round-trip device → PDF → device within a small tolerance.
@@ -63,6 +66,7 @@ The north-star metric should be:
 - Remove intersecting text, image, path, annotation, form, metadata, and hidden-layer content where applicable.
 - For unsupported image/path cases, block completion with an exact explanation.
 - Reopen the output and verify with text extraction, page-object inspection, and raster comparison.
+- Fix the redaction copy until removal is actually complete: the confirm dialog says "The text and images beneath will be deleted" (`src/store.tsx:2216-2218`) and the toolbar says "Permanently removes covered content" (`src/components/viewer/Toolbar.tsx:118`) — but `redactRegions` (`src/lib/pdfium.ts:178-237`) removes only text plus recursed form-field text; images, vector paths, annotations, and metadata survive. (The overclaiming marketing landing page was removed from the workspace on 2026-07-10.)
 - Add adversarial fixtures: scanned page, vector text, image mask, rotated page, annotations, forms, OCR layer, clipped text, layers, and malformed content streams.
 
 **Exit metric:** 100% of redaction fixtures contain no recoverable target content; a failed verification never produces a success toast.
@@ -85,9 +89,8 @@ The north-star metric should be:
 **Impact:** critical  
 **Effort:** low for copy; high for true destructive crop
 
-- Immediately rename the current mode to “change visible page area.”
-- Remove “permanent removal” language until the engine rewrites the content.
-- If destructive crop is retained as a feature, clip/rewrite content and verify that objects outside the retained rectangle are unrecoverable.
+- *Verified scope:* permanent mode already rewrites MediaBox as well as CropBox (`src/lib/pdftools.ts:254-255`), and the in-app copy is already measured ("rewrites the page boundaries", `src/components/tools/ToolsScreens.tsx:1112-1113`). The overstated claim is the code comment "the cropped area is gone for every consumer" (`pdftools.ts:235`) — content streams are untouched, so cropped content remains recoverable by enlarging the boxes. The user-facing "permanent removal" problem belongs to redaction (moved to item 4).
+- Fix or remove the `pdftools.ts:235` comment; if destructive crop is retained as a feature, clip/rewrite content streams and verify that objects outside the retained rectangle are unrecoverable.
 
 ### 7. Stop overstated public claims
 
