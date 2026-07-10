@@ -117,6 +117,19 @@ export interface PasswordRequest {
   error?: string;
 }
 
+/** A pending in-app confirmation (rendered by ConfirmModal) — replaces
+ *  window.confirm so confirms use the shared dialog styling. */
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  /** Confirm button label, e.g. "Close anyway". Defaults to "Continue". */
+  confirmLabel?: string;
+  /** Cancel button label. Defaults to "Cancel". */
+  cancelLabel?: string;
+  /** "danger" renders the confirm button in destructive style. */
+  tone?: "default" | "danger";
+}
+
 /** The document's base bytes + its parsed PDFium document at a point in history. */
 interface BaseState {
   bytes: Uint8Array;
@@ -481,6 +494,13 @@ interface AppStore {
   passwordPrompt: PasswordRequest | null;
   /** Settle the pending prompt: the entered password, or null = cancelled. */
   answerPassword: (value: string | null) => void;
+
+  /** Pending confirmation rendered by ConfirmModal (null = closed). */
+  confirmPrompt: ConfirmRequest | null;
+  /** Ask the user to confirm an action; resolves false on cancel/dismiss. */
+  requestConfirm: (req: ConfirmRequest) => Promise<boolean>;
+  /** Settle the pending confirmation. */
+  answerConfirm: (ok: boolean) => void;
 
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
@@ -1145,6 +1165,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const resolve = passwordResolver.current;
     passwordResolver.current = null;
     resolve?.(value);
+  }, []);
+
+  // Promise-based confirm, mirroring requestPassword: flows await
+  // requestConfirm(); the ConfirmModal renders from `confirmPrompt` and
+  // settles the promise via answerConfirm(). Replaces window.confirm.
+  const [confirmPrompt, setConfirmPrompt] = useState<ConfirmRequest | null>(
+    null,
+  );
+  const confirmResolver = useRef<((ok: boolean) => void) | null>(null);
+  const requestConfirm = useCallback(
+    (req: ConfirmRequest): Promise<boolean> =>
+      new Promise((resolve) => {
+        // A dangling earlier request (shouldn't happen) resolves as cancelled.
+        confirmResolver.current?.(false);
+        confirmResolver.current = resolve;
+        setConfirmPrompt(req);
+      }),
+    [],
+  );
+  const answerConfirm = useCallback((ok: boolean) => {
+    setConfirmPrompt(null);
+    const resolve = confirmResolver.current;
+    confirmResolver.current = null;
+    resolve?.(ok);
   }, []);
   // Standard encrypted PDFs (lib/pdf.ts loadPdf) prompt through the same
   // dialog instead of window.prompt (which would show the password in
@@ -2014,7 +2058,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const closeTab = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const doc = docs.find((d) => d.id === id);
       if (!doc) {
         // Phantom entry: persisted as open but never loaded (e.g. a protected
@@ -2028,9 +2072,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (docHasEdits(doc)) {
-        const ok = window.confirm(
-          `“${doc.name}” has unsaved edits. Close it anyway?`,
-        );
+        const ok = await requestConfirm({
+          title: "Unsaved edits",
+          message: `“${doc.name}” has unsaved edits. Close it anyway?`,
+          confirmLabel: "Close anyway",
+          tone: "danger",
+        });
         if (!ok) return;
       }
       doc.pdf.destroy().catch(() => {});
@@ -2062,7 +2109,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markProtected(id, false);
       void markDocClosed(id).then(refreshRecent);
     },
-    [docs, activeTabId, resetTransient, refreshRecent, markProtected],
+    [docs, activeTabId, resetTransient, refreshRecent, markProtected, requestConfirm],
   );
 
   const closeDocument = useCallback(() => {
@@ -2383,11 +2430,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.info("Draw one or more redaction boxes first.");
       return;
     }
-    const ok = window.confirm(
-      `Apply ${boxes.length} redaction ${boxes.length === 1 ? "box" : "boxes"}?\n\n` +
+    const ok = await requestConfirm({
+      title: `Apply ${boxes.length} redaction ${boxes.length === 1 ? "box" : "boxes"}?`,
+      message:
         "Permanently deleted from the document: text under each box (including form-field text), any image a box touches (the whole image is removed), and vector graphics fully inside a box. A black box is painted over each area, and the result is verified before it is kept.\n\n" +
         "Not removed: comments/annotations and document metadata — review those separately if they may contain sensitive content.",
-    );
+      confirmLabel: "Apply redactions",
+      tone: "danger",
+    });
     if (!ok) return;
     try {
       const { applyRedactions: apply } = await import("./lib/pdftools");
@@ -2414,7 +2464,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         `${err instanceof Error ? err.message : "Redaction failed: unknown error"}. The document was NOT changed and your redaction boxes were kept.`,
       );
     }
-  }, [active, updateDoc, persistWorking]);
+  }, [active, updateDoc, persistWorking, requestConfirm]);
 
   /**
    * True in-place text edit: rewrite the content-stream text object via PDFium,
@@ -2499,11 +2549,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } catch (err) {
           // Re-encryption failed — never fall through to plain bytes quietly;
           // that would strip the document's protection behind the user's back.
-          const ok = window.confirm(
-            `“${name}” is password-protected, but re-applying its protection failed (${
+          const ok = await requestConfirm({
+            title: "Protection can't be re-applied",
+            message: `“${name}” is password-protected, but re-applying its protection failed (${
               err instanceof Error ? err.message : "unknown error"
             }). Save an UNPROTECTED copy instead?`,
-          );
+            confirmLabel: "Save unprotected",
+            tone: "danger",
+          });
           if (!ok) throw new ProtectionDeclinedError();
           return bytes;
         }
@@ -2517,14 +2570,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // there is nothing to re-encrypt with. Writing the (decrypted) working
       // bytes would silently strip that protection: ask first.
       if (encryptedAtOpen.current.has(docId)) {
-        const ok = window.confirm(
-          `“${name}” was password-protected when it was opened, and PickPDF can't re-apply that protection. Saving now will remove the protection from the saved file. Continue?`,
-        );
+        const ok = await requestConfirm({
+          title: "Saving removes protection",
+          message: `“${name}” was password-protected when it was opened, and PickPDF can't re-apply that protection. Saving now will remove the protection from the saved file. Continue?`,
+          confirmLabel: "Save unprotected",
+          tone: "danger",
+        });
         if (!ok) throw new ProtectionDeclinedError();
       }
       return bytes;
     },
-    [],
+    [requestConfirm],
   );
 
   const downloadCurrent = useCallback(async () => {
@@ -3543,6 +3599,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSecurityModalOpen,
     passwordPrompt,
     answerPassword,
+    confirmPrompt,
+    requestConfirm,
+    answerConfirm,
     downloadCurrent,
     printCurrent,
     printWith,
