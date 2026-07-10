@@ -275,6 +275,13 @@ const DOCUMENT_SCREENS: Array<{
     aliases: ["pages"],
   },
   {
+    screen: "create",
+    label: "Create PDF",
+    description: "Build a PDF from images, a Word document, or plain text.",
+    icon: FilePlus2,
+    aliases: ["images to pdf", "docx", "word", "text", "convert"],
+  },
+  {
     screen: "merge",
     label: "Merge PDFs",
     description: "Combine PDFs and images into one document.",

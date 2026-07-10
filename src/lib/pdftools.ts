@@ -418,6 +418,53 @@ export async function imagesToPdfPages(
   });
 }
 
+/** Page sizing for image→PDF creation. */
+export type ImagePageSize = "fit" | "a4" | "letter";
+
+const FIXED_PAGE_SIZES: Record<Exclude<ImagePageSize, "fit">, [number, number]> = {
+  a4: [595.28, 841.89],
+  letter: [612, 792],
+};
+
+/**
+ * Build a PDF from images, one page each. "fit" sizes the page to the image
+ * (the Merge tool's behavior); "a4"/"letter" centers the image on a portrait
+ * page inside 36 pt margins, scaling down to fit but never up (upscaling
+ * small images would only blur them).
+ */
+export async function imagesToPdf(
+  images: Array<{ bytes: Uint8Array; type: string }>,
+  pageSize: ImagePageSize,
+): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  for (const image of images) {
+    if (pageSize === "fit") {
+      await imagesToPdfPages(doc, image);
+      continue;
+    }
+    const embedded = image.type.includes("png")
+      ? await doc.embedPng(image.bytes)
+      : await doc.embedJpg(image.bytes);
+    const [pageW, pageH] = FIXED_PAGE_SIZES[pageSize];
+    const margin = 36;
+    const scale = Math.min(
+      (pageW - 2 * margin) / embedded.width,
+      (pageH - 2 * margin) / embedded.height,
+      1,
+    );
+    const w = embedded.width * scale;
+    const h = embedded.height * scale;
+    const page = doc.addPage([pageW, pageH]);
+    page.drawImage(embedded, {
+      x: (pageW - w) / 2,
+      y: (pageH - h) / 2,
+      width: w,
+      height: h,
+    });
+  }
+  return doc.save();
+}
+
 export interface MergeInput {
   bytes: Uint8Array;
   /** "pdf" or an image mime type. */
