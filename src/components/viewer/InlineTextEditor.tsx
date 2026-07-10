@@ -70,9 +70,13 @@ export function InlineTextEditor({
     };
   }, [edit.embeddedFont]);
 
-  // Paragraph mode: the edit spans several visual lines (one textarea row
-  // per document line; the breaks themselves are fixed until reflow lands).
+  // Paragraph mode: the edit spans several visual lines, one textarea row per
+  // document line. In a reflowable edit (edit.reflow) added/removed breaks
+  // are soft — the commit re-wraps to the column — so the row count follows
+  // whatever the user typed; fixed-break edits keep the original count.
   const lineCount = edit.original.split("\n").length;
+  const valueLines = value.split("\n").length;
+  const rows = edit.reflow ? Math.max(lineCount, valueLines) : lineCount;
 
   useEffect(() => {
     window.getSelection()?.removeAllRanges();
@@ -123,11 +127,14 @@ export function InlineTextEditor({
   // Live-preview the size change on screen (px per point from the original).
   const pxPerPt = edit.fontPx / (edit.fontSize || 1);
   const fontPx = sizePt * pxPerPt;
-  const boxH = Math.max(edit.height, fontPx * 1.25 * lineCount);
-  const top = edit.top + edit.height / 2 - boxH / 2;
+  const baseH = Math.max(edit.height, fontPx * 1.25 * lineCount);
+  // Anchor on the ORIGINAL lines so they sit on the page's lines; rows added
+  // in a reflowable edit extend the box downward, like the reflow will.
+  const top = edit.top + edit.height / 2 - baseH / 2;
   // One textarea row per document line: row height = the paragraph's own
   // leading, so the editor's lines sit on the page's lines.
-  const lineH = lineCount > 1 ? boxH / lineCount : boxH;
+  const lineH = lineCount > 1 ? baseH / lineCount : baseH;
+  const boxH = lineH * rows;
 
   return (
     <div
@@ -158,9 +165,9 @@ export function InlineTextEditor({
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             finish();
-          } else if (e.key === "Enter" && lineCount > 1) {
-            // Paragraph mode: the document's line breaks are fixed (no
-            // reflow yet), so Shift+Enter must not insert one.
+          } else if (e.key === "Enter" && !edit.reflow) {
+            // Fixed-break edit (line scope / mixed styles): the document's
+            // line breaks can't change, so Shift+Enter must not insert one.
             e.preventDefault();
           } else if (e.key === "Escape") {
             e.preventDefault();

@@ -49,6 +49,7 @@ import type {
   Matrix as PdfiumMatrix,
   ObjectStyle as PdfiumObjectStyle,
   PageObject,
+  ReflowSpec,
   TextObject,
   TextRunEdit,
 } from "./lib/pdfium";
@@ -421,6 +422,7 @@ interface AppStore {
     runs: TextRunEdit[],
     style: PdfiumLineStyle,
   ) => Promise<void>;
+  applyTextReflow: (pageIndex: number, spec: ReflowSpec) => Promise<void>;
   getTextFontInfo: (
     pageIndex: number,
     objectIndex: number,
@@ -489,6 +491,7 @@ interface AppStore {
    *  badge, or an on-open notification). */
   securityModalOpen: boolean;
   setSecurityModalOpen: (v: boolean) => void;
+
 
   /** Pending password prompt rendered by PasswordModal (null = closed). */
   passwordPrompt: PasswordRequest | null;
@@ -2491,6 +2494,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitInPlace],
   );
 
+  /**
+   * Paragraph reflow: rewrite the paragraph's line layout after an edit that
+   * moved words across lines (lines rewritten/removed, new lines created).
+   */
+  const applyTextReflow = useCallback(
+    async (pageIndex: number, spec: ReflowSpec) => {
+      const { reflowTextLines } = await import("./lib/pdfium");
+      await commitInPlace((b) => reflowTextLines(b, pageIndex, spec));
+    },
+    [commitInPlace],
+  );
+
   /** The base name + decoded program of the font behind a text run. */
   const getTextFontInfo = useCallback(
     async (pageIndex: number, objectIndex: number) => {
@@ -3581,6 +3596,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     getPageTextObjects,
     applyTextEdit,
     applyTextRuns,
+    applyTextReflow,
     getTextFontInfo,
     getPageObjects,
     applyObjectTransform,
@@ -3762,6 +3778,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         getPageTextObjects,
         applyTextEdit,
         applyTextRuns,
+        applyTextReflow,
         getTextFontInfo,
         getPageObjects,
         applyObjectTransform,
