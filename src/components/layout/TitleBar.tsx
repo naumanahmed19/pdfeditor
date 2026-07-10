@@ -11,6 +11,7 @@ import {
   Droplets,
   FileOutput,
   FilePlus2,
+  FileCheck2,
   FileSignature,
   FileText,
   FolderOpen,
@@ -288,6 +289,10 @@ function TitleBarImpl() {
       <MenuItem onClick={() => app.setScreen("compare")}>
         <GitCompare className="h-4 w-4 text-muted-foreground" />
         Compare documents…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("pdfa")}>
+        <FileCheck2 className="h-4 w-4 text-muted-foreground" />
+        PDF/A check…
       </MenuItem>
       <MenuSeparator />
       <MenuItem

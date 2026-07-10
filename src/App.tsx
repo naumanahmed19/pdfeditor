@@ -50,6 +50,7 @@ import {
   WatermarkScreen,
 } from "./components/tools/ToolsScreens";
 import { CompareScreen } from "./components/tools/CompareScreen";
+import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 
 const SCREEN_TITLES: Record<string, string> = {
@@ -64,6 +65,7 @@ const SCREEN_TITLES: Record<string, string> = {
   headerfooter: "Headers & footers",
   export: "Export",
   compare: "Compare documents",
+  pdfa: "PDF/A check",
   settings: "Settings",
 };
 
@@ -81,6 +83,7 @@ const FILE_SCOPED_SCREENS = new Set([
   "headerfooter",
   "export",
   "compare",
+  "pdfa",
 ]);
 
 function PaneShell({ pane }: { pane: { id: string; docId: string } }) {
@@ -545,6 +548,7 @@ function Shell() {
             {app.screen === "headerfooter" && <HeaderFooterScreen />}
             {app.screen === "export" && <ExportScreen />}
             {app.screen === "compare" && <CompareScreen />}
+            {app.screen === "pdfa" && <PdfaScreen />}
             {app.screen === "settings" && <SettingsScreen />}
           </div>
         </main>
