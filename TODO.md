@@ -1,5 +1,29 @@
 # TODO
 
+## Priorities — path to "best PDF editor" (gap analysis 2026-07-10)
+
+Feature *breadth* is already competitive; the gaps are depth on flagship
+features, trust infrastructure, and the native perks the Pro pricing pitch
+depends on. Ranked order of attack:
+
+1. **Digital signatures** — ✅ shipped (sign with .p12/.pfx + verify + sidebar
+   Signatures panel; see "Other deferred items"). Remaining depth: warn on
+   edits that invalidate a signed doc, incremental saves so signatures survive
+   edits, OS cert store / ECDSA / timestamps.
+2. **Save-path test harness** — one test file (`pdfium.redact.test.ts`) guards
+   an app that rewrites content streams, re-encrypts and destructively
+   redacts. Corpus of tricky PDFs + round-trip tests (open → edit → save →
+   reopen → assert text/forms/encryption/tags intact) in CI.
+3. **Paragraph reflow** for in-place text editing (Content editing below) —
+   the #1 "can it really edit PDFs?" perception gap vs Acrobat/Foxit.
+4. **Annotation round-trip** (new section below) — reopening a saved file must
+   yield editable annotations, ours or Acrobat's; today comments are
+   write-only and markups bake one-way.
+5. **Batch + native desktop perks in Tauri** (new section below) — the Pro
+   tier is sold on these and the Rust backend is currently empty.
+6. **PDF/A validation + multi-language OCR** — widest market expansion per
+   unit of effort (gov/legal/archival buyers; non-English scans).
+
 ## Proper form builder (priority)
 
 > **Shipped** — dedicated builder mode (toolbar **Form** button / sidebar Form
@@ -85,8 +109,12 @@
 - [x] Full migration off pdf.js: rendering, text layer, search, annotations and
       forms all run on PDFium (`engine.ts` exposes pdf.js-shaped APIs so
       callers didn't change); `pdfjs-dist` dependency removed
-- [ ] Redaction: remove the underlying image object for image-only regions
-      (currently covered but still present in the file)
+- [x] Redaction: remove the underlying image object for image-only regions —
+      shipped (`removeObjectsInRects` drops overlapping images and fully
+      covered vector paths, with post-apply verification that re-opens the
+      bytes and throws on residual content). Remaining limitations: whole
+      image dropped on ANY overlap (no partial/cropped image redaction);
+      annotations and document metadata are not touched by redaction
 - [ ] Desktop build alternative: pdfium-render (Rust) on the Tauri backend for
       native-speed rasterization without WASM bundle cost
 
@@ -106,18 +134,30 @@
       password (`EPDF_SetEncryption`), in-app enforcement (edit tools/print/copy
       gated on restricted docs, unlock via `EPDF_UnlockOwnerPermissions`), and
       Remove protection requires owner rights (`EPDF_RemoveEncryption`)
-- [ ] Certificate-based digital signatures (PKI) — drawn/typed signatures exist,
-      cryptographic signing does not. Required for legal/business workflows;
-      drawn signatures don't count there. Scope:
-      - Sign with a user-supplied certificate (.p12/.pfx), embedding a
-        ByteRange + PKCS#7 (CAdES/PAdES-style) signature dictionary
-      - Signature FIELDS in the form designer (place a field others sign)
-      - Verify + display existing signatures — validity, signer, whether the
-        document changed since signing (panel in the sidebar)
-      - Tauri desktop: OS certificate store / smartcard access is feasible;
-        browser build may be sign-only with an imported cert
-- [ ] Search across text-run boundaries, case/whole-word options
-- [ ] Two-page spread view
+- [x] Certificate-based digital signatures (PKI) — shipped (`lib/signatures.ts`,
+      node-forge; RSA certs):
+      - [x] Sign with a user-supplied certificate (.p12/.pfx): File → Sign with
+        certificate… — adbe.pkcs7.detached (ByteRange + PKCS#7 CMS with signed
+        attributes, SHA-256), invisible field or an existing empty /Sig field;
+        identity preview before signing; warns that re-signing/protection
+        invalidates existing signatures
+      - [x] Signature FIELDS in the form designer (unsigned /Sig widget —
+        shipped earlier; the sign dialog can now sign into them)
+      - [x] Verify + display existing signatures — sidebar **Signatures** panel:
+        valid / modified / invalid / not-verifiable per signature, signer +
+        cert details, whether the file gained revisions after signing; honest
+        note that identity isn't checked against an OS trust store
+      - [ ] Warn before page ops / full-rewrite saves on a signed document
+        (the Signatures panel now shows the breakage honestly, and re-signing
+        warns first, but other edits still invalidate silently until saved)
+      - [ ] Prerequisite for sign-and-keep-valid: incremental (append) saves —
+        current saves are full rewrites, which break any existing signature
+      - [ ] Tauri desktop: OS certificate store / smartcard access (deferred;
+        browser+desktop both use an imported .p12 today). ECDSA certs and
+        RFC 3161 timestamps also deferred (RSA only; unsupported algorithms
+        report "not verifiable", never a false verdict)
+- [x] Search options — case / whole-word / regex / preserve-case shipped
+      (`lib/search.ts`), scoped to PDF text + annotations + form values
 
 ## Feature gaps (not yet started)
 
@@ -141,6 +181,26 @@ plus a few differentiators. Roughly ordered by effort-to-value within each group
       applies to text boxes, images/stamps, shapes, lines, arrows, ink and
       whiteout; baked via a content-stream rotation about the box center
       (`rotation` on `BaseAnnotation`)
+- [ ] General annotation alignment / snapping / distribute — the guides,
+      align and distribute tooling already built for the form builder
+      (`lib/formbuilder.ts`, `snapGuides` in `store.tsx`) is scoped to form
+      fields only; wire the same math up for regular annotations
+- [ ] Polygon / polyline / cloud shapes — only rect/ellipse/line/arrow exist
+- [ ] Measure / dimension tools (distance, perimeter, area with scale
+      calibration) — with polygon/cloud, this is the door into the
+      AEC/construction niche (Bluebeam territory)
+
+### Annotation interop / round-trip (new — reopening must not be one-way)
+
+- [ ] Re-import annotations on reopen — comments save as native /Text popups
+      but are NOT read back (write-only round-trip); highlights/shapes bake
+      one-way. Reopening our own saved file should yield editable
+      annotations, not frozen content
+- [ ] Import annotations authored elsewhere (Acrobat/Foxit markups) into the
+      editable overlay model
+- [ ] XFDF import/export (and comments-summary export) for review workflows
+- [ ] Reconcile authored links vs the read-only `LinkLayer` (existing
+      document links and our `LinkAnnotation`s live in separate worlds)
 
 ### Content editing (biggest gap vs Acrobat / Foxit / PDF-XChange)
 
@@ -166,11 +226,13 @@ remaining gap to the pros is paragraph reflow and image objects.
       baseline shear); un-bold/un-italic recreates with a matched face.
       Whole visual line is edited as one string (runs grouped by baseline,
       diff mapped back per run). Remaining: arbitrary sub-line selections
-- [ ] Image object editing — insert, replace, move, resize and delete images
-      that are part of the page content (PDFium `FPDFPageObj_*` /
-      `FPDFImageObj_*` APIs; the Compress tool already re-encodes image
-      objects, so the plumbing exists). Also unblocks the redaction
-      image-removal item above.
+- [ ] Image object editing — remaining piece is **replace in place**: move /
+      resize / delete / recolor of existing page images shipped (`editobject`
+      tool, `objectlayer.tsx`, `transformObject`/`removeObject`), but
+      swapping an image's bitmap still means delete + insert overlay. The
+      Compress tool already re-encodes image objects
+      (`EPDFImageObj_SetJpeg/SetPng`), so the plumbing exists. Also unblocks
+      the redaction image-removal item above.
 
 ### Document tools
 
@@ -210,6 +272,14 @@ remaining gap to the pros is paragraph reflow and image objects.
       text-run x-positions)
 - [ ] HTML/DOCX export: inline the page images (currently text-only)
 
+### Create PDF from anything (import side — top acquisition funnel)
+
+- [ ] Standalone image→PDF screen — nearly free: `imagesToPdfPages` already
+      exists but is only reachable through Merge
+- [ ] DOCX→PDF import — the valuable hard one (client-side layout engine, or
+      native converter on the Tauri side as a Pro perk)
+- [ ] HTML→PDF (print-to-PDF pipeline could bootstrap this)
+
 ### AI differentiators
 
 - [ ] AI form-fill — "fill this form from this document / text" (local AI +
@@ -224,6 +294,36 @@ remaining gap to the pros is paragraph reflow and image objects.
       base, with a % changed readout). Handles differing page counts
       ("only in A / only in B"). Remaining: OCR-tolerant alignment for
       reflowed pages, side-by-side (not unified) text view
+
+### Enterprise / market unlocks
+
+- [ ] Multi-language OCR — Tesseract worker is hardcoded to `eng`
+      (`lib/ocr.ts`); a language picker is cheap and instantly widens the
+      market, and pairs with the translation AI story
+- [ ] Layers (OCG / optional content) panel — show/toggle layers; expected by
+      CAD/print/engineering users, PDFium supports it
+- [ ] Incremental (append) saves — all saves are full rewrites today
+      (pdf-lib `save()` / PDFium `saveAsCopy`); required before digital
+      signatures can survive an edit, and enables faster saves on large docs
+- [ ] Linearization ("fast web view") + structural optimization (object
+      streams, dedup) — Compress only re-encodes images today
+
+### Native desktop perks (monetization-critical — Pro is SOLD on these)
+
+The Pro one-time-purchase pitch differentiates on native perks, not feature
+locks (see docs in pickpdf-web) — but the Tauri Rust backend is essentially
+empty (`src-tauri/src/lib.rs` only sets up logging). These must exist before
+launch:
+
+- [ ] Batch processing — run merge/compress/OCR/watermark/convert over a
+      folder or file list; nothing today operates on more than the open doc
+- [ ] File associations + "Open with PickPDF" (double-click a .pdf)
+- [ ] Large-file handling — persist/recovery currently skips files >80MB
+      (`lib/persist.ts`); native path should lift the browser limits
+- [ ] True disk save everywhere (no File System Access API caveats), CLI
+      entry point (nice-to-have, enables scripted batch)
+- [ ] pdfium-render (Rust) rasterization on the backend for native-speed
+      rendering (already listed under PDFium engine above — same workstream)
 
 ### Viewer / print
 
@@ -270,7 +370,9 @@ lines. Explored ways to reduce the clutter (Photoshop-style):
 
 - [ ] Internationalization (i18n) — English-only today
 - [ ] Autosave / backup / file versioning
-- [ ] Test infrastructure (no unit/integration tests exist)
+- [ ] Test infrastructure — **elevated to priority #2** (see Priorities at
+      top): only `pdfium.redact.test.ts` exists; need a tricky-PDF corpus +
+      save-path round-trip tests in CI
 - [ ] PDF/A conversion or validation — matters for government/legal/archival
       buyers; start with validation (report violations: unembedded fonts,
       encryption, transparency) before attempting conversion
@@ -278,4 +380,3 @@ lines. Explored ways to reduce the clutter (Photoshop-style):
       sector requirement (Section 508 / EN 301 549); minimum viable: preserve
       existing tags through save (verify we don't strip them today), then a
       reading-order checker
-- [ ] Rebrand the `landing/` page — it still says "Inkden"; the app is PickPDF
