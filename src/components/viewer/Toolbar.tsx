@@ -12,6 +12,7 @@ import {
   Check,
   ChevronDown,
   Circle,
+  Cloud,
   Copy,
   Eraser,
   FormInput,
@@ -30,9 +31,11 @@ import {
   MoveUpRight,
   PaintBucket,
   Pencil,
+  Pentagon,
   Redo2,
   RotateCw,
   Signature,
+  Spline,
   SquareSlash,
   Square,
   Stamp,
@@ -112,6 +115,9 @@ const TOOLS: Array<ToolbarTool & { group: number }> = [
   { key: "ellipse", icon: Circle, name: "Ellipse", desc: "Drag to draw; fill optional", group: 3, shortcut: "O" },
   { key: "line", icon: Minus, name: "Line", desc: "Drag from start to end", group: 3, shortcut: "L" },
   { key: "arrow", icon: MoveUpRight, name: "Arrow", desc: "Drag from tail to head", group: 3, shortcut: "A" },
+  { key: "polygon", icon: Pentagon, name: "Polygon", desc: "Click to place corners; click the first corner, double-click or press Enter to close. Esc cancels", group: 3, shortcut: "P" },
+  { key: "polyline", icon: Spline, name: "Polyline", desc: "Click to place points; double-click or press Enter to finish. Esc cancels", group: 3 },
+  { key: "cloud", icon: Cloud, name: "Cloud", desc: "Review cloud — a polygon with a scalloped border. Click to place corners; double-click or Enter closes", group: 3 },
   { key: "callout", icon: MessageSquareQuote, name: "Callout", desc: "Drag from the target to where the note should sit", group: 3, shortcut: "K" },
   { key: "whiteout", icon: PaintBucket, name: "Whiteout", desc: "Cover page content with a filled box (hides, does not remove)", group: 4, shortcut: "W" },
   { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across an annotation you added to delete it" , group: 4 },
@@ -158,9 +164,9 @@ const TOOL_FLYOUTS: Array<{
   {
     id: "shapes",
     label: "Shapes",
-    desc: "Draw rectangles, ellipses, lines, arrows and callouts",
+    desc: "Draw rectangles, ellipses, lines, arrows, polygons, clouds and callouts",
     defaultTool: "rect",
-    tools: ["rect", "ellipse", "line", "arrow", "callout"],
+    tools: ["rect", "ellipse", "line", "arrow", "polygon", "polyline", "cloud", "callout"],
   },
   {
     id: "cleanup",
@@ -606,6 +612,8 @@ export function EditorToolbar() {
     ellipse: { icon: Circle, label: "Ellipse" },
     line: { icon: Minus, label: "Line" },
     arrow: { icon: MoveUpRight, label: "Arrow" },
+    polygon: { icon: Pentagon, label: "Polygon" },
+    polyline: { icon: Spline, label: "Polyline" },
     ink: { icon: Pencil, label: "Drawing" },
     mark: { icon: Check, label: "Check / cross" },
     link: { icon: Link2, label: "Link" },
@@ -672,7 +680,7 @@ export function EditorToolbar() {
   // no style). This replaces the old floating properties popover.
   const styleAnn =
     selectedAnn &&
-    ["rect", "ellipse", "line", "arrow", "ink", "highlight", "markup", "whiteout"].includes(selectedAnn.kind)
+    ["rect", "ellipse", "line", "arrow", "polygon", "polyline", "ink", "highlight", "markup", "whiteout"].includes(selectedAnn.kind)
       ? selectedAnn
       : null;
   const styleA = styleAnn as unknown as {
@@ -685,8 +693,13 @@ export function EditorToolbar() {
     styleAnn?.kind === "ellipse" ||
     styleAnn?.kind === "line" ||
     styleAnn?.kind === "arrow" ||
+    styleAnn?.kind === "polygon" ||
+    styleAnn?.kind === "polyline" ||
     styleAnn?.kind === "ink";
-  const styleIsFillable = styleAnn?.kind === "rect" || styleAnn?.kind === "ellipse";
+  const styleIsFillable =
+    styleAnn?.kind === "rect" ||
+    styleAnn?.kind === "ellipse" ||
+    styleAnn?.kind === "polygon";
   const styleColorLabel =
     styleAnn?.kind === "whiteout" ? "Patch" : styleHasStroke ? "Stroke" : "Color";
   const patchStyleAnn = (p: Partial<ShapeAnnotation>) => {
@@ -708,12 +721,18 @@ export function EditorToolbar() {
   // stroke width only for drawing tools (armed-tool defaults; a *selected*
   // annotation is handled by the styleAnn branch instead).
   const showFontControls = app.tool === "text" || !!selectedText;
-  const showStroke = ["ink", "rect", "ellipse", "line", "arrow", "callout"].includes(app.tool);
+  const showStroke = ["ink", "rect", "ellipse", "line", "arrow", "polygon", "polyline", "cloud", "callout"].includes(app.tool);
+  const isPolyTool =
+    app.tool === "polygon" || app.tool === "polyline" || app.tool === "cloud";
   const isMarkupTool =
     app.tool === "underline" || app.tool === "strikeout" || app.tool === "squiggly";
   const showColor =
     showFontControls || showStroke || app.tool === "highlight" || isMarkupTool;
-  const showFill = app.tool === "rect" || app.tool === "ellipse";
+  const showFill =
+    app.tool === "rect" ||
+    app.tool === "ellipse" ||
+    app.tool === "polygon" ||
+    app.tool === "cloud";
   const fillValue = app.toolFill;
   const setFill = (v: string | null) => app.setToolFill(v);
 
@@ -1330,6 +1349,13 @@ export function EditorToolbar() {
             <Link2 className="h-3.5 w-3.5" />
             Drag a box over the page to create a link, then set its target.
           </span>
+        ) : isPolyTool ? (
+          <>
+            <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />
+            <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
+              Click to place points · double-click or Enter finishes · Esc cancels
+            </span>
+          </>
         ) : (
           showColor && (
             <ColorSwatch value={app.toolColor} onChange={app.setToolColor} title="Color" />

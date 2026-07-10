@@ -22,6 +22,8 @@ export const ROTATABLE_KINDS: ReadonlySet<string> = new Set([
   "ellipse",
   "line",
   "arrow",
+  "polygon",
+  "polyline",
   "ink",
   "mark",
   "whiteout",
