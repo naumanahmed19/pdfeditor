@@ -12,6 +12,7 @@ import {
   Eraser,
   FileOutput,
   FilePlus2,
+  FileSignature,
   FolderOpen,
   FormInput,
   GitCompare,
@@ -440,6 +441,7 @@ export function CommandPalette() {
       setSelected: s.setSelected,
       setSidebarOpen: s.setSidebarOpen,
       setSignatureModalOpen: s.setSignatureModalOpen,
+      setSignModalOpen: s.setSignModalOpen,
       setTool: s.setTool,
       sidebarOpen: s.sidebarOpen,
     }),
@@ -517,7 +519,9 @@ export function CommandPalette() {
     }
   };
 
-  const openSidebarPanel = (panel: "pages" | "outline" | "comments" | "attachments" | "form") => {
+  const openSidebarPanel = (
+    panel: "pages" | "outline" | "comments" | "attachments" | "form" | "signatures",
+  ) => {
     app.setScreen("viewer");
     app.setSidebarOpen(true);
     if (app.isMobile) app.setAiOpen(false);
@@ -642,6 +646,16 @@ export function CommandPalette() {
         disabledReason: hasPdfReason,
         aliases: ["password", "permissions", "lock"],
         action: () => app.setSecurityModalOpen(true),
+      },
+      {
+        id: "sign-with-certificate",
+        group: "global",
+        label: "Sign with certificate",
+        description: "Digitally sign this PDF with a .p12/.pfx certificate.",
+        icon: FileSignature,
+        disabledReason: hasPdfReason,
+        aliases: ["digital signature", "certificate", "pkcs", "p12", "pfx"],
+        action: () => app.setSignModalOpen(true),
       },
       {
         id: "toggle-ai",
@@ -773,6 +787,16 @@ export function CommandPalette() {
         disabledReason: hasPdfReason,
         aliases: ["files"],
         action: () => openSidebarPanel("attachments"),
+      },
+      {
+        id: "signatures-panel",
+        group: "sidebar",
+        label: "Signatures panel",
+        description: "Verify digital signatures and their validity.",
+        icon: FileSignature,
+        disabledReason: hasPdfReason,
+        aliases: ["digital signatures", "verify", "certificate"],
+        action: () => openSidebarPanel("signatures"),
       },
       {
         id: "form-builder-panel",
