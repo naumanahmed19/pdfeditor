@@ -42,13 +42,6 @@
       "runtimeArgs": ["vite", "--host", "127.0.0.1", "--port", "5192", "--strictPort"],
       "port": 5192,
       "autoPort": false
-    },
-    {
-      "name": "inkden-landing",
-      "runtimeExecutable": "bunx",
-      "runtimeArgs": ["--bun", "serve", "landing"],
-      "port": 4321,
-      "autoPort": true
     }
   ]
 }
