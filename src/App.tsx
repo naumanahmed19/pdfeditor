@@ -50,14 +50,15 @@ import {
   WatermarkScreen,
 } from "./components/tools/ToolsScreens";
 import { CompareScreen } from "./components/tools/CompareScreen";
-import { CreatePdfScreen } from "./components/tools/CreatePdfScreen";
+import { DocToPdfScreen, ImagesToPdfScreen } from "./components/tools/CreatePdfScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
   templates: "New from template",
   organize: "Organize pages",
-  create: "Create PDF",
+  createimages: "Images to PDF",
+  createdoc: "Word or text to PDF",
   merge: "Merge PDFs",
   split: "Split & extract",
   watermark: "Watermark & numbers",
@@ -539,7 +540,8 @@ function Shell() {
               ))}
             {app.screen === "templates" && <TemplatesScreen />}
             {app.screen === "organize" && <OrganizeScreen />}
-            {app.screen === "create" && <CreatePdfScreen />}
+            {app.screen === "createimages" && <ImagesToPdfScreen />}
+            {app.screen === "createdoc" && <DocToPdfScreen />}
             {app.screen === "merge" && <MergeScreen />}
             {app.screen === "split" && <SplitScreen />}
             {app.screen === "watermark" && <WatermarkScreen />}

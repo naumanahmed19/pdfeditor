@@ -544,8 +544,9 @@ const QUICK_TOOLS: Array<{
   // "Show more" on the welcome screen.
   { screen: "organize", label: "Organize", desc: "Reorder, rotate, delete or add pages", icon: LayoutGrid, color: "text-violet-500" },
   { screen: "merge", label: "Merge", desc: "Combine multiple PDFs into one", icon: Combine, color: "text-blue-500" },
-  // Create sits in the primary four: like Merge it works without an open document.
-  { screen: "create", label: "Create PDF", desc: "Turn images, Word or text files into a PDF", icon: FilePlus2, color: "text-rose-500" },
+  // The create tools sit up front: like Merge they work without an open document.
+  { screen: "createimages", label: "Images to PDF", desc: "Turn PNG or JPEG images into a PDF", icon: FilePlus2, color: "text-rose-500" },
+  { screen: "createdoc", label: "Word / text to PDF", desc: "Convert a .docx or .txt file into a PDF", icon: FilePlus2, color: "text-orange-500" },
   { screen: "split", label: "Split & extract", desc: "Extract pages or split into files", icon: Scissors, color: "text-emerald-500" },
   { screen: "compress", label: "Compress", desc: "Shrink images with adjustable quality", icon: Minimize2, color: "text-red-500" },
   { screen: "watermark", label: "Watermark", desc: "Add text or image watermarks", icon: Droplets, color: "text-amber-500" },

@@ -256,9 +256,13 @@ function TitleBarImpl() {
         <LayoutGrid className="h-4 w-4 text-muted-foreground" />
         Organize pages
       </MenuItem>
-      <MenuItem onClick={() => app.setScreen("create")}>
+      <MenuItem onClick={() => app.setScreen("createimages")}>
         <FilePlus2 className="h-4 w-4 text-muted-foreground" />
-        Create PDF…
+        Images to PDF…
+      </MenuItem>
+      <MenuItem onClick={() => app.setScreen("createdoc")}>
+        <FilePlus2 className="h-4 w-4 text-muted-foreground" />
+        Word or text to PDF…
       </MenuItem>
       <MenuItem onClick={() => app.setScreen("merge")}>
         <Combine className="h-4 w-4 text-muted-foreground" />
