@@ -33,6 +33,7 @@ import {
   setPasswordPrompter,
   hasRasterImages,
 } from "./lib/pdf";
+import { OCR_LANGUAGE_OPTIONS, normalizeOcrLanguage } from "./lib/ocrLanguages";
 import {
   DEFAULT_SEARCH_OPTIONS,
   buildSearchIndex,
@@ -129,6 +130,15 @@ export interface ConfirmRequest {
   cancelLabel?: string;
   /** "danger" renders the confirm button in destructive style. */
   tone?: "default" | "danger";
+  /** Optional dropdown between message and buttons (e.g. OCR language).
+   *  Changes report immediately via onChange — the request object stays
+   *  inert, so cancelling never rolls a selection back. */
+  select?: {
+    label: string;
+    value: string;
+    options: ReadonlyArray<{ value: string; label: string }>;
+    onChange: (value: string) => void;
+  };
 }
 
 /** The document's base bytes + its parsed PDFium document at a point in history. */
@@ -511,6 +521,9 @@ interface AppStore {
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
   runOcrText: () => Promise<void>;
+  /** OCR recognition language (Tesseract traineddata code, e.g. "eng"). */
+  ocrLanguage: string;
+  setOcrLanguage: (code: string) => void;
 
   currentPage: number;
   setCurrentPage: (p: number) => void;
@@ -1059,6 +1072,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const size = Math.max(4, Math.min(72, Math.round(n)));
     setGridSizeState(size);
     localStorage.setItem("pdfwb.formGridSize", String(size));
+  }, []);
+
+  // OCR recognition language survives restarts. A ref mirrors the state so
+  // runOcrText reads the value picked in its confirm dialog, not the one the
+  // closure captured before the dialog opened.
+  const [ocrLanguage, setOcrLanguageState] = useState(() =>
+    normalizeOcrLanguage(localStorage.getItem("pdfwb.ocrLang")),
+  );
+  const ocrLanguageRef = useRef(ocrLanguage);
+  const setOcrLanguage = useCallback((code: string) => {
+    const lang = normalizeOcrLanguage(code);
+    ocrLanguageRef.current = lang;
+    setOcrLanguageState(lang);
+    localStorage.setItem("pdfwb.ocrLang", lang);
   }, []);
 
   /** Shift-click membership toggle. The last-clicked id becomes the primary
@@ -3192,11 +3219,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const runOcrText = useCallback(async () => {
     if (!active || ocrBusy) return;
     const id = active.id;
+    // Language is picked at the moment of use (and remembered in Settings).
+    const proceed = await requestConfirm({
+      title: "Make searchable (OCR)",
+      message:
+        "Recognizes the text in this document so search, copy and AI work on it. " +
+        "The first run per language downloads a recognition model; the recognition itself runs on your device. " +
+        "Right-to-left and vertical scripts (e.g. Arabic, Hebrew, Japanese) may come out less accurate.",
+      confirmLabel: "Run OCR",
+      select: {
+        label: "Document language",
+        value: ocrLanguageRef.current,
+        options: OCR_LANGUAGE_OPTIONS,
+        onChange: setOcrLanguage,
+      },
+    });
+    if (!proceed) return;
+    const lang = ocrLanguageRef.current;
     setOcrBusy(true);
     const toastId = toast.loading("Preparing OCR… (first run downloads a model)");
     try {
       const { runOcr } = await import("./lib/ocr");
-      const ocr = await runOcr(active.pdf, (page, total, phase) => {
+      const ocr = await runOcr(active.pdf, lang, (page, total, phase) => {
         toast.loading(
           phase === "prepare"
             ? "Preparing OCR…"
@@ -3249,7 +3293,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       setOcrBusy(false);
     }
-  }, [active, ocrBusy, updateDoc, persistWorking]);
+  }, [active, ocrBusy, updateDoc, persistWorking, requestConfirm, setOcrLanguage]);
 
   useEffect(() => {
     runOcrRef.current = runOcrText;
@@ -3724,6 +3768,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     printWith,
     ocrBusy,
     runOcrText,
+    ocrLanguage,
+    setOcrLanguage,
     currentPage: active?.currentPage ?? 0,
     setCurrentPage,
     scrollToPage,

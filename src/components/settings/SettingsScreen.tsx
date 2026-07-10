@@ -37,6 +37,7 @@ import {
   effectiveBrowserModel,
 } from "../../lib/modelConfig";
 import { isHandheldDevice } from "../../lib/device";
+import { OCR_LANGUAGE_OPTIONS } from "../../lib/ocrLanguages";
 import { ACCENTS } from "../../lib/accents";
 import { FORM_FIELD_THEMES, setFormFieldSkin, useFormFieldSkin } from "../viewer/formFieldTheme";
 import type { ProviderKind } from "../../types";
@@ -357,6 +358,28 @@ export function SettingsScreen() {
                 </option>
               ))}
             </Select>
+          </Row>
+        </Panel>
+
+        <Panel title="OCR">
+          <Row
+            title="Recognition language"
+            description={
+              "Used by “Make searchable (OCR)”. Each language's model downloads once, then " +
+              "recognition runs on your device. Right-to-left and vertical scripts (e.g. Arabic, " +
+              "Hebrew, Japanese) may come out less accurate."
+            }
+          >
+            <Combobox
+              value={app.ocrLanguage}
+              options={[...OCR_LANGUAGE_OPTIONS]}
+              onValueChange={app.setOcrLanguage}
+              showLabel
+              searchPlaceholder="Search languages…"
+              emptyText="No matching language."
+              aria-label="OCR recognition language"
+              className="h-8 w-full text-xs sm:w-56"
+            />
           </Row>
         </Panel>
 

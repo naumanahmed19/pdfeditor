@@ -1,5 +1,17 @@
 import { createWorker, OEM } from "tesseract.js";
 import type { PdfDoc } from "./pdf";
+import { DEFAULT_OCR_LANGUAGE, normalizeOcrLanguage } from "./ocrLanguages";
+
+// The curated language list lives in ocrLanguages.ts (dependency-free, so UI
+// code can import it without dragging tesseract.js into the main bundle).
+export {
+  DEFAULT_OCR_LANGUAGE,
+  OCR_LANGUAGES,
+  OCR_LANGUAGE_OPTIONS,
+  normalizeOcrLanguage,
+  ocrLanguageLabel,
+  type OcrLanguage,
+} from "./ocrLanguages";
 
 export interface OcrWord {
   text: string;
@@ -23,17 +35,20 @@ const RENDER_SCALE = 2;
 
 /**
  * Recognize text on every page of a PDF, returning per-page words with their
- * bounding boxes (in rasterized-pixel coordinates). The language model is
- * fetched once from a CDN and cached; the recognition itself runs locally.
+ * bounding boxes (in rasterized-pixel coordinates). The traineddata for the
+ * requested language is fetched once from tesseract.js's default CDN and
+ * cached; the recognition itself runs locally — page images never leave the
+ * device.
  */
 export async function runOcr(
   pdf: PdfDoc,
-  onProgress: (page: number, total: number, phase: "prepare" | "recognize") => void,
+  lang: string = DEFAULT_OCR_LANGUAGE,
+  onProgress: (page: number, total: number, phase: "prepare" | "recognize") => void = () => {},
   signal?: AbortSignal,
 ): Promise<OcrPage[]> {
   const total = pdf.numPages;
   onProgress(0, total, "prepare");
-  const worker = await createWorker("eng", OEM.LSTM_ONLY, {
+  const worker = await createWorker(normalizeOcrLanguage(lang), OEM.LSTM_ONLY, {
     logger: () => {},
     errorHandler: () => {},
   });
