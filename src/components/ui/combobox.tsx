@@ -20,7 +20,11 @@ interface ComboboxProps {
   /** Show the option's LABEL in the trigger instead of its raw value —
    *  for human-name pickers (languages) rather than id pickers (models). */
   showLabel?: boolean;
+  /** Styles the TRIGGER button only — trigger sizing (h-8, w-52…) must not
+   *  leak onto the dropdown panel, which manages its own box. */
   className?: string;
+  /** Optional styles for the dropdown panel (defaults to w-80). */
+  contentClassName?: string;
   "aria-label"?: string;
 }
 
@@ -34,6 +38,7 @@ export function Combobox({
   allowCustom = false,
   showLabel = false,
   className,
+  contentClassName,
   "aria-label": ariaLabel,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
@@ -76,7 +81,11 @@ export function Combobox({
         <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
       </PopoverTrigger>
       {/* Above modal overlays (z-[60]) — the combobox also lives in dialogs. */}
-      <PopoverContent align="end" positionerClassName="z-[70]" className={cn("w-80 p-0", className)}>
+      <PopoverContent
+        align="end"
+        positionerClassName="z-[70]"
+        className={cn("w-80 p-0", contentClassName)}
+      >
         <div className="flex items-center border-b px-3">
           <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
           <Input
