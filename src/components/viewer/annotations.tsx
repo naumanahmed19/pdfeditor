@@ -34,12 +34,21 @@ import type {
   Annotation,
   LinkAnnotation,
   LinkTarget,
+  MeasureAnnotation,
   NoteAnnotation,
   PolyAnnotation,
   SearchMatch,
   ShapeAnnotation,
   TextAnnotation,
 } from "../../types";
+import {
+  distanceTicks,
+  formatMeasure,
+  measureLabel,
+  midpointAlong,
+  polygonCentroid,
+  polylineLength,
+} from "../../lib/measure";
 import {
   CLOUD_RADIUS,
   cloudPathD,
@@ -160,9 +169,21 @@ export function AnnotationLayer({
   const notePending = useRef<{ x: number; y: number } | null>(null);
 
   const anns = app.annotations[pageIndex] ?? [];
-  const polyTool =
+  const shapePolyTool =
     app.tool === "polygon" || app.tool === "polyline" || app.tool === "cloud";
-  const polyClosed = app.tool !== "polyline";
+  const measureMode: MeasureAnnotation["mode"] | null =
+    app.tool === "measuredist"
+      ? "distance"
+      : app.tool === "measureperim"
+        ? "perimeter"
+        : app.tool === "measurearea"
+          ? "area"
+          : null;
+  // One vertex-draft machine serves the shape polys AND the measure tools.
+  const vertexTool = shapePolyTool || measureMode !== null;
+  const vertexClosed = shapePolyTool
+    ? app.tool !== "polyline"
+    : measureMode === "area";
   // Note: underline / strikeout / squiggly mark existing text via selection
   // (handled on the text layer + mark-on-mouseup effect), not by dragging a box
   // here. Highlight free-draws a box only in "area" mode; in "text" mode it
@@ -176,6 +197,9 @@ export function AnnotationLayer({
       "polygon",
       "polyline",
       "cloud",
+      "measuredist",
+      "measureperim",
+      "measurearea",
       "callout",
       "whiteout",
       "redact",
@@ -205,21 +229,45 @@ export function AnnotationLayer({
     setPolyCursor(null);
   };
 
-  /** Commit the vertex draft as a polygon/polyline (or discard if too few
-   *  distinct points: 3 for polygon/cloud, 2 for polyline). */
+  /** Commit the vertex draft as a polygon/polyline/measurement (or discard if
+   *  too few distinct points: 3 for closed shapes, 2 for open paths). */
   const finishPoly = (raw: Array<{ x: number; y: number }>) => {
     // A finishing double-click lands two near-identical trailing vertices.
     const pts = dedupeTail(raw, 5 / scale);
     resetPolyDraft();
-    if (pts.length < (polyClosed ? 3 : 2)) return;
+    if (pts.length < (vertexClosed ? 3 : 2)) return;
+    if (measureMode) {
+      // Calibration reference: measure the drawn line, ask its real length
+      // in the dialog, and discard the line itself.
+      if (measureMode === "distance" && app.measureCalibrating) {
+        app.setMeasureCalibrating(false);
+        app.setCalibrateRequest({ ptLength: polylineLength(pts) });
+        return;
+      }
+      const box = normalizePoly(pts);
+      const ann: MeasureAnnotation = {
+        id: uid(),
+        kind: "measure",
+        mode: measureMode,
+        ...box,
+        color: app.toolColor,
+        strokeWidth: app.strokeWidth,
+        scale: app.measureScale?.scale ?? 1,
+        unit: app.measureScale?.unit ?? "pt",
+      };
+      app.addAnnotation(pageIndex, ann);
+      // Stays armed: take-offs chain many measurements in a row. Esc or
+      // another tool disarms.
+      return;
+    }
     const box = normalizePoly(pts);
     const ann: PolyAnnotation = {
       id: uid(),
-      kind: polyClosed ? "polygon" : "polyline",
+      kind: vertexClosed ? "polygon" : "polyline",
       ...box,
       color: app.toolColor,
       strokeWidth: app.strokeWidth,
-      ...(polyClosed && app.toolFill ? { fill: app.toolFill } : {}),
+      ...(vertexClosed && app.toolFill ? { fill: app.toolFill } : {}),
       ...(app.tool === "cloud" ? { cloudy: true } : {}),
     };
     app.addAnnotation(pageIndex, ann);
@@ -235,7 +283,7 @@ export function AnnotationLayer({
   const finishPolyRef = useRef(finishPoly);
   finishPolyRef.current = finishPoly;
   useEffect(() => {
-    if (!polyTool || polyPts.length === 0) return;
+    if (!vertexTool || polyPts.length === 0) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" && e.key !== "Escape") return;
       e.preventDefault();
@@ -249,11 +297,11 @@ export function AnnotationLayer({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polyTool, polyPts.length > 0]);
+  }, [vertexTool, polyPts.length > 0]);
 
   // Switching tools mid-draft abandons the unfinished shape.
   useEffect(() => {
-    if (!polyTool) resetPolyDraft();
+    if (!vertexTool) resetPolyDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app.tool]);
 
@@ -321,17 +369,22 @@ export function AnnotationLayer({
       return;
     }
 
-    // Polygon / polyline / cloud: each click places a vertex; clicking back
-    // near the first vertex (≈8px on screen) closes a polygon.
-    if (polyTool) {
+    // Polygon / polyline / cloud / measurements: each click places a vertex;
+    // clicking back near the first vertex (≈8px on screen) closes a polygon.
+    if (vertexTool) {
       e.preventDefault();
       const p = toLocal(e);
-      if (polyClosed && polyPts.length >= 3) {
+      if (vertexClosed && polyPts.length >= 3) {
         const first = polyPts[0];
         if (Math.hypot(p.x - first.x, p.y - first.y) <= 8 / scale) {
           finishPoly(polyPts);
           return;
         }
+      }
+      // A distance measurement is exactly two points — finish on the second.
+      if (measureMode === "distance" && polyPts.length === 1) {
+        finishPoly([...polyPts, p]);
+        return;
       }
       setPolyPts((pts) => [...pts, p]);
       setPolyCursor(p);
@@ -359,7 +412,7 @@ export function AnnotationLayer({
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (polyTool) {
+    if (vertexTool) {
       if (polyPts.length) setPolyCursor(toLocal(e));
       return;
     }
@@ -393,6 +446,20 @@ export function AnnotationLayer({
       app.addAnnotation(pageIndex, ann);
       app.setSelected({ page: pageIndex, id: ann.id });
       app.setTool("select");
+      return;
+    }
+
+    // Distance also works as one press-drag-release gesture: releasing away
+    // from the pressed point finishes the line there (a plain click releases
+    // in place and waits for the second click instead).
+    if (
+      measureMode === "distance" &&
+      polyPts.length === 1 &&
+      polyCursor &&
+      Math.hypot(polyCursor.x - polyPts[0].x, polyCursor.y - polyPts[0].y) >
+        8 / scale
+    ) {
+      finishPoly([polyPts[0], polyCursor]);
       return;
     }
 
@@ -628,7 +695,7 @@ export function AnnotationLayer({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onDoubleClick={() => {
-        if (polyTool && polyPts.length) finishPoly(polyPts);
+        if (vertexTool && polyPts.length) finishPoly(polyPts);
       }}
     >
       {/* form-builder grid (design aid only — never printed or saved) */}
@@ -720,8 +787,8 @@ export function AnnotationLayer({
           }}
         />
       )}
-      {/* vertex draft for polygon / polyline / cloud */}
-      {polyTool && polyPts.length > 0 && (
+      {/* vertex draft for polygon / polyline / cloud / measurements */}
+      {vertexTool && polyPts.length > 0 && (
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
           viewBox={`0 0 ${baseDims.width} ${baseDims.height}`}
@@ -746,7 +813,7 @@ export function AnnotationLayer({
             />
           )}
           {/* close-the-shape target: emphasized once clicking it would close */}
-          {polyClosed && (
+          {vertexClosed && (
             <circle
               cx={polyPts[0].x}
               cy={polyPts[0].y}
@@ -776,6 +843,31 @@ export function AnnotationLayer({
           ))}
         </svg>
       )}
+      {/* live measurement readout following the cursor while drafting */}
+      {measureMode &&
+        polyPts.length > 0 &&
+        (() => {
+          const draftPts = polyCursor ? [...polyPts, polyCursor] : polyPts;
+          const anchor = polyCursor ?? polyPts[polyPts.length - 1];
+          // A calibration line always reads in raw PDF points — its real
+          // length is exactly what the upcoming dialog asks for.
+          const label = app.measureCalibrating
+            ? `${formatMeasure(polylineLength(draftPts), "pt")} — set length…`
+            : measureLabel(
+                measureMode,
+                draftPts,
+                app.measureScale?.scale ?? 1,
+                app.measureScale?.unit ?? "pt",
+              );
+          return (
+            <div
+              className="pointer-events-none absolute z-10 whitespace-nowrap rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-800 shadow-sm"
+              style={{ left: anchor.x * scale + 12, top: anchor.y * scale + 12 }}
+            >
+              {label}
+            </div>
+          );
+        })()}
       {inkPoints.length > 1 && (
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full"
@@ -1155,7 +1247,9 @@ function AnnotationItem({
           );
         } else if (
           mode === "resize" &&
-          (ann.kind === "polygon" || ann.kind === "polyline")
+          (ann.kind === "polygon" ||
+            ann.kind === "polyline" ||
+            ann.kind === "measure")
         ) {
           // Vertices are box-relative: bake the new size into the points so
           // the shape stays stretched (the SVG preview stretches while
@@ -1458,6 +1552,67 @@ function AnnotationItem({
             />
           )}
         </svg>
+      );
+      break;
+    }
+    case "measure": {
+      const pts = ann.points;
+      const ptsStr = pts.map((p) => `${p.x},${p.y}`).join(" ");
+      const mw = Math.max(1, ann.w);
+      const mh = Math.max(1, ann.h);
+      // Label position in box FRACTIONS so it tracks live resize stretch;
+      // the value itself is derived fresh every render (recalibration
+      // relabels without touching the stored points).
+      const lp =
+        ann.mode === "area" ? polygonCentroid(pts) : midpointAlong(pts);
+      body = (
+        <>
+          <svg
+            className="h-full w-full overflow-visible"
+            viewBox={`0 0 ${mw} ${mh}`}
+            preserveAspectRatio="none"
+          >
+            {ann.mode === "area" ? (
+              <polygon
+                points={ptsStr}
+                fill={ann.color}
+                fillOpacity={0.1}
+                stroke={ann.color}
+                strokeWidth={ann.strokeWidth}
+                strokeLinejoin="round"
+              />
+            ) : (
+              <polyline
+                points={ptsStr}
+                fill="none"
+                stroke={ann.color}
+                strokeWidth={ann.strokeWidth}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+            {ann.mode === "distance" &&
+              pts.length >= 2 &&
+              distanceTicks(pts[0], pts[pts.length - 1]).map(([a, b], i) => (
+                <line
+                  key={i}
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  stroke={ann.color}
+                  strokeWidth={ann.strokeWidth}
+                  strokeLinecap="round"
+                />
+              ))}
+          </svg>
+          <div
+            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-slate-300 bg-white px-1.5 py-px text-[10px] font-medium text-slate-800 shadow-sm"
+            style={{ left: `${(lp.x / mw) * 100}%`, top: `${(lp.y / mh) * 100}%` }}
+          >
+            {measureLabel(ann.mode, pts, ann.scale, ann.unit)}
+          </div>
+        </>
       );
       break;
     }
