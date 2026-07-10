@@ -11,6 +11,7 @@ import {
   Droplets,
   Eraser,
   FileOutput,
+  FileCheck2,
   FilePlus2,
   FileSignature,
   FolderOpen,
@@ -330,6 +331,14 @@ const DOCUMENT_SCREENS: Array<{
     icon: GitCompare,
     needsPdf: true,
     aliases: ["diff"],
+  },
+  {
+    screen: "pdfa",
+    label: "PDF/A check",
+    description: "Preflight the open PDF against PDF/A-2b rules.",
+    icon: FileCheck2,
+    needsPdf: true,
+    aliases: ["preflight", "archive", "validate"],
   },
 ];
 

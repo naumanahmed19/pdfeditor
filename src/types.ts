@@ -411,4 +411,5 @@ export type Screen =
   | "headerfooter"
   | "export"
   | "compare"
+  | "pdfa"
   | "settings";
