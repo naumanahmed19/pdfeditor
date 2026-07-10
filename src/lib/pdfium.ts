@@ -1717,6 +1717,40 @@ export async function removeAttachment(
   });
 }
 
+/**
+ * Replace an existing page image's bitmap in place: the object keeps its
+ * matrix (position, size, rotation) and only the pixels change — the new
+ * image is stretched into the same box. `png` embeds losslessly with alpha;
+ * otherwise the data is embedded as JPEG. Returns fresh bytes.
+ */
+export async function replaceImageObject(
+  bytes: Uint8Array,
+  pageIndex: number,
+  objectIndex: number,
+  data: Uint8Array,
+  png: boolean,
+): Promise<Uint8Array> {
+  return editPage(bytes, pageIndex, (mod, page) => {
+    const rt = rtx(mod);
+    const obj = mod.FPDFPage_GetObject(page, objectIndex);
+    if (!obj || mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) {
+      throw new Error(`PDFium: object ${objectIndex} is not an image`);
+    }
+    const pageArr = rt.wasmExports.malloc(4); // FPDF_PAGE[1] for SetJpeg/SetPng
+    const dataPtr = toHeap(mod, data);
+    try {
+      rt.setValue(pageArr, page, "i32");
+      const ok = png
+        ? mod.EPDFImageObj_SetPng(pageArr, 1, obj, dataPtr, data.length)
+        : mod.EPDFImageObj_SetJpeg(pageArr, 1, obj, dataPtr, data.length);
+      if (!ok) throw new Error("PDFium: could not replace the image");
+    } finally {
+      rt.wasmExports.free(dataPtr);
+      rt.wasmExports.free(pageArr);
+    }
+  });
+}
+
 // --- Compress / optimize (image downsampling) --------------------------------
 
 export interface CompressOptions {
