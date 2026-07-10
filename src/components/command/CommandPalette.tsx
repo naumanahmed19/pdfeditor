@@ -250,7 +250,7 @@ const EDITOR_TOOLS: Array<{
   {
     key: "redact",
     label: "Redact",
-    description: "Draw boxes that permanently remove content when applied.",
+    description: "Draw boxes that permanently delete the text and images beneath when applied.",
     icon: SquareSlash,
     shortcut: "X",
   },
@@ -427,6 +427,7 @@ export function CommandPalette() {
       openFolder: s.openFolder,
       pdf: s.pdf,
       printCurrent: s.printCurrent,
+      requestConfirm: s.requestConfirm,
       requestOpen: s.requestOpen,
       runOcrText: s.runOcrText,
       saveCurrent: s.saveCurrent,
@@ -703,14 +704,14 @@ export function CommandPalette() {
         icon: Layers2,
         disabledReason: modifyReason(),
         aliases: ["bake"],
-        action: () => {
-          if (
-            !window.confirm(
-              "Flatten the document?\n\nAll annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
-            )
-          ) {
-            return;
-          }
+        action: async () => {
+          const ok = await app.requestConfirm({
+            title: "Flatten the document?",
+            message:
+              "All annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
+            confirmLabel: "Flatten",
+          });
+          if (!ok) return;
           return app.applyBytesOp(async (bytes) => {
             const { flattenPdf } = await import("../../lib/pdfium");
             return flattenPdf(bytes);

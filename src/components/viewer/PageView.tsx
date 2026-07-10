@@ -552,9 +552,11 @@ export function PageView({
         // The substitution changes the visible face — ask before committing,
         // and keep the editor open (text preserved) when the user declines.
         const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
-        const ok = window.confirm(
-          `The embedded font "${badFace}" doesn't include ${chars}, so the edited text would be set in a close matching font.\n\nContinue with the substitute font?`,
-        );
+        const ok = await app.requestConfirm({
+          title: "Substitute font?",
+          message: `The embedded font "${badFace}" doesn't include ${chars}, so the edited text would be set in a close matching font.`,
+          confirmLabel: "Use substitute",
+        });
         if (!ok) return false;
         // Recreate only the edited runs with a close bundled/standard face; the
         // untouched neighbors keep their original embedded fonts.

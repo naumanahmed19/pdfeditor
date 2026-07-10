@@ -115,7 +115,7 @@ const TOOLS: Array<ToolbarTool & { group: number }> = [
   { key: "callout", icon: MessageSquareQuote, name: "Callout", desc: "Drag from the target to where the note should sit", group: 3, shortcut: "K" },
   { key: "whiteout", icon: PaintBucket, name: "Whiteout", desc: "Cover page content with a filled box (hides, does not remove)", group: 4, shortcut: "W" },
   { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across an annotation you added to delete it" , group: 4 },
-  { key: "redact", icon: SquareSlash, name: "Redact", desc: "Permanently removes covered content — draw boxes, then Apply", group: 4, shortcut: "X" },
+  { key: "redact", icon: SquareSlash, name: "Redact", desc: "Deletes text and images under the box, then paints it black (annotations and metadata are not removed) — draw boxes, then Apply", group: 4, shortcut: "X" },
 ];
 
 /**
@@ -959,7 +959,7 @@ export function EditorToolbar() {
             size="sm"
             className="h-7 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
             onClick={app.applyRedactions}
-            title="Permanently remove the content under every redaction box"
+            title="Permanently delete the text and images under every redaction box (verified after applying; annotations and metadata are not removed)"
           >
             <SquareSlash className="h-3.5 w-3.5" />
             Apply {app.redactCount} redaction{app.redactCount === 1 ? "" : "s"}

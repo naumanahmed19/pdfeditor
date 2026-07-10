@@ -58,6 +58,7 @@ import { isTauri } from "../../lib/tauri";
 import { WindowControls } from "./WindowControls";
 import { AboutModal } from "./AboutModal";
 import { PasswordModal } from "./PasswordModal";
+import { ConfirmModal } from "./ConfirmModal";
 import { PrintModal } from "../viewer/PrintModal";
 import { BrandLogo } from "./BrandLogo";
 
@@ -85,6 +86,7 @@ function TitleBarImpl() {
       pdf: s.pdf,
       printCurrent: s.printCurrent,
       recentFiles: s.recentFiles,
+      requestConfirm: s.requestConfirm,
       requestOpen: s.requestOpen,
       runOcrText: s.runOcrText,
       runSearch: s.runSearch,
@@ -290,17 +292,19 @@ function TitleBarImpl() {
       <MenuItem
         disabled={!app.pdf}
         onClick={() => {
-          if (
-            !window.confirm(
-              "Flatten the document?\n\nAll annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
-            )
-          ) {
-            return;
-          }
-          void app.applyBytesOp(async (b) => {
-            const { flattenPdf } = await import("../../lib/pdfium");
-            return flattenPdf(b);
-          }, "Document flattened");
+          void (async () => {
+            const ok = await app.requestConfirm({
+              title: "Flatten the document?",
+              message:
+                "All annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
+              confirmLabel: "Flatten",
+            });
+            if (!ok) return;
+            await app.applyBytesOp(async (b) => {
+              const { flattenPdf } = await import("../../lib/pdfium");
+              return flattenPdf(b);
+            }, "Document flattened");
+          })();
         }}
       >
         <Layers2 className="h-4 w-4 text-muted-foreground" />
@@ -692,6 +696,7 @@ function TitleBarImpl() {
         onClose={() => app.setSecurityModalOpen(false)}
       />
       <PasswordModal />
+      <ConfirmModal />
       <PrintModal />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </header>

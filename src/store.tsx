@@ -53,6 +53,11 @@ import type {
   TextRunEdit,
 } from "./lib/pdfium";
 import { DEFAULT_SETTINGS } from "./lib/ai";
+import {
+  recipeAfterOwnerUnlock,
+  recipeForOpenedDoc,
+  type EncryptRecipe,
+} from "./lib/reprotect";
 import { isHandheldDevice } from "./lib/device";
 import { downloadBytes, uid } from "./lib/utils";
 import {
@@ -64,6 +69,16 @@ import {
   type PersistResult,
 } from "./lib/persist";
 import { applyAccent, type AccentId } from "./lib/accents";
+import {
+  type DocRevision,
+  bumpBytesRevision,
+  bumpRevision,
+  discardOverlays,
+  freshRevision,
+  hasUnsavedByteEdits,
+  hasUnsavedChanges,
+  markSaved,
+} from "./lib/revision";
 
 const SETTINGS_KEY = "pickpdf-settings";
 const SIGNATURES_KEY = "pickpdf-signatures";
@@ -80,14 +95,19 @@ export type EditTextScope = "line" | "paragraph" | "block";
 
 /** How a document must be re-protected when its bytes are written to disk. */
 export type ProtectionRecipe =
-  | {
-      kind: "encrypt";
-      userPassword: string;
-      ownerPassword: string;
-      permissions: number;
-    }
+  | EncryptRecipe
   /** PickPDF wrapper: plain inner document + AES-GCM payload behind `password`. */
   | { kind: "wrapper"; password: string };
+
+/** Thrown by protectForDisk when the user declines writing an UNPROTECTED
+ *  copy of a document that was password-protected when it was opened. Save
+ *  and download catch it and abort quietly (no error toast, no fallback). */
+class ProtectionDeclinedError extends Error {
+  constructor() {
+    super("Cancelled — the file was not written");
+    this.name = "ProtectionDeclinedError";
+  }
+}
 
 /** A pending in-app password prompt (rendered by PasswordModal). */
 export interface PasswordRequest {
@@ -95,6 +115,19 @@ export interface PasswordRequest {
   message: string;
   /** Shown in destructive style, e.g. "Wrong password — try again." */
   error?: string;
+}
+
+/** A pending in-app confirmation (rendered by ConfirmModal) — replaces
+ *  window.confirm so confirms use the shared dialog styling. */
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  /** Confirm button label, e.g. "Close anyway". Defaults to "Continue". */
+  confirmLabel?: string;
+  /** Cancel button label. Defaults to "Cancel". */
+  cancelLabel?: string;
+  /** "danger" renders the confirm button in destructive style. */
+  tone?: "default" | "danger";
 }
 
 /** The document's base bytes + its parsed PDFium document at a point in history. */
@@ -130,6 +163,12 @@ interface OpenDoc {
   formValues: Record<string, unknown>;
   /** Pending move/rename/delete edits to existing AcroForm fields. */
   fieldOps: Record<string, ExistingFieldOp>;
+  /**
+   * Dirty-tracking revision state (see src/lib/revision.ts): every mutation —
+   * overlay or byte-level — bumps it; a successful save records what was
+   * written. THE source of truth for "has unsaved changes".
+   */
+  rev: DocRevision;
 }
 
 function formValueText(value: unknown): string {
@@ -456,6 +495,13 @@ interface AppStore {
   /** Settle the pending prompt: the entered password, or null = cancelled. */
   answerPassword: (value: string | null) => void;
 
+  /** Pending confirmation rendered by ConfirmModal (null = closed). */
+  confirmPrompt: ConfirmRequest | null;
+  /** Ask the user to confirm an action; resolves false on cancel/dismiss. */
+  requestConfirm: (req: ConfirmRequest) => Promise<boolean>;
+  /** Settle the pending confirmation. */
+  answerConfirm: (ok: boolean) => void;
+
   /** OCR the active document into a searchable text layer. */
   ocrBusy: boolean;
   runOcrText: () => Promise<void>;
@@ -532,7 +578,13 @@ interface AppStore {
   setLetterSpacing: (v: number) => void;
 
   annotations: AnnotationMap;
+  /** Unsaved changes of ANY kind — overlay edits or committed byte edits. */
   hasAnnotations: boolean;
+  /** Overlay edits (annotations / form values / field ops) — what Discard removes. */
+  hasOverlayEdits: boolean;
+  /** Byte-level edits committed since the last save (text edits, page ops,
+   *  OCR, redactions…) — cannot be discarded, only saved. */
+  hasByteEdits: boolean;
   addAnnotation: (page: number, ann: Annotation) => void;
   addAnnotations: (page: number, anns: Annotation[]) => void;
   updateAnnotation: (page: number, ann: Annotation) => void;
@@ -723,7 +775,23 @@ function loadJson<T>(key: string, fallback: T): T {
   }
 }
 
+/**
+ * THE document-integrity gate: any unsaved change, overlay OR byte-level.
+ * Byte-level commits (page ops, OCR, in-place text edits, redactions…) clear
+ * the overlay maps, so this must NOT be inferred from them — it is revision
+ * tracking (src/lib/revision.ts), bumped by every mutation and reset only by
+ * a successful save.
+ */
 function docHasEdits(d: OpenDoc): boolean {
+  return hasUnsavedChanges(d.rev);
+}
+
+/**
+ * Overlay-only edits (annotations / form values / field ops) — the part of
+ * the unsaved state that still needs BAKING into the bytes, and the only part
+ * Discard can actually remove.
+ */
+function docHasOverlayEdits(d: OpenDoc): boolean {
   return (
     Object.values(d.annotations).some((l) => l.length > 0) ||
     Object.keys(d.formValues).length > 0 ||
@@ -814,6 +882,8 @@ function pushHistory(
     // Keep the current live proxy when a base carries none (bytes-only steps
     // from in-place content edits) — never blank out doc.pdf.
     pdf: base.pdf ?? d.pdf,
+    // Every push is a mutation; a new base means a committed byte-level edit.
+    rev: nextBase ? bumpBytesRevision(d.rev) : bumpRevision(d.rev),
   };
 }
 
@@ -833,6 +903,7 @@ function pushContentEdit(d: OpenDoc, nextBytes: Uint8Array): Partial<OpenDoc> {
     history,
     bytesHistory,
     historyIndex: history.length - 1,
+    rev: bumpBytesRevision(d.rev),
   };
 }
 
@@ -1094,6 +1165,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const resolve = passwordResolver.current;
     passwordResolver.current = null;
     resolve?.(value);
+  }, []);
+
+  // Promise-based confirm, mirroring requestPassword: flows await
+  // requestConfirm(); the ConfirmModal renders from `confirmPrompt` and
+  // settles the promise via answerConfirm(). Replaces window.confirm.
+  const [confirmPrompt, setConfirmPrompt] = useState<ConfirmRequest | null>(
+    null,
+  );
+  const confirmResolver = useRef<((ok: boolean) => void) | null>(null);
+  const requestConfirm = useCallback(
+    (req: ConfirmRequest): Promise<boolean> =>
+      new Promise((resolve) => {
+        // A dangling earlier request (shouldn't happen) resolves as cancelled.
+        confirmResolver.current?.(false);
+        confirmResolver.current = resolve;
+        setConfirmPrompt(req);
+      }),
+    [],
+  );
+  const answerConfirm = useCallback((ok: boolean) => {
+    setConfirmPrompt(null);
+    const resolve = confirmResolver.current;
+    confirmResolver.current = null;
+    resolve?.(ok);
   }, []);
   // Standard encrypted PDFs (lib/pdf.ts loadPdf) prompt through the same
   // dialog instead of window.prompt (which would show the password in
@@ -1382,6 +1477,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeTabId, updateDoc],
   );
 
+  // Discard removes ONLY the overlay maps. Byte-level edits committed since
+  // the last save are baked into d.bytes and cannot be discarded (their undo
+  // history may already be gone) — discardOverlays keeps the doc marked dirty
+  // in that case instead of pretending it matches the file on disk.
   const clearAnnotations = useCallback(() => {
     if (!activeTabId) return;
     updateDoc(activeTabId, (d) => ({
@@ -1391,6 +1490,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       historyIndex: 0,
       formValues: {},
       fieldOps: {},
+      rev: discardOverlays(d.rev),
     }));
     setSelected(null);
   }, [activeTabId, updateDoc]);
@@ -1406,17 +1506,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // edit stays reparse-free.
   const restoreStep = useCallback(
     async (doc: OpenDoc, target: number) => {
+      // No-op steps (undo at the bottom, redo at the top) must not touch the
+      // doc — bumping the revision would mark a clean document dirty.
+      if (target === doc.historyIndex) return;
       const base = doc.bytesHistory[target] ?? { bytes: doc.bytes, pdf: doc.pdf };
       const annotations = doc.history[target] ?? {};
       if (base.bytes === doc.bytes) {
-        updateDoc(doc.id, { historyIndex: target, annotations });
+        updateDoc(doc.id, {
+          historyIndex: target,
+          annotations,
+          rev: bumpRevision(doc.rev),
+        });
       } else if (base.pdf && base.pdf !== doc.pdf) {
-        updateDoc(doc.id, { historyIndex: target, annotations, bytes: base.bytes, pdf: base.pdf });
+        updateDoc(doc.id, {
+          historyIndex: target,
+          annotations,
+          bytes: base.bytes,
+          pdf: base.pdf,
+          // Crossing a content boundary swaps the base bytes — track it so a
+          // post-undo Discard can't declare the doc clean against stale bytes.
+          rev: bumpBytesRevision(doc.rev),
+        });
         setContentRev((v) => v + 1);
       } else {
         const nextPdf = await loadPdf(base.bytes);
         const prev = doc.pdf;
-        updateDoc(doc.id, { historyIndex: target, annotations, bytes: base.bytes, pdf: nextPdf });
+        updateDoc(doc.id, {
+          historyIndex: target,
+          annotations,
+          bytes: base.bytes,
+          pdf: nextPdf,
+          rev: bumpBytesRevision(doc.rev),
+        });
         setContentRev((v) => v + 1);
         // Free the outgoing proxy unless a history base still references it
         // (those are freed together on close via destroyDocProxies).
@@ -1441,6 +1562,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const hasAnnotations = useMemo(
     () => (active ? docHasEdits(active) : false),
+    [active],
+  );
+  /** Overlay edits Discard can remove (annotations / form values / field ops). */
+  const hasOverlayEdits = useMemo(
+    () => (active ? docHasOverlayEdits(active) : false),
+    [active],
+  );
+  /** Byte-level edits committed since the last save — not discardable. */
+  const hasByteEdits = useMemo(
+    () => (active ? hasUnsavedByteEdits(active.rev) : false),
     [active],
   );
 
@@ -1477,6 +1608,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // a decrypted copy or silently drop protection. Set only after a protect (or
   // an unwrap) actually succeeds; cleared on remove-protection and close.
   const protectionInfo = useRef(new Map<string, ProtectionRecipe>());
+  /** Docs that were STANDARD-ENCRYPTED when opened. Should one of these ever
+   *  reach a write path with no recipe in protectionInfo (e.g. a
+   *  restrictions-only file whose owner password was never entered, so there
+   *  is nothing to re-encrypt with), protectForDisk demands explicit consent
+   *  before writing plain bytes instead of silently stripping protection.
+   *  Cleared on close and on an explicit remove-protection. */
+  const encryptedAtOpen = useRef(new Set<string>());
   /** Reactive mirror of protectionInfo's keys (refs don't trigger renders). */
   const [protectedIds, setProtectedIds] = useState<ReadonlySet<string>>(new Set());
   const markProtected = useCallback((docId: string, on: boolean) => {
@@ -1517,7 +1655,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
    */
   const persistWorking = useCallback(
     (id: string, name: string, bytes: Uint8Array) => {
-      if (protectionInfo.current.has(id)) return;
+      // encryptedAtOpen covers recipe-less protected docs (restrictions-only
+      // files): their working bytes are decrypted, and persisting them would
+      // hand a session restore an unprotected copy.
+      if (protectionInfo.current.has(id) || encryptedAtOpen.current.has(id))
+        return;
       void persistDoc({ id, name, bytes, lastOpened: Date.now(), open: true }).then(
         (result) => noteAutosaveSkipped(id, result),
       );
@@ -1602,6 +1744,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           currentPage: 0,
           formValues: {},
           fieldOps: {},
+          rev: freshRevision(),
         };
         if (wrapperPw) {
           protectionInfo.current.set(doc.id, {
@@ -1614,8 +1757,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
             duration: 6000,
           });
         }
+        // Standard-encrypted document: every edit path operates on decrypted
+        // bytes and cannot re-emit the original encryption, so capture how to
+        // re-protect it NOW, while the entered password is known. With a
+        // recipe registered, protectForDisk re-encrypts every save/download;
+        // without one (no password was typed — a restrictions-only file that
+        // opens with an empty password), the write paths instead ask for
+        // explicit consent before emitting an unprotected copy.
+        if (!wrapperPw && pdfDoc.isEncrypted()) {
+          encryptedAtOpen.current.add(doc.id);
+          const recipe = recipeForOpenedDoc({
+            password: pdfDoc.password,
+            ownerUnlocked: pdfDoc.isOwnerUnlocked(),
+            userPermissions: pdfDoc.getUserPermissions(),
+          });
+          if (recipe) {
+            protectionInfo.current.set(doc.id, recipe);
+            markProtected(doc.id, true);
+          }
+        }
         setDocs((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
         setActiveTabId(doc.id);
+        // In split view, show the newly opened document in the focused pane —
+        // panes render from panes[].docId, so without this the new doc becomes
+        // the active tab but is visible in neither pane (mirrors openRecent).
+        if (activePaneId) {
+          setPanes((prev) =>
+            prev.map((p) => (p.id === activePaneId ? { ...p, docId: doc.id } : p)),
+          );
+        }
         setDocVersion((v) => v + 1);
         resetTransient();
         setScreen("viewer");
@@ -1634,7 +1804,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             });
           } else {
             toast.info("This document is encrypted", {
-              description: "You hold full permissions on it.",
+              description: protectionInfo.current.has(doc.id)
+                ? "You hold full permissions on it. Saving keeps it password-protected."
+                : "You hold full permissions on it.",
               duration: 5000,
             });
           }
@@ -1684,7 +1856,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [resetTransient, refreshRecent, markProtected, requestPassword, noteAutosaveSkipped],
+    [resetTransient, refreshRecent, markProtected, requestPassword, noteAutosaveSkipped, activePaneId],
   );
 
   const openBytes = useCallback(
@@ -1886,22 +2058,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const closeTab = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const doc = docs.find((d) => d.id === id);
       if (!doc) {
         // Phantom entry: persisted as open but never loaded (e.g. a protected
         // doc whose password prompt was cancelled). Still let the user clear it
         // from the sidebar and drop any stale protection state.
         protectionInfo.current.delete(id);
+        encryptedAtOpen.current.delete(id);
         markProtected(id, false);
         docHandles.current.delete(id);
         void markDocClosed(id).then(refreshRecent);
         return;
       }
       if (docHasEdits(doc)) {
-        const ok = window.confirm(
-          `“${doc.name}” has unsaved edits. Close it anyway?`,
-        );
+        const ok = await requestConfirm({
+          title: "Unsaved edits",
+          message: `“${doc.name}” has unsaved edits. Close it anyway?`,
+          confirmLabel: "Close anyway",
+          tone: "danger",
+        });
         if (!ok) return;
       }
       doc.pdf.destroy().catch(() => {});
@@ -1929,10 +2105,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Drop the cleartext protection secret + its reactive flag; don't leave a
       // closed document's password resident for the rest of the session.
       protectionInfo.current.delete(id);
+      encryptedAtOpen.current.delete(id);
       markProtected(id, false);
       void markDocClosed(id).then(refreshRecent);
     },
-    [docs, activeTabId, resetTransient, refreshRecent, markProtected],
+    [docs, activeTabId, resetTransient, refreshRecent, markProtected, requestConfirm],
   );
 
   const closeDocument = useCallback(() => {
@@ -2024,7 +2201,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       let bytes = d.bytes;
-      if (docHasEdits(d)) {
+      // Bake only when OVERLAY edits exist — committed byte-level edits are
+      // already in d.bytes, and baking is read-only (must not bump revisions).
+      if (docHasOverlayEdits(d)) {
         bytes = await bakeAnnotations(d.bytes, d.annotations, d.formValues, d.fieldOps);
       }
       const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
@@ -2068,6 +2247,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       updateDoc(activeTabId, (d) => ({
         formValues: { ...d.formValues, [name]: value },
+        rev: bumpRevision(d.rev),
       }));
     },
     [activeTabId, updateDoc],
@@ -2084,10 +2264,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const merged = { ...existing, ...patch };
         // An op that changes nothing anymore can be dropped.
         const isNoop = !merged.newRect && !merged.deleted && !merged.newName;
+        // Dropping an op that was never stored changes nothing — don't dirty.
+        if (isNoop && !(base.key in d.fieldOps)) return {};
         const next = { ...d.fieldOps };
         if (isNoop) delete next[base.key];
         else next[base.key] = merged as ExistingFieldOp;
-        return { fieldOps: next };
+        return { fieldOps: next, rev: bumpRevision(d.rev) };
       });
     },
     [activeTabId, updateDoc],
@@ -2095,7 +2277,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const bakeToBytes = useCallback(async (): Promise<Uint8Array | null> => {
     if (!active) return null;
-    if (!docHasEdits(active)) return active.bytes;
+    // Byte-level edits are already committed to active.bytes — only overlay
+    // edits still need baking. Read-only: never bumps the revision.
+    if (!docHasOverlayEdits(active)) return active.bytes;
     return bakeAnnotations(
       active.bytes,
       active.annotations,
@@ -2119,7 +2303,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       try {
         let base = active.bytes;
-        if (docHasEdits(active)) {
+        if (docHasOverlayEdits(active)) {
           base = await bakeAnnotations(
             active.bytes,
             active.annotations,
@@ -2131,7 +2315,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const nextBytes = await op(base);
         const nextPdf = await loadPdf(nextBytes);
         destroyDocProxies(active, nextPdf);
-        updateDoc(id, {
+        updateDoc(id, (d) => ({
           bytes: nextBytes,
           pdf: nextPdf,
           annotations: {},
@@ -2140,7 +2324,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
-        });
+          // A committed byte-level edit: the doc no longer matches the file
+          // on disk even though the overlay maps were just cleared.
+          rev: bumpBytesRevision(d.rev),
+        }));
         setDocVersion((v) => v + 1);
         setSelected(null);
         persistWorking(id, active.name, nextBytes);
@@ -2226,9 +2413,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /**
    * Destructively apply every pending redaction box: PDFium strips the covered
-   * text/content from the page and paints a black box. Removes the boxes and
-   * swaps the base bytes onto the undo timeline (so it's still reversible via
-   * Ctrl+Z within the session, but the saved file no longer holds the content).
+   * content from the page, paints a black box, then reopens the saved bytes to
+   * verify nothing extractable remains (redactRegions throws otherwise —
+   * failing closed). Only after verification are the boxes removed and the
+   * base bytes swapped onto the undo timeline (still reversible via Ctrl+Z
+   * within the session, but the saved file no longer holds the content). On
+   * any failure the pending boxes are KEPT and the document is left unchanged.
    */
   const applyRedactions = useCallback(async () => {
     if (!active) return;
@@ -2240,17 +2430,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.info("Draw one or more redaction boxes first.");
       return;
     }
-    const ok = window.confirm(
-      `Permanently remove the content under ${boxes.length} redaction ${
-        boxes.length === 1 ? "box" : "boxes"
-      }? The text and images beneath will be deleted from the document — this can't be recovered from the saved file.`,
-    );
+    const ok = await requestConfirm({
+      title: `Apply ${boxes.length} redaction ${boxes.length === 1 ? "box" : "boxes"}?`,
+      message:
+        "Permanently deleted from the document: text under each box (including form-field text), any image a box touches (the whole image is removed), and vector graphics fully inside a box. A black box is painted over each area, and the result is verified before it is kept.\n\n" +
+        "Not removed: comments/annotations and document metadata — review those separately if they may contain sensitive content.",
+      confirmLabel: "Apply redactions",
+      tone: "danger",
+    });
     if (!ok) return;
     try {
       const { applyRedactions: apply } = await import("./lib/pdftools");
       const nextBytes = await apply(active.bytes, active.annotations);
+      // Verification passed inside redactRegions — only now drop the applied
+      // redaction boxes, keeping every other annotation.
       const nextPdf = await loadPdf(nextBytes);
-      // Drop the now-applied redaction boxes, keep every other annotation.
       const nextAnns: AnnotationMap = {};
       for (const [page, list] of Object.entries(active.annotations)) {
         const kept = list.filter((a) => a.kind !== "redact");
@@ -2262,14 +2456,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSelected(null);
       persistWorking(id, active.name, nextBytes);
       toast.success(
-        `Redacted ${boxes.length} ${boxes.length === 1 ? "region" : "regions"}`,
+        `Redacted ${boxes.length} ${boxes.length === 1 ? "region" : "regions"} — verified: no extractable text or images remain in the redacted areas`,
       );
     } catch (err) {
+      // Fail closed: the document was not changed and the boxes stay pending.
       toast.error(
-        `Redaction failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `${err instanceof Error ? err.message : "Redaction failed: unknown error"}. The document was NOT changed and your redaction boxes were kept.`,
       );
     }
-  }, [active, updateDoc, persistWorking]);
+  }, [active, updateDoc, persistWorking, requestConfirm]);
 
   /**
    * True in-place text edit: rewrite the content-stream text object via PDFium,
@@ -2333,35 +2528,86 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /**
    * Apply a document's protection recipe to `bytes` before they touch disk or
    * IndexedDB. Standard-encrypt re-applies AES-256; PickPDF-lock re-wraps.
-   * Returns the input unchanged when the doc has no recipe. This is the single
-   * choke point that keeps every write/persist path from leaking a decrypted
-   * copy of a protected document.
+   * Returns the input unchanged when the doc has no recipe AND wasn't
+   * encrypted when it was opened. This is the single choke point that keeps
+   * every write/persist path from leaking a decrypted copy of a protected
+   * document — and it never lets an originally-encrypted document be written
+   * unprotected without explicit consent (throws ProtectionDeclinedError when
+   * the user says no).
    */
   const protectForDisk = useCallback(
     async (docId: string, bytes: Uint8Array, name: string): Promise<Uint8Array> => {
       const recipe = protectionInfo.current.get(docId);
-      if (!recipe) return bytes;
-      if (recipe.kind === "encrypt") {
-        const { encryptPdf } = await import("./lib/pdfium");
-        return encryptPdf(bytes, {
-          userPassword: recipe.userPassword,
-          ownerPassword: recipe.ownerPassword,
-          permissions: recipe.permissions,
-        });
+      if (recipe?.kind === "encrypt") {
+        try {
+          const { encryptPdf } = await import("./lib/pdfium");
+          return await encryptPdf(bytes, {
+            userPassword: recipe.userPassword,
+            ownerPassword: recipe.ownerPassword,
+            permissions: recipe.permissions,
+          });
+        } catch (err) {
+          // Re-encryption failed — never fall through to plain bytes quietly;
+          // that would strip the document's protection behind the user's back.
+          const ok = await requestConfirm({
+            title: "Protection can't be re-applied",
+            message: `“${name}” is password-protected, but re-applying its protection failed (${
+              err instanceof Error ? err.message : "unknown error"
+            }). Save an UNPROTECTED copy instead?`,
+            confirmLabel: "Save unprotected",
+            tone: "danger",
+          });
+          if (!ok) throw new ProtectionDeclinedError();
+          return bytes;
+        }
       }
-      const { wrapProtected } = await import("./lib/protected");
-      return wrapProtected(bytes, recipe.password, name);
+      if (recipe?.kind === "wrapper") {
+        const { wrapProtected } = await import("./lib/protected");
+        return wrapProtected(bytes, recipe.password, name);
+      }
+      // No recipe, but the document was encrypted when it was opened — e.g. a
+      // restrictions-only file whose owner password was never entered, so
+      // there is nothing to re-encrypt with. Writing the (decrypted) working
+      // bytes would silently strip that protection: ask first.
+      if (encryptedAtOpen.current.has(docId)) {
+        const ok = await requestConfirm({
+          title: "Saving removes protection",
+          message: `“${name}” was password-protected when it was opened, and PickPDF can't re-apply that protection. Saving now will remove the protection from the saved file. Continue?`,
+          confirmLabel: "Save unprotected",
+          tone: "danger",
+        });
+        if (!ok) throw new ProtectionDeclinedError();
+      }
+      return bytes;
     },
-    [],
+    [requestConfirm],
   );
 
   const downloadCurrent = useCallback(async () => {
     const bytes = await bakeToBytes();
     if (!bytes || !active) return;
     const base = active.name.replace(/\.pdf$/i, "");
-    const out = await protectForDisk(active.id, bytes, active.name);
+    // Unedited bytes of a still-encrypted document ARE the protected original
+    // — write them as-is (re-encrypting already-encrypted bytes would fail).
+    const stillEncrypted = bytes === active.bytes && active.pdf.isEncrypted();
+    let out: Uint8Array;
+    try {
+      out = stillEncrypted
+        ? bytes
+        : await protectForDisk(active.id, bytes, active.name);
+    } catch (err) {
+      if (err instanceof ProtectionDeclinedError) {
+        toast.info("Download cancelled — no file was written.");
+        return;
+      }
+      throw err;
+    }
     downloadBytes(out, `${base}-edited.pdf`);
-    toast.success(out === bytes ? "PDF downloaded" : "Protected PDF downloaded");
+    toast.success(
+      out !== bytes || stillEncrypted
+        ? "Protected PDF downloaded"
+        : "PDF downloaded",
+    );
   }, [bakeToBytes, active, protectForDisk]);
 
   /**
@@ -2378,8 +2624,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateDoc(active.id, { name: next });
       // For a protected doc, never rewrite its IndexedDB record with the plain
       // in-app bytes — leave the persisted protected form (and its old name)
-      // until the next save re-writes it protected.
-      if (protectionInfo.current.has(active.id)) {
+      // until the next save re-writes it protected. encryptedAtOpen covers
+      // recipe-less protected docs (restrictions-only files) the same way.
+      if (
+        protectionInfo.current.has(active.id) ||
+        encryptedAtOpen.current.has(active.id)
+      ) {
         void refreshRecent();
       } else {
         void persistDoc({
@@ -2407,14 +2657,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const saveCurrent = useCallback(async () => {
     if (!active) return;
     const handle = docHandles.current.get(active.id);
+    // Snapshot the revision the baked bytes will represent BEFORE any async
+    // work: edits landing while the write is in flight must keep the doc dirty.
+    const savedAt = {
+      revision: active.rev.revision,
+      bytesRevision: active.rev.bytesRevision,
+    };
     try {
       const baked = await bakeToBytes();
       if (!baked) return;
       // Protected docs go to disk re-protected; the in-app copy commits to the
       // plain baked bytes below (it stays editable, exactly like the protect
       // flow). This is why saving never strips a document's protection.
-      const out = await protectForDisk(active.id, baked, active.name);
-      const locked = out !== baked ? " (protected)" : "";
+      // Unedited bytes of a still-encrypted document ARE the protected
+      // original — write them as-is (re-encrypting encrypted bytes fails).
+      const stillEncrypted = baked === active.bytes && active.pdf.isEncrypted();
+      const out = stillEncrypted
+        ? baked
+        : await protectForDisk(active.id, baked, active.name);
+      const locked = out !== baked || stillEncrypted ? " (protected)" : "";
       if (handle) {
         if (handle.requestPermission) {
           const perm = await handle.requestPermission({ mode: "readwrite" });
@@ -2425,14 +2686,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await writable.close();
         toast.success(`Saved to ${active.name}${locked}`);
       } else {
-        downloadBytes(out, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
-        toast.success(`PDF saved (downloaded)${locked}`);
+        // No handle yet — prefer acquiring one via the save-file picker so the
+        // write can be AWAITED before the doc is marked saved (and so future
+        // saves write straight to the file).
+        const picker = (
+          window as unknown as {
+            showSaveFilePicker?: (opts: unknown) => Promise<FileSystemFileHandle>;
+          }
+        ).showSaveFilePicker;
+        let newHandle: FileSystemFileHandle | null = null;
+        if (picker) {
+          try {
+            newHandle = await picker.call(window, {
+              suggestedName: active.name,
+              types: [
+                {
+                  description: "PDF document",
+                  accept: { "application/pdf": [".pdf"] },
+                },
+              ],
+            });
+          } catch (err) {
+            // The user cancelled the picker: abort the save entirely — the doc
+            // stays dirty and nothing is downloaded behind their back.
+            if ((err as DOMException)?.name === "AbortError") return;
+            // Any other picker failure: fall back to the anchor download.
+          }
+        }
+        if (newHandle) {
+          const writable = await newHandle.createWritable();
+          await writable.write(out as unknown as BufferSource);
+          await writable.close();
+          docHandles.current.set(active.id, newHandle);
+          toast.success(`Saved to ${newHandle.name || active.name}${locked}`);
+        } else {
+          // Anchor-download fallback (no File System Access API): the browser
+          // gives NO completion signal for an <a download> click, so there is
+          // nothing to await — the doc is marked saved optimistically below.
+          downloadBytes(out, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
+          toast.success(`PDF saved (downloaded)${locked}`);
+        }
       }
       // Commit in-app state to the saved bytes.
       if (docHasEdits(active)) {
         const nextPdf = await loadPdf(baked);
         destroyDocProxies(active, nextPdf);
-        updateDoc(active.id, {
+        updateDoc(active.id, (d) => ({
           bytes: baked,
           pdf: nextPdf,
           annotations: {},
@@ -2441,7 +2740,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
-        });
+          rev: markSaved(d.rev, savedAt),
+        }));
         setDocVersion((v) => v + 1);
         setSelected(null);
       }
@@ -2457,6 +2757,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Saving ends the editing session — no separate "Done" needed.
       setEditModeState(false);
     } catch (err) {
+      // The user declined writing an unprotected copy — abort quietly, and
+      // certainly don't "fall back" to downloading the same stripped bytes.
+      if (err instanceof ProtectionDeclinedError) {
+        toast.info("Save cancelled — no file was written.");
+        return;
+      }
       toast.error(
         `Save failed: ${err instanceof Error ? err.message : "error"} — downloading a copy instead.`,
       );
@@ -2500,6 +2806,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!active) return;
       const id = active.id;
       const handle = docHandles.current.get(id);
+      // Same capture-before-bake rule as saveCurrent: the protected write
+      // represents THIS revision, not whatever lands during the async work.
+      const savedAt = {
+        revision: active.rev.revision,
+        bytesRevision: active.rev.bytesRevision,
+      };
       try {
         const baked = await bakeToBytes();
         if (!baked) return;
@@ -2556,7 +2868,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (docHasEdits(active)) {
           const nextPdf = await loadPdf(baked);
           destroyDocProxies(active, nextPdf);
-          updateDoc(id, {
+          updateDoc(id, (d) => ({
             bytes: baked,
             pdf: nextPdf,
             annotations: {},
@@ -2565,7 +2877,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             historyIndex: 0,
             formValues: {},
             fieldOps: {},
-          });
+            // The protected file on disk holds this same content — a save.
+            rev: markSaved(d.rev, savedAt),
+          }));
           setDocVersion((v) => v + 1);
           setSelected(null);
         }
@@ -2603,6 +2917,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // opened PickPDF wrappers (which decrypt to plain on open).
     if (protectionInfo.current.has(id) && !active.pdf.isEncrypted()) {
       protectionInfo.current.delete(id);
+      // Removing protection is the user's explicit choice — plain writes no
+      // longer need the "was encrypted at open" consent gate.
+      encryptedAtOpen.current.delete(id);
       markProtected(id, false);
       toast.success("Protection removed — save to write the unlocked file");
       return;
@@ -2633,6 +2950,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       protectionInfo.current.delete(id);
+      encryptedAtOpen.current.delete(id);
       markProtected(id, false);
       toast.success("Protection removed — save to write the unlocked file");
     } catch (err) {
@@ -2665,6 +2983,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!active) return false;
       const ok = active.pdf.unlockOwner(ownerPassword);
       if (ok) {
+        // The REAL owner password is now proven — capture/upgrade the
+        // re-encryption recipe so saves reproduce the original policy exactly
+        // (same owner password, same permissions). This is also the moment a
+        // restrictions-only file (opened without a prompt, hence recipe-less)
+        // finally gets a recipe instead of the save-time consent fallback.
+        if (encryptedAtOpen.current.has(active.id)) {
+          const prev = protectionInfo.current.get(active.id);
+          protectionInfo.current.set(
+            active.id,
+            recipeAfterOwnerUnlock(
+              prev?.kind === "encrypt" ? prev : undefined,
+              active.pdf.password,
+              ownerPassword,
+              active.pdf.getUserPermissions(),
+            ),
+          );
+          markProtected(active.id, true);
+        }
         setPermTick((t) => t + 1);
         toast.success("Permissions unlocked — full access granted");
       } else {
@@ -2672,7 +3008,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       return ok;
     },
-    [active],
+    [active, markProtected],
   );
 
   /** Whether the document's permissions allow arming a given tool. */
@@ -2759,9 +3095,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         toast.error("No text could be recognized in this document.", { id: toastId });
         return;
       }
-      // Bake any pending edits first, then add the invisible OCR text layer.
+      // Bake any pending overlay edits first, then add the invisible OCR text
+      // layer (committed byte edits are already in active.bytes).
       let base = active.bytes;
-      if (docHasEdits(active)) {
+      if (docHasOverlayEdits(active)) {
         base = await bakeAnnotations(
           active.bytes,
           active.annotations,
@@ -2772,7 +3109,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const next = await addOcrTextLayer(base, ocr);
       const nextPdf = await loadPdf(next);
       destroyDocProxies(active, nextPdf);
-      updateDoc(id, {
+      updateDoc(id, (d) => ({
         bytes: next,
         pdf: nextPdf,
         annotations: {},
@@ -2781,7 +3118,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         historyIndex: 0,
         formValues: {},
         fieldOps: {},
-      });
+        // OCR rewrites the document in memory only — it stays unsaved.
+        rev: bumpBytesRevision(d.rev),
+      }));
       setDocVersion((v) => v + 1);
       setSelected(null);
       persistWorking(id, active.name, next);
@@ -3083,7 +3422,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
               nextAnnotations,
               pdfChanged && nextPdf ? { bytes: nextBytes, pdf: nextPdf } : undefined,
             )
-          : {}),
+          : // Form-value-only replacements skip pushHistory (no undo step) but
+            // are still mutations — bump the revision explicitly.
+            formValuesChanged
+            ? { rev: bumpRevision(d.rev) }
+            : {}),
         ...(formValuesChanged ? { formValues: nextFormValues } : {}),
       }));
       if (pdfChanged) {
@@ -3256,6 +3599,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSecurityModalOpen,
     passwordPrompt,
     answerPassword,
+    confirmPrompt,
+    requestConfirm,
+    answerConfirm,
     downloadCurrent,
     printCurrent,
     printWith,
@@ -3316,6 +3662,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLetterSpacing,
     annotations,
     hasAnnotations,
+    hasOverlayEdits,
+    hasByteEdits,
     addAnnotation,
     addAnnotations: addAnnotationsMany,
     updateAnnotation,

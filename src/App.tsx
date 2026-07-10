@@ -274,22 +274,37 @@ function DocActions() {
       >
         <Printer className="h-4 w-4" />
       </Button>
-      {app.hasAnnotations && (
+      {app.hasOverlayEdits && (
         <Button
           variant="ghost"
           size="sm"
           className="h-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
           onClick={() => {
-            toast("Discard all unsaved edits?", {
-              action: {
-                label: "Discard",
-                onClick: () => {
-                  app.clearAnnotations();
-                  app.setEditMode(false);
-                  toast.success("Edits discarded");
+            // Discard removes only annotation/form edits. Edits already
+            // committed into the document bytes (text edits, page ops, OCR,
+            // applied redactions) can't be discarded — the doc stays dirty.
+            toast(
+              app.hasByteEdits
+                ? "Discard annotation and form edits?"
+                : "Discard all unsaved edits?",
+              {
+                description: app.hasByteEdits
+                  ? "Edits already applied to the document itself (text, pages, OCR, redactions) are kept and remain unsaved."
+                  : undefined,
+                action: {
+                  label: "Discard",
+                  onClick: () => {
+                    app.clearAnnotations();
+                    app.setEditMode(false);
+                    toast.success(
+                      app.hasByteEdits
+                        ? "Annotation and form edits discarded"
+                        : "Edits discarded",
+                    );
+                  },
                 },
               },
-            });
+            );
           }}
         >
           Discard
