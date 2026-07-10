@@ -27,16 +27,20 @@ import type {
   AnnotationMap,
   ExistingFieldOp,
   FormFieldAnnotation,
+  InkAnnotation,
   LinkTarget,
   NoteAnnotation,
+  ShapeAnnotation,
   TextAnnotation,
 } from "../types";
 import {
+  displayPointToPdf,
   displayRectToPdf,
   displaySize,
   displayToPdfMatrix,
   isIdentityMatrix,
   pageGeometry,
+  type PageGeometry,
 } from "./coords";
 import { hasLinkTarget, linkHref } from "./linktarget";
 import type { OcrPage } from "./ocr";
@@ -894,7 +898,8 @@ function addNoteAnnotation(
     Contents: PDFHexString.fromText(ann.text),
     Name: "Comment", // speech-bubble icon
     C: [c.r, c.g, c.b],
-    T: PDFHexString.fromText("PickPDF"),
+    // Imported comments keep their original author; our own say PickPDF.
+    T: PDFHexString.fromText(ann.author ?? "PickPDF"),
     M: PDFString.fromDate(new Date()),
     // Print | NoZoom | NoRotate — the standard sticky-note flags.
     F: 4 + 8 + 16,
@@ -963,6 +968,265 @@ function addLinkOverRect(
   const annots = existing ?? ctx.obj([]);
   if (!existing) page.node.set(PDFName.of("Annots"), annots);
   annots.push(ref);
+  return true;
+}
+
+// --- Native markup annotations (round-trip instead of flattening) ----------
+//
+// Highlights, text markup, ink and shapes save as REAL annotation objects
+// (with appearance streams so every viewer paints them identically), not as
+// page content — so reopening the file, in PickPDF or Acrobat, yields
+// editable annotations again. Whiteout, marks, images and redactions stay
+// flattened on purpose: those are meant to be permanent page content.
+
+/** Push an annotation dict onto the page's /Annots. */
+function pushAnnot(doc: PDFDocument, pageIndex: number, dict: PDFDict): void {
+  const page = doc.getPage(pageIndex);
+  const ref = doc.context.register(dict);
+  const existing = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+  const annots = existing ?? doc.context.obj([]);
+  if (!existing) page.node.set(PDFName.of("Annots"), annots);
+  annots.push(ref);
+}
+
+/** Register an appearance form XObject over a local y-up [0,0,w,h] frame. */
+function apForm(
+  doc: PDFDocument,
+  ops: string,
+  w: number,
+  h: number,
+  resources?: Record<string, unknown>,
+): PDFRef {
+  const dict = {
+    Type: "XObject",
+    Subtype: "Form",
+    BBox: [0, 0, w, h],
+    ...(resources ? { Resources: resources } : {}),
+  } as Parameters<PDFDocument["context"]["stream"]>[1];
+  return doc.context.register(doc.context.stream(ops, dict));
+}
+
+const fmt = (n: number) => +n.toFixed(2);
+
+/**
+ * Write `ann` as a native annotation with an appearance stream. Handles
+ * highlight / markup / ink / rect / ellipse / line / arrow on annotations
+ * without free rotation, on pages without /Rotate. Returns false when this
+ * combination can't go native — the caller falls back to flattening.
+ */
+function addNativeMarkupAnnotation(
+  doc: PDFDocument,
+  pageIndex: number,
+  ann: Annotation,
+  geom: PageGeometry,
+): boolean {
+  if (geom.rotation !== 0 || ann.rotation) return false;
+  const ctx = doc.context;
+
+  // Stroked geometry (line caps, arrow heads, squiggle crests) can poke past
+  // the tight box; the appearance is clipped to its BBox, so both the /Rect
+  // and the local frame get padding, and local coords shift by `pad`.
+  const kindPad = (): number => {
+    if (ann.kind === "arrow") {
+      const sw = (ann as ShapeAnnotation).strokeWidth || 2;
+      return Math.max(6, sw * 3.5) + sw;
+    }
+    if (ann.kind === "ink" || ann.kind === "line") {
+      return ((ann as ShapeAnnotation | InkAnnotation).strokeWidth || 2) + 1;
+    }
+    if (ann.kind === "rect" || ann.kind === "ellipse") {
+      return ((ann as ShapeAnnotation).strokeWidth || 2) / 2 + 1;
+    }
+    return 1;
+  };
+  const pad = kindPad();
+  const rp = displayRectToPdf(
+    { x: ann.x - pad, y: ann.y - pad, w: ann.w + 2 * pad, h: ann.h + 2 * pad },
+    geom,
+  );
+  // The un-padded box in page space — quad points / endpoints reference it.
+  const rb = displayRectToPdf(ann, geom);
+  const w = rp.w;
+  const h = rp.h;
+  // Display-space point (absolute) → local y-up frame of the padded box.
+  const lx = (x: number) => fmt(x - ann.x + pad);
+  const ly = (y: number) => fmt(ann.h + pad - (y - ann.y));
+
+  const dict: Record<string, unknown> = {
+    Type: "Annot",
+    Subtype: "",
+    Rect: [fmt(rp.x), fmt(rp.y), fmt(rp.x + w), fmt(rp.y + h)],
+    F: 4, // Print
+    M: PDFString.fromDate(new Date()),
+    T: PDFHexString.fromText("PickPDF"),
+  };
+  let ops = "";
+  let resources: Record<string, unknown> | undefined;
+
+  switch (ann.kind) {
+    case "highlight": {
+      const c = hexToRgb01(ann.color);
+      dict.Subtype = "Highlight";
+      dict.QuadPoints = [
+        // TL TR BL BR — the order every writer uses.
+        rb.x, rb.y + rb.h, rb.x + rb.w, rb.y + rb.h,
+        rb.x, rb.y, rb.x + rb.w, rb.y,
+      ].map(fmt);
+      dict.C = [c.r, c.g, c.b];
+      dict.CA = 0.35;
+      resources = {
+        ExtGState: { GS: { Type: "ExtGState", ca: 0.35, BM: "Multiply" } },
+      };
+      ops =
+        `/GS gs ${c.r} ${c.g} ${c.b} rg ` +
+        `${lx(ann.x)} ${ly(ann.y + ann.h)} ${fmt(ann.w)} ${fmt(ann.h)} re f`;
+      break;
+    }
+    case "markup": {
+      const c = hexToRgb01(ann.color);
+      dict.Subtype =
+        ann.style === "underline"
+          ? "Underline"
+          : ann.style === "strikeout"
+            ? "StrikeOut"
+            : "Squiggly";
+      dict.QuadPoints = [
+        rb.x, rb.y + rb.h, rb.x + rb.w, rb.y + rb.h,
+        rb.x, rb.y, rb.x + rb.w, rb.y,
+      ].map(fmt);
+      dict.C = [c.r, c.g, c.b];
+      const stroke = (t: number) => `${c.r} ${c.g} ${c.b} RG ${fmt(t)} w 1 J `;
+      if (ann.style === "squiggly") {
+        // Same zig-zag the flatten path draws (drawAnnotation "markup").
+        const yBase = ann.y + ann.h * 0.95;
+        const amp = Math.max(1.2, ann.h * 0.14);
+        const step = Math.max(2.4, ann.h * 0.22);
+        ops = stroke(Math.max(0.75, ann.h * 0.06)) + `${lx(ann.x)} ${ly(yBase)} m `;
+        let up = true;
+        for (let x = step; x <= ann.w + step / 2; x += step) {
+          const px = ann.x + Math.min(x, ann.w);
+          ops += `${lx(px)} ${ly(up ? yBase - amp : yBase)} l `;
+          up = !up;
+        }
+        ops += "S";
+      } else {
+        const yLine = ann.y + ann.h * (ann.style === "underline" ? 0.92 : 0.55);
+        const t =
+          ann.style === "underline"
+            ? Math.max(0.75, ann.h * 0.06)
+            : Math.max(1, ann.h * 0.08);
+        ops =
+          stroke(t) +
+          `${lx(ann.x)} ${ly(yLine)} m ${lx(ann.x + ann.w)} ${ly(yLine)} l S`;
+      }
+      break;
+    }
+    case "ink": {
+      const c = hexToRgb01(ann.color);
+      if (ann.points.length < 2) return false;
+      dict.Subtype = "Ink";
+      dict.C = [c.r, c.g, c.b];
+      dict.BS = { Type: "Border", W: ann.strokeWidth, S: "S" };
+      const abs = ann.points.map((p) => ({ x: ann.x + p.x, y: ann.y + p.y }));
+      dict.InkList = [
+        abs.flatMap((p) => {
+          const q = displayPointToPdf(p, geom);
+          return [fmt(q.x), fmt(q.y)];
+        }),
+      ];
+      ops =
+        `${c.r} ${c.g} ${c.b} RG ${fmt(ann.strokeWidth)} w 1 J 1 j ` +
+        abs
+          .map((p, i) => `${lx(p.x)} ${ly(p.y)} ${i === 0 ? "m" : "l"}`)
+          .join(" ") +
+        " S";
+      break;
+    }
+    case "rect":
+    case "ellipse": {
+      const c = hexToRgb01(ann.color);
+      const f = ann.fill ? hexToRgb01(ann.fill) : null;
+      dict.Subtype = ann.kind === "rect" ? "Square" : "Circle";
+      dict.C = [c.r, c.g, c.b];
+      if (f) dict.IC = [f.r, f.g, f.b];
+      dict.BS = { Type: "Border", W: ann.strokeWidth, S: "S" };
+      // /RD records how much the padded /Rect exceeds the actual shape, so a
+      // re-import (ours or Acrobat's) recovers the exact box instead of
+      // growing by the padding on every save→open cycle.
+      dict.RD = [pad, pad, pad, pad].map(fmt);
+      const paint =
+        f && ann.strokeWidth > 0 ? "B" : f ? "f" : ann.strokeWidth > 0 ? "S" : "n";
+      const pre =
+        `${c.r} ${c.g} ${c.b} RG ` +
+        (f ? `${f.r} ${f.g} ${f.b} rg ` : "") +
+        `${fmt(ann.strokeWidth)} w `;
+      if (ann.kind === "rect") {
+        ops =
+          pre +
+          `${lx(ann.x)} ${ly(ann.y + ann.h)} ${fmt(ann.w)} ${fmt(ann.h)} re ${paint}`;
+      } else {
+        // Four-Bézier ellipse in the local frame.
+        const k = 0.5523;
+        const cx = ann.x + ann.w / 2;
+        const cy = ann.y + ann.h / 2;
+        const rx = ann.w / 2;
+        const ry = ann.h / 2;
+        ops =
+          pre +
+          `${lx(cx + rx)} ${ly(cy)} m ` +
+          `${lx(cx + rx)} ${ly(cy - ry * k)} ${lx(cx + rx * k)} ${ly(cy - ry)} ${lx(cx)} ${ly(cy - ry)} c ` +
+          `${lx(cx - rx * k)} ${ly(cy - ry)} ${lx(cx - rx)} ${ly(cy - ry * k)} ${lx(cx - rx)} ${ly(cy)} c ` +
+          `${lx(cx - rx)} ${ly(cy + ry * k)} ${lx(cx - rx * k)} ${ly(cy + ry)} ${lx(cx)} ${ly(cy + ry)} c ` +
+          `${lx(cx + rx * k)} ${ly(cy + ry)} ${lx(cx + rx)} ${ly(cy + ry * k)} ${lx(cx + rx)} ${ly(cy)} c ` +
+          paint;
+      }
+      break;
+    }
+    case "line":
+    case "arrow": {
+      const c = hexToRgb01(ann.color);
+      dict.Subtype = "Line";
+      dict.C = [c.r, c.g, c.b];
+      dict.BS = { Type: "Border", W: ann.strokeWidth, S: "S" };
+      const tail =
+        ann.kind === "arrow"
+          ? { x: ann.x + (ann.ax ?? 0) * ann.w, y: ann.y + (ann.ay ?? 0) * ann.h }
+          : { x: ann.x, y: ann.down ? ann.y : ann.y + ann.h };
+      const head =
+        ann.kind === "arrow"
+          ? { x: ann.x + (ann.bx ?? 1) * ann.w, y: ann.y + (ann.by ?? 1) * ann.h }
+          : { x: ann.x + ann.w, y: ann.down ? ann.y + ann.h : ann.y };
+      const tp = displayPointToPdf(tail, geom);
+      const hp = displayPointToPdf(head, geom);
+      dict.L = [fmt(tp.x), fmt(tp.y), fmt(hp.x), fmt(hp.y)];
+      const stroke = `${c.r} ${c.g} ${c.b} RG ${fmt(ann.strokeWidth)} w 1 J `;
+      ops = stroke + `${lx(tail.x)} ${ly(tail.y)} m ${lx(head.x)} ${ly(head.y)} l S`;
+      if (ann.kind === "arrow") {
+        dict.LE = ["None", "OpenArrow"];
+        const angle = Math.atan2(head.y - tail.y, head.x - tail.x);
+        const headLen = Math.max(6, ann.strokeWidth * 3.5);
+        const spread = Math.PI / 7;
+        const wing = (sign: 1 | -1) => ({
+          x: head.x - headLen * Math.cos(angle + sign * spread),
+          y: head.y - headLen * Math.sin(angle + sign * spread),
+        });
+        const w1 = wing(1);
+        const w2 = wing(-1);
+        ops +=
+          ` ${lx(w1.x)} ${ly(w1.y)} m ${lx(head.x)} ${ly(head.y)} l S` +
+          ` ${lx(w2.x)} ${ly(w2.y)} m ${lx(head.x)} ${ly(head.y)} l S`;
+      }
+      break;
+    }
+    default:
+      return false;
+  }
+
+  const annotDict = ctx.obj({
+    ...dict,
+    AP: { N: apForm(doc, ops, w, h, resources) },
+  }) as PDFDict;
+  pushAnnot(doc, pageIndex, annotDict);
   return true;
 }
 
@@ -1068,6 +1332,23 @@ export async function bakeAnnotations(
         if (ann.kind === "link") {
           // Native /Link annotation (URI action or internal page destination).
           addLinkOverRect(doc, pageIndex, ann, displayRectToPdf(ann, geom));
+          continue;
+        }
+        // Round-trip kinds: highlight / markup / ink / shapes save as REAL
+        // annotation objects with appearance streams, so reopening the file —
+        // in PickPDF or another editor — yields editable annotations instead
+        // of flattened pixels. Rotated pages/annotations fall back to the
+        // legacy flatten below (returns false).
+        if (
+          (ann.kind === "highlight" ||
+            ann.kind === "markup" ||
+            ann.kind === "ink" ||
+            ann.kind === "rect" ||
+            ann.kind === "ellipse" ||
+            ann.kind === "line" ||
+            ann.kind === "arrow") &&
+          addNativeMarkupAnnotation(doc, pageIndex, ann, geom)
+        ) {
           continue;
         }
         // Redaction is applied destructively above (PDFium), not drawn as an

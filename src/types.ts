@@ -134,6 +134,9 @@ export interface NoteAnnotation extends BaseAnnotation {
   kind: "note";
   text: string;
   color: string;
+  /** Original author of an imported comment (written back as /T on save;
+   *  our own notes omit it and bake as "PickPDF"). */
+  author?: string;
 }
 
 export interface WhiteoutAnnotation extends BaseAnnotation {
