@@ -18,6 +18,16 @@ export interface InlineEditRun {
   fontName: string;
 }
 
+/** Paragraph geometry captured at click time so a commit can reflow. */
+export interface ReflowMeta {
+  /** Per visual line, top→bottom: its runs and baseline origin. */
+  lines: { objectIndexes: number[]; originX: number; originY: number }[];
+  /** Paragraph column width in points. */
+  width: number;
+  /** Baseline-to-baseline distance in points (positive, downward). */
+  leading: number;
+}
+
 export interface InlineEdit {
   /** All runs of the clicked visual line, left to right. */
   runs: InlineEditRun[];
@@ -50,6 +60,12 @@ export interface InlineEdit {
   fontChars: Record<string, string>;
   /** Same-family runs in other styles: styleKey() -> objectIndex. */
   siblings: Partial<Record<string, number>>;
+  /**
+   * Present when the selection can reflow on commit: paragraph/block scope
+   * with one face and size across every run. Absent = line breaks are fixed
+   * (line scope, or mixed styles reflow would destroy).
+   */
+  reflow?: ReflowMeta;
 }
 
 /** Key for a bold/italic combination ("r", "b", "i", "bi"). */
