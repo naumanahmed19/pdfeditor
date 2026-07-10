@@ -1,9 +1,16 @@
 /** IndexedDB persistence for open tabs and recent files. */
 
+import type { AnnotationMap } from "../types";
+
 export interface StoredDoc {
   id: string;
   name: string;
   bytes: Uint8Array;
+  /** Overlay annotations (incl. ones imported out of the PDF's own /Annots —
+   *  for those the stored `bytes` are the stripped version, so losing this
+   *  map would lose the document's own markup). Never stored for protected
+   *  docs: their bytes stay in the protected form and re-import on unlock. */
+  annotations?: AnnotationMap;
   lastOpened: number;
   open: boolean;
 }
