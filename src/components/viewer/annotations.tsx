@@ -30,6 +30,7 @@ import {
   FieldProperties,
   fieldWidgetCss,
 } from "./form";
+import { SelectionAlignBar } from "./AlignTools";
 import type {
   Annotation,
   LinkAnnotation,
@@ -553,7 +554,7 @@ export function AnnotationLayer({
         />
       ))}
 
-      {/* alignment guides while a field snaps to its neighbors */}
+      {/* alignment guides while a dragged annotation snaps to its neighbors */}
       {app.snapGuides?.page === pageIndex && (
         <>
           {app.snapGuides.v.map((x, i) => (
@@ -730,7 +731,6 @@ function AnnotationItem({
   const previewing =
     ann.kind === "formfield" && app.formBuilder && app.formPreview;
   const isMulti =
-    ann.kind === "formfield" &&
     app.multiSelected?.page === pageIndex &&
     app.multiSelected.ids.includes(ann.id) &&
     app.multiSelected.ids.length > 1;
@@ -853,8 +853,8 @@ function AnnotationItem({
     // Live preview: fields act as real inputs, not draggable designer boxes.
     if (previewing) return;
     if (app.tool !== "select") return;
-    // Shift-click builds a multi-selection of form fields.
-    if (ann.kind === "formfield" && e.shiftKey) {
+    // Shift-click builds a multi-selection (any annotation kind).
+    if (e.shiftKey) {
       e.stopPropagation();
       e.preventDefault();
       app.toggleMultiSelected(pageIndex, ann.id);
@@ -887,11 +887,10 @@ function AnnotationItem({
         h: editing && editSize ? editSize.h : ann.h,
       },
     };
-    // Form-builder aids: snap candidates on this page, and (when the pressed
-    // field is part of a multi-selection) the ids that drag along with it.
+    // Alignment aids: snap candidates on this page, and (when the pressed
+    // annotation is part of a multi-selection) the ids that drag along with it.
     const isField = ann.kind === "formfield";
     const groupIds =
-      isField &&
       mode === "move" &&
       app.multiSelected &&
       app.multiSelected.page === pageIndex &&
@@ -899,12 +898,11 @@ function AnnotationItem({
       app.multiSelected.ids.length > 1
         ? app.multiSelected.ids
         : null;
-    // Text blocks snap to other annotations (their edges/centres and the page
-    // centre) so they line up easily; form fields keep their existing
-    // form-builder-gated snapping. Alt suspends snapping for fine positioning.
-    const snapText = ann.kind === "text";
+    // Every annotation snaps to its neighbors' edges/centres and the page
+    // centre; form fields keep their form-builder-gated variant (fields-only
+    // candidates + grid). Alt suspends snapping for fine positioning.
     const snapField = isField && app.formBuilder;
-    const canSnap = snapText || snapField;
+    const canSnap = !isField || snapField;
     const snapOthers = !canSnap
       ? []
       : (app.annotations[pageIndex] ?? []).filter(
@@ -915,7 +913,7 @@ function AnnotationItem({
             (snapField ? a.kind === "formfield" : true),
         );
     const snapOpts = {
-      snap: snapText || (snapField && app.snapEnabled),
+      snap: app.snapEnabled,
       grid: snapField && app.gridEnabled,
       gridSize: app.gridSize,
       threshold: 6 / scale,
@@ -1001,7 +999,7 @@ function AnnotationItem({
           app.updateAnnotation(pageIndex, { ...ann, ...finalBox });
         }
       }
-      if (isField) app.setGroupDrag(null);
+      if (groupIds) app.setGroupDrag(null);
       if (canSnap) app.setSnapGuides(null);
       setLive(null);
       dragRef.current = null;
@@ -1482,8 +1480,9 @@ function AnnotationItem({
       ref={wrapRef}
       style={style}
       className={cn(
-        ann.kind !== "text" &&
-          (isSelected || isMulti) &&
+        // Text boxes draw their own selection chrome; in a multi-selection the
+        // non-primary text members still need the membership ring.
+        (ann.kind !== "text" ? isSelected || isMulti : isMulti && !isSelected) &&
           !previewing &&
           "ring-2 ring-blue-500 ring-offset-1",
         hasActiveSearchHit
@@ -1628,12 +1627,31 @@ function AnnotationItem({
           </PopoverContent>
         </Popover>
       )}
+      {ann.kind !== "formfield" && !previewing && (
+        // Floating align/distribute bar for a multi-selection whose primary
+        // member is a regular annotation (form fields use their side popover).
+        // Kept open while the selection lives — dismissal is selection-driven
+        // (click empty page / Escape), not popover-driven.
+        <Popover open={isSelected && isMulti} onOpenChange={() => {}}>
+          <PopoverContent
+            data-ann-controls
+            anchor={wrapRef}
+            side="top"
+            align="center"
+            sideOffset={12}
+            className="p-1.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <SelectionAlignBar page={pageIndex} />
+          </PopoverContent>
+        </Popover>
+      )}
       {ann.kind === "note" && !ann.locked && (
         <Popover
           // Comments keep their own popup (you type the note text in it). Every
           // other annotation's style controls now live in the toolbar's second
           // row, so no floating properties popover for them.
-          open={isSelected}
+          open={isSelected && !isMulti}
           onOpenChange={(o: boolean, details?: { reason?: string; event?: Event }) => {
             if (o) return;
             const age = performance.now() - selectedAt.current;
@@ -1685,7 +1703,7 @@ function AnnotationItem({
       )}
       {ann.kind === "link" && !ann.locked && (
         <Popover
-          open={isSelected}
+          open={isSelected && !isMulti}
           onOpenChange={(o: boolean, details?: { reason?: string; event?: Event }) => {
             if (o) return;
             const age = performance.now() - selectedAt.current;
