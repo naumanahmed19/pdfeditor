@@ -5,6 +5,8 @@ export const UPDATE_CHECK_EVENT = "pickpdf:check-for-updates";
 export function isAppUpdaterEnabled() {
   return (
     isTauri &&
+    import.meta.env.PROD &&
+    import.meta.env.VITE_ENABLE_UPDATER === "true" &&
     import.meta.env.VITE_DISTRIBUTION_CHANNEL !== "microsoft-store"
   );
 }
