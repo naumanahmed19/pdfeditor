@@ -1,11 +1,13 @@
 [CmdletBinding()]
 param(
-  [string]$PackageIdentityName = "Xvelopers.PickPDF",
-  [string]$Publisher = "CN=PickPDF Test Code Signing",
-  [string]$PublisherDisplayName = "Xvelopers",
+  [string]$PackageIdentityName = "XVELOPERS.PickPDFPDFEditor",
+  [string]$Publisher = "CN=9051037E-CF67-4FBD-B4FA-F71DD84CBACD",
+  [string]$PublisherDisplayName = "XVELOPERS",
+  [string]$PackageDisplayName = "PickPDF $([char]0x2013) PDF Editor",
   [string]$CertificateThumbprint = "26C4327DF20F7C0C47FEE004F22FB1ABF13662CD",
   [switch]$SkipTauriBuild,
-  [switch]$Unsigned
+  [switch]$Unsigned,
+  [switch]$StoreUpload
 )
 
 Set-StrictMode -Version Latest
@@ -65,6 +67,14 @@ $tauriConfigPath = Join-Path $repoRootPath "src-tauri\tauri.conf.json"
 $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
 $productName = [string]$tauriConfig.productName
 $msixVersion = Convert-ToMsixVersion ([string]$tauriConfig.version)
+
+if ([string]::IsNullOrWhiteSpace($PackageDisplayName)) {
+  $PackageDisplayName = $productName
+}
+
+if ($StoreUpload -and $Publisher -eq "CN=PickPDF Test Code Signing") {
+  throw "StoreUpload requires the exact Publisher value from Partner Center (Product identity). The test publisher cannot be submitted to the Store."
+}
 
 $outDir = Join-Path $repoRootPath "src-tauri\target\msix"
 $stageDir = Join-Path $outDir "stage"
@@ -133,7 +143,7 @@ $manifest = @"
     Version="$(Escape-Xml $msixVersion)"
     ProcessorArchitecture="x64" />
   <Properties>
-    <DisplayName>$(Escape-Xml $productName)</DisplayName>
+    <DisplayName>$(Escape-Xml $PackageDisplayName)</DisplayName>
     <PublisherDisplayName>$(Escape-Xml $PublisherDisplayName)</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -146,7 +156,7 @@ $manifest = @"
   <Applications>
     <Application Id="PickPDF" Executable="$(Escape-Xml $packagedExeName)" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="$(Escape-Xml $productName)"
+        DisplayName="$(Escape-Xml $PackageDisplayName)"
         Description="PickPDF PDF editor"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
@@ -182,6 +192,43 @@ if (-not $Unsigned) {
 
 $signature = Get-AuthenticodeSignature -LiteralPath $msixPath
 
+$msixUploadPath = $null
+if ($StoreUpload) {
+  $uploadStageDir = Join-Path $outDir "upload"
+  Assert-UnderRoot $uploadStageDir $repoRootPath | Out-Null
+
+  if (Test-Path -LiteralPath $uploadStageDir) {
+    Remove-Item -LiteralPath $uploadStageDir -Recurse -Force
+  }
+
+  New-Item -ItemType Directory -Force -Path $uploadStageDir | Out-Null
+  Copy-Item -LiteralPath $msixPath -Destination (Join-Path $uploadStageDir (Split-Path -Leaf $msixPath)) -Force
+
+  $releasePdb = Join-Path $repoRootPath "src-tauri\target\release\app.pdb"
+  if (Test-Path -LiteralPath $releasePdb) {
+    $appxSymPath = Join-Path $uploadStageDir "$productName.appxsym"
+    $appxSymZipPath = Join-Path $uploadStageDir "$productName-symbols.zip"
+    Compress-Archive -LiteralPath $releasePdb -DestinationPath $appxSymZipPath -CompressionLevel Optimal -Force
+    Move-Item -LiteralPath $appxSymZipPath -Destination $appxSymPath -Force
+  }
+  else {
+    Write-Warning "Release symbols not found at $releasePdb. The upload will not include crash-analysis symbols."
+  }
+
+  $msixUploadPath = Join-Path $outDir "$($productName)_$($msixVersion)_x64.msixupload"
+  if (Test-Path -LiteralPath $msixUploadPath) {
+    Remove-Item -LiteralPath $msixUploadPath -Force
+  }
+
+  $msixUploadZipPath = Join-Path $outDir "$($productName)_$($msixVersion)_x64.zip"
+  if (Test-Path -LiteralPath $msixUploadZipPath) {
+    Remove-Item -LiteralPath $msixUploadZipPath -Force
+  }
+
+  Compress-Archive -Path (Join-Path $uploadStageDir "*") -DestinationPath $msixUploadZipPath -CompressionLevel Optimal
+  Move-Item -LiteralPath $msixUploadZipPath -Destination $msixUploadPath -Force
+}
+
 Write-Host ""
 Write-Host "MSIX package:"
 Write-Host "  $msixPath"
@@ -190,7 +237,17 @@ Write-Host "Signature status:"
 Write-Host "  $($signature.Status)"
 Write-Host "  $($signature.StatusMessage)"
 
-if ($Unsigned) {
+if ($msixUploadPath) {
+  Write-Host ""
+  Write-Host "Microsoft Store upload package:"
+  Write-Host "  $msixUploadPath"
+}
+
+if ($Unsigned -and $StoreUpload) {
+  Write-Host ""
+  Write-Host "Unsigned Store package created. Microsoft signs the package after Store certification."
+}
+elseif ($Unsigned) {
   Write-Host ""
   Write-Host "Unsigned package created. For Microsoft Store submission, replace PackageIdentityName and Publisher with the exact Partner Center values."
 }
