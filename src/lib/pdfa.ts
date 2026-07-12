@@ -242,7 +242,7 @@ function capped(items: Set<string>): string[] {
 }
 
 export async function checkPdfA(bytes: Uint8Array): Promise<PdfaReport> {
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+  const doc = await PDFDocument.load(bytes, { updateMetadata: false });
   const ctx = doc.context;
   const catalog: PDFDict = doc.catalog;
   const findings: PdfaFinding[] = [];

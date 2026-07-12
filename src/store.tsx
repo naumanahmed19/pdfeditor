@@ -495,8 +495,9 @@ interface AppStore {
     /** True when restrictions are currently in force (encrypted + owner locked). */
     restricted: boolean;
   };
-  /** Unlock full permissions with the owner password. Returns success. */
-  unlockPermissions: (ownerPassword: string) => boolean;
+  /** Unlock full permissions with the owner password and create a safe,
+   *  decrypted working copy. Returns success. */
+  unlockPermissions: (ownerPassword: string) => Promise<boolean>;
   /** Document-security dialog visibility (openable from the menu, the toolbar
    *  badge, or an on-open notification). */
   securityModalOpen: boolean;
@@ -855,9 +856,14 @@ function permissionsOf(pdf: PdfDoc): DocPermissions {
   return {
     print: (p & PERM_PRINT) !== 0 || (p & PERM_PRINT_HQ) !== 0,
     copy: (p & PERM_COPY) !== 0,
-    modify: (p & PERM_MODIFY) !== 0,
-    annotate: (p & PERM_ANNOTATE) !== 0,
-    fillForms: (p & PERM_FILL_FORMS) !== 0,
+    // PickPDF's editing stack uses pdf-lib for several mutations. pdf-lib
+    // cannot decrypt standard security handlers, so passing encrypted bytes
+    // through it would corrupt the file. Keep encrypted working bytes
+    // read-only until the owner password has been authenticated and PDFium
+    // has produced a verified plaintext working copy.
+    modify: false,
+    annotate: false,
+    fillForms: false,
     restricted: true,
   };
 }
@@ -1763,6 +1769,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         let pdfDoc = await loadPdf(bytes);
         let realBytes = bytes;
         let wrapperPw: string | null = null;
+        let openedStandardEncryption: {
+          recipe: EncryptRecipe | null;
+          ownerUnlocked: boolean;
+        } | null = null;
 
         // PickPDF-locked wrapper? The visible page is just a notice; the real
         // document is an AES-256-GCM payload attached to it. Prompt and unwrap.
@@ -1801,6 +1811,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
               }
             }
             await pdfDoc.destroy();
+            pdfDoc = await loadPdf(realBytes);
+          }
+        }
+
+        // Standard encryption must be removed through an authenticated
+        // PDFium owner session before any editor path sees the bytes. pdf-lib's
+        // `ignoreEncryption` option is not decryption and can corrupt output.
+        // A user-password-only open therefore stays read-only until the owner
+        // password is supplied in Document security.
+        if (!wrapperPw && pdfDoc.isEncrypted()) {
+          const ownerUnlocked = pdfDoc.isOwnerUnlocked();
+          openedStandardEncryption = {
+            recipe: recipeForOpenedDoc({
+              password: pdfDoc.password,
+              ownerUnlocked,
+              userPermissions: pdfDoc.getUserPermissions(),
+            }),
+            ownerUnlocked,
+          };
+          if (ownerUnlocked) {
+            const { decryptPdf } = await import("./lib/pdfium");
+            const plainBytes = await decryptPdf(realBytes, pdfDoc.password);
+            await pdfDoc.destroy();
+            realBytes = plainBytes;
             pdfDoc = await loadPdf(realBytes);
           }
         }
@@ -1874,13 +1908,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // without one (no password was typed — a restrictions-only file that
         // opens with an empty password), the write paths instead ask for
         // explicit consent before emitting an unprotected copy.
-        if (!wrapperPw && pdfDoc.isEncrypted()) {
+        if (openedStandardEncryption) {
           encryptedAtOpen.current.add(doc.id);
-          const recipe = recipeForOpenedDoc({
-            password: pdfDoc.password,
-            ownerUnlocked: pdfDoc.isOwnerUnlocked(),
-            userPermissions: pdfDoc.getUserPermissions(),
-          });
+          const recipe = openedStandardEncryption.recipe;
           if (recipe) {
             protectionInfo.current.set(doc.id, recipe);
             markProtected(doc.id, true);
@@ -1901,9 +1931,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setScreen("viewer");
         // Tell the user up front when a document is protected and what it
         // restricts — otherwise the silently-disabled tools feel broken.
-        if (pdfDoc.isEncrypted()) {
+        if (openedStandardEncryption) {
           const denied = summarizeRestrictions(permissionsOf(pdfDoc));
-          if (denied.length) {
+          if (!openedStandardEncryption.ownerUnlocked) {
             toast.warning("Protected document — some actions are restricted", {
               description: `Not allowed: ${denied.join(", ")}. Unlock with the permissions password via File → Document security.`,
               action: {
@@ -1927,7 +1957,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // overlay — note text in IndexedDB would leak the locked content.
           // Plain docs persist the stripped bytes + the overlay, so the
           // imported annotations survive a session restore.
-          const isProtected = wrapperPw !== null || pdfDoc.isEncrypted();
+          const isProtected = wrapperPw !== null || openedStandardEncryption !== null;
           void persistDoc({
             id: doc.id,
             name,
@@ -2422,8 +2452,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!active) return;
       const id = active.id;
       // Structural ops (rotate/delete/reorder pages) mutate document content
-      // and — via pdf-lib's ignoreEncryption rewrite — would also decrypt a
-      // restricted document. Honor the modify permission like the edit tools.
+      // and require a verified plaintext working copy for protected files.
+      // Honor the modify permission like the edit tools.
       if (docPermissionsRef.current.restricted && !docPermissionsRef.current.modify) {
         toast.error(
           "This document's permissions don't allow changing its pages. Unlock with the permissions password (File → Document security).",
@@ -2863,9 +2893,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } else {
           // Anchor-download fallback (no File System Access API): the browser
           // gives NO completion signal for an <a download> click, so there is
-          // nothing to await — the doc is marked saved optimistically below.
+          // no successful write result. The downloaded copy is useful, but
+          // the open document must remain dirty.
           downloadBytes(out, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
-          toast.success(`PDF saved (downloaded)${locked}`);
+          toast.info(`PDF copy downloaded${locked}`, {
+            description:
+              "The browser cannot confirm that the file was written, so this document remains unsaved.",
+          });
+          return;
         }
       }
       // Commit in-app state to the saved bytes.
@@ -3120,7 +3155,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   docPermissionsRef.current = docPermissions;
 
   const unlockPermissions = useCallback(
-    (ownerPassword: string): boolean => {
+    async (ownerPassword: string): Promise<boolean> => {
       if (!active) return false;
       const ok = active.pdf.unlockOwner(ownerPassword);
       if (ok) {
@@ -3142,6 +3177,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
           );
           markProtected(active.id, true);
         }
+        try {
+          const { decryptPdf } = await import("./lib/pdfium");
+          const plainBytes = await decryptPdf(active.bytes, ownerPassword);
+          const plainPdf = await loadPdf(plainBytes);
+          destroyDocProxies(active, plainPdf);
+          updateDoc(active.id, (d) => ({
+            bytes: plainBytes,
+            pdf: plainPdf,
+            annotations: {},
+            history: [{}],
+            bytesHistory: [{ bytes: plainBytes, pdf: plainPdf }],
+            historyIndex: 0,
+            formValues: {},
+            fieldOps: {},
+            // Decryption creates a safe working representation; it does not
+            // change the document the user sees, so keep the saved revision.
+            rev: d.rev,
+          }));
+          setDocVersion((v) => v + 1);
+        } catch (err) {
+          toast.error(
+            `Could not create a safe editing copy: ${err instanceof Error ? err.message : "unknown error"}`,
+          );
+          return false;
+        }
         setPermTick((t) => t + 1);
         toast.success("Permissions unlocked — full access granted");
       } else {
@@ -3149,7 +3209,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       return ok;
     },
-    [active, markProtected],
+    [active, markProtected, updateDoc],
   );
 
   /** Whether the document's permissions allow arming a given tool. */

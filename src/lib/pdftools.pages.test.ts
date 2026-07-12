@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { PDFDocument, PDFName } from "pdf-lib";
+import { readFile } from "node:fs/promises";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  decodePDFRawStream,
+  PDFDocument,
+  PDFName,
+  PDFRawStream,
+  StandardFonts,
+} from "pdf-lib";
 import {
   deletePages,
   extractPages,
@@ -8,6 +15,34 @@ import {
   movePage,
   setOutline,
 } from "./pdftools";
+
+beforeAll(() => {
+  const realFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: unknown, init?: RequestInit) => {
+    if (typeof input === "string" && input.endsWith(".wasm")) {
+      const wasm = await readFile(
+        new URL("../../node_modules/@embedpdf/pdfium/dist/pdfium.wasm", import.meta.url),
+      );
+      return new Response(wasm, { headers: { "Content-Type": "application/wasm" } });
+    }
+    return realFetch(input as RequestInfo, init);
+  });
+});
+
+async function decodedStreams(bytes: Uint8Array): Promise<string> {
+  const doc = await PDFDocument.load(bytes);
+  const decoder = new TextDecoder("latin1");
+  let out = "";
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFRawStream)) continue;
+    try {
+      out += decoder.decode(decodePDFRawStream(obj).decode());
+    } catch {
+      // Binary streams cannot contain the literal text fixture.
+    }
+  }
+  return out;
+}
 
 async function sizedPdf(sizes: Array<[number, number]>): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -111,8 +146,8 @@ describe("page insertion", () => {
   });
 });
 
-describe("deletePages (in-place, structure-preserving)", () => {
-  it("deletes a middle page and keeps forms, metadata and outline intact", async () => {
+describe("deletePages (secure survivor rebuild)", () => {
+  it("deletes a middle page and keeps forms and metadata intact", async () => {
     const out = await deletePages(await structuredPdf(), [1]);
     const doc = await reload(out);
 
@@ -126,7 +161,7 @@ describe("deletePages (in-place, structure-preserving)", () => {
     expect(doc.getForm().getCheckBox("agree_p3").isChecked()).toBe(true);
     expect(doc.getTitle()).toBe("Fixture Title");
     expect(doc.getAuthor()).toBe("Fixture Author");
-    expect(hasOutline(doc)).toBe(true);
+    expect(hasOutline(doc)).toBe(false);
   });
 
   it("deletes the first and last pages (unsorted, duplicated indexes)", async () => {
@@ -139,9 +174,8 @@ describe("deletePages (in-place, structure-preserving)", () => {
       "user@example.com",
     );
     expect(doc.getTitle()).toBe("Fixture Title");
-    // Outline entries now dangle (their pages are gone) but the outline
-    // itself must survive — viewers treat dead destinations as no-ops.
-    expect(hasOutline(doc)).toBe(true);
+    // Outlines are omitted until their page references can be safely remapped.
+    expect(hasOutline(doc)).toBe(false);
   });
 
   it("keeps a multi-widget field when at least one widget's page survives", async () => {
@@ -171,6 +205,33 @@ describe("deletePages (in-place, structure-preserving)", () => {
     const again = await reload(await doc.save());
     expect(again.getPageCount()).toBe(2);
     expect(fieldNames(again)).toEqual(["agree_p3", "email_p2"]);
+  });
+  it("removes deleted-page text from every decoded indirect stream", async () => {
+    const src = await PDFDocument.create();
+    const font = await src.embedFont(StandardFonts.Helvetica);
+    src.addPage([300, 200]).drawText("PUBLIC_SURVIVING_PAGE", {
+      x: 20,
+      y: 120,
+      size: 16,
+      font,
+    });
+    src.addPage([300, 200]).drawText("TOP_SECRET_REMOVED_PAGE_7F31", {
+      x: 20,
+      y: 120,
+      size: 16,
+      font,
+    });
+
+    const out = await deletePages(await src.save(), [1]);
+    const streams = await decodedStreams(out);
+    const hex = (s: string) =>
+      Array.from(new TextEncoder().encode(s), (b) =>
+        b.toString(16).padStart(2, "0"),
+      )
+        .join("")
+        .toUpperCase();
+    expect(streams).toContain(hex("PUBLIC_SURVIVING_PAGE"));
+    expect(streams).not.toContain(hex("TOP_SECRET_REMOVED_PAGE_7F31"));
   });
 });
 

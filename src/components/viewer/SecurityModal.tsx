@@ -199,14 +199,21 @@ export function SecurityModal({ open, onClose }: Props) {
                       value={unlockPw}
                       onChange={(e) => setUnlockPw(e.target.value)}
                       placeholder="Permissions password"
-                      onKeyDown={(e) =>
-                        e.key === "Enter" && app.unlockPermissions(unlockPw) && setUnlockPw("")
-                      }
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        void app.unlockPermissions(unlockPw).then((ok) => {
+                          if (ok) setUnlockPw("");
+                        });
+                      }}
                     />
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => app.unlockPermissions(unlockPw) && setUnlockPw("")}
+                      onClick={() => {
+                        void app.unlockPermissions(unlockPw).then((ok) => {
+                          if (ok) setUnlockPw("");
+                        });
+                      }}
                     >
                       Unlock
                     </Button>

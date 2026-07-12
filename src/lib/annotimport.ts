@@ -420,11 +420,10 @@ export async function importAnnotations(
 ): Promise<AnnotationImport | null> {
   let doc: PDFDocument;
   try {
-    doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    doc = await PDFDocument.load(bytes);
   } catch {
     return null;
   }
-  if (doc.isEncrypted) return null; // reprotect flow owns encrypted docs
   if (hasSignedSignature(doc)) return null;
 
   const annotations: AnnotationMap = {};
