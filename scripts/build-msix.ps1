@@ -84,6 +84,9 @@ Assert-UnderRoot $outDir $repoRootPath | Out-Null
 Assert-UnderRoot $stageDir $repoRootPath | Out-Null
 
 if (-not $SkipTauriBuild) {
+  $hadDistributionChannel = Test-Path Env:\VITE_DISTRIBUTION_CHANNEL
+  $previousDistributionChannel = $env:VITE_DISTRIBUTION_CHANNEL
+  $env:VITE_DISTRIBUTION_CHANNEL = "microsoft-store"
   Push-Location $repoRootPath
   try {
     & bun run tauri build --no-bundle
@@ -93,6 +96,12 @@ if (-not $SkipTauriBuild) {
   }
   finally {
     Pop-Location
+    if ($hadDistributionChannel) {
+      $env:VITE_DISTRIBUTION_CHANNEL = $previousDistributionChannel
+    }
+    else {
+      Remove-Item Env:\VITE_DISTRIBUTION_CHANNEL -ErrorAction SilentlyContinue
+    }
   }
 }
 

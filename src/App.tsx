@@ -30,6 +30,7 @@ import {
 } from "./components/ui/resizable";
 import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
+import { UpdateNotifier } from "./components/layout/UpdateNotifier";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DropZone } from "./components/layout/DropZone";
 import { CommandPalette } from "./components/command/CommandPalette";
@@ -578,6 +579,7 @@ function Shell() {
       <SignatureModal />
       <CalibrateModal />
       <DropZone />
+      <UpdateNotifier />
       <Toaster />
     </div>
   );

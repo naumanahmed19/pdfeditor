@@ -187,16 +187,19 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build AppImage and Debian package
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bun run tauri build --ci --bundles appimage,deb
 
       - name: Collect Linux artifacts
         shell: bash
         run: |
           mkdir -p release-artifacts
-          mapfile -t packages < <(find src-tauri/target/release/bundle -maxdepth 2 -type f \( -name '*.AppImage' -o -name '*.deb' \))
+          mapfile -t packages < <(find src-tauri/target/release/bundle -maxdepth 2 -type f \( -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.deb' \))
 
-          if [[ ${#packages[@]} -ne 2 ]]; then
-            printf 'Expected one AppImage and one Debian package; found %s\n' "${#packages[@]}"
+          if [[ ${#packages[@]} -ne 3 ]]; then
+            printf 'Expected an AppImage, its signature, and one Debian package; found %s\n' "${#packages[@]}"
             printf '%s\n' "${packages[@]}"
             exit 1
           fi
@@ -242,6 +245,8 @@ jobs:
       - name: Build universal DMG
         env:
           APPLE_SIGNING_IDENTITY: "-"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bun run tauri build --ci --target universal-apple-darwin --bundles dmg
 
       - name: Collect macOS artifact
@@ -258,6 +263,14 @@ jobs:
           fi
 
           cp "${packages[0]}" release-artifacts/
+          updater_bundles=(src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz)
+
+          if [[ ${#updater_bundles[@]} -ne 1 || ! -f "${updater_bundles[0]}.sig" ]]; then
+            echo "Expected one universal macOS updater bundle and signature."
+            exit 1
+          fi
+
+          cp "${updater_bundles[0]}" "${updater_bundles[0]}.sig" release-artifacts/
           (cd release-artifacts && shasum -a 256 *.dmg > SHA256SUMS-macos-universal.txt)
 
       - name: Upload macOS artifact
@@ -276,12 +289,54 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: release-*
           path: release-artifacts
           merge-multiple: true
+
+      - name: Create updater manifest
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
+        run: node scripts/create-update-manifest.mjs release-artifacts
+
+      - name: Publish update files to Cloudflare R2
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
+            echo "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be configured as repository secrets."
+            exit 1
+          fi
+
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          mkdir -p r2-artifacts
+          find release-artifacts -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.deb' \
+               -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \
+               -o -name 'SHA256SUMS-*.txt' \) \
+            -exec cp {} r2-artifacts/ \;
+
+          aws s3 sync r2-artifacts/ "s3://${R2_BUCKET}/releases/${RELEASE_TAG}/" \
+            --endpoint-url "$endpoint" \
+            --cache-control "public,max-age=31536000,immutable"
+
+          aws s3 cp release-artifacts/latest.json "s3://${R2_BUCKET}/stable/latest.json" \
+            --endpoint-url "$endpoint" \
+            --content-type "application/json" \
+            --cache-control "no-store"
 
       - name: Create GitHub Release
         shell: bash

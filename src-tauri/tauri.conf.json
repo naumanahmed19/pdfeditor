@@ -34,6 +34,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis", "msi"],
     "icon": [
       "icons/32x32.png",
@@ -46,6 +47,17 @@
       "certificateThumbprint": "26C4327DF20F7C0C47FEE004F22FB1ABF13662CD",
       "digestAlgorithm": "sha256",
       "timestampUrl": "http://timestamp.digicert.com"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENFMzA1Qzk4RTYwN0Y2MDkKUldRSjlnZm1tRnd3enFwZG91WTlFdithbjc4bjFVdWhQUy9pcURkamJySVBidVNuUGdJNnlSRlcK",
+      "endpoints": [
+        "https://releases.pickpdf.app/stable/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
