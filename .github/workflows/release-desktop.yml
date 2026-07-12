@@ -56,6 +56,12 @@ jobs:
 
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $existingTagCommit = git rev-list -n 1 $releaseTag 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              # A first release has no tag yet. Reset the native exit code so
+              # GitHub's PowerShell wrapper does not fail after this script.
+              $existingTagCommit = $null
+              $global:LASTEXITCODE = 0
+            }
             if ($existingTagCommit -and $existingTagCommit -ne "${{ github.sha }}") {
               throw "Tag $releaseTag already points to $existingTagCommit, not the selected commit ${{ github.sha }}."
             }
