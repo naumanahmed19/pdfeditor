@@ -209,6 +209,28 @@ bun run tauri dev      # run in development (hot reload)
 bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/target/release/bundle/
 ```
 
+## Desktop releases
+
+The GitHub Actions workflow in `.github/workflows/release-desktop.yml` builds
+and publishes the Windows, macOS, and Linux packages. Keep the versions in
+`package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`
+identical, then push a matching tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow runs the type-check and tests, then produces a Windows Store
+`.msixupload`, a universal macOS `.dmg`, and Linux `.AppImage` and `.deb`
+packages. It generates SHA-256 checksums and attaches everything to one GitHub
+Release. It can also be started manually from the Actions tab; a manual run
+uses the current app version as its release tag.
+
+The macOS build uses an ad-hoc signature until Apple Developer signing and
+notarization secrets are configured. Users must approve an ad-hoc signed build
+in macOS Privacy & Security settings.
+
 ## Tech
 
 - **React 18 + Vite + TypeScript + Tailwind**, base-ui (shadcn-style) primitives.
