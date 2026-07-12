@@ -308,10 +308,7 @@ export async function listUnsignedSignatureFields(
   bytes: Uint8Array,
 ): Promise<string[]> {
   try {
-    const doc = await PDFDocument.load(bytes, {
-      ignoreEncryption: true,
-      updateMetadata: false,
-    });
+    const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     return walkFields(doc)
       .filter((f) => !f.value)
       .map((f) => f.name);
@@ -330,10 +327,7 @@ export async function signPdf(
   const { key, cert, chain } = parseP12(opts.p12, opts.password);
   const now = new Date();
 
-  const doc = await PDFDocument.load(bytes, {
-    ignoreEncryption: true,
-    updateMetadata: false,
-  });
+  const doc = await PDFDocument.load(bytes, { updateMetadata: false });
 
   // --- signature value dictionary with fixed-size placeholders -------------
   const byteRangePlaceholder = PDFName.of("**********");
@@ -517,10 +511,7 @@ export async function verifySignatures(
 ): Promise<SignatureInfo[]> {
   let doc: PDFDocument;
   try {
-    doc = await PDFDocument.load(bytes, {
-      ignoreEncryption: true,
-      updateMetadata: false,
-    });
+    doc = await PDFDocument.load(bytes, { updateMetadata: false });
   } catch {
     return [];
   }

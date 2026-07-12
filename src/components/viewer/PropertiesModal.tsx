@@ -60,7 +60,7 @@ export function PropertiesModal({ open, onClose }: Props) {
 
   const applyMeta = () => {
     void app.applyBytesOp(async (bytes) => {
-      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const doc = await PDFDocument.load(bytes);
       doc.setTitle(title);
       doc.setAuthor(author);
       return doc.save();

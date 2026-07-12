@@ -20,7 +20,7 @@ export interface LayerInfo {
 }
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
-  return PDFDocument.load(bytes, { ignoreEncryption: true });
+  return PDFDocument.load(bytes);
 }
 
 const OC_PROPERTIES = PDFName.of("OCProperties");

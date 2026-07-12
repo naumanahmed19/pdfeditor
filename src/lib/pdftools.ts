@@ -67,7 +67,11 @@ import {
 } from "./richtext";
 
 async function load(bytes: Uint8Array): Promise<PDFDocument> {
-  return PDFDocument.load(bytes, { ignoreEncryption: true });
+  // Never ask pdf-lib to parse encrypted bytes as if they were plaintext.
+  // `ignoreEncryption` only bypasses the guard; it does not authenticate or
+  // decrypt the streams and can produce an unreadable file on save. The store
+  // supplies an owner-authenticated, decrypted working copy instead.
+  return PDFDocument.load(bytes);
 }
 
 /**
@@ -304,10 +308,10 @@ function removeFieldsOnDoomedPages(doc: PDFDocument, doomed: Set<PDFRef>) {
 }
 
 /**
- * Delete pages in place (doc.removePage) instead of rebuilding the document
- * with copyPages, so every catalog-level structure — AcroForm, outlines,
- * named destinations, page labels, metadata, attachments, tags, optional
- * content — survives untouched.
+ * Rebuild the document from surviving pages so detached page objects and
+ * streams cannot remain in the output. Metadata and interactive fields on
+ * surviving pages are restored by extractPages. Outlines, named destinations,
+ * and page labels are omitted until they can be safely remapped.
  *
  * Deliberate trade-offs:
  * - Outline items / named destinations pointing at a removed page become
@@ -315,9 +319,6 @@ function removeFieldsOnDoomedPages(doc: PDFDocument, doomed: Set<PDFRef>) {
  *   keeping the rest of the outline intact beats dropping it wholesale.
  * - /PageLabels ranges are index-based, so labels shift with the pages; they
  *   are not remapped.
- * - The removed page objects stay in the file as unreferenced objects
- *   (pdf-lib never garbage-collects), so this hides content rather than
- *   erasing it — true content removal is the redaction pipeline's job.
  * - Digital signatures are invalidated by any page operation by nature; no
  *   preservation is attempted.
  */
@@ -330,13 +331,19 @@ export async function deletePages(
   const targets = [...new Set(pageIndexes)]
     .filter((i) => Number.isInteger(i) && i >= 0 && i < pageCount)
     .sort((a, b) => b - a); // descending, so removals don't shift indexes
-  if (targets.length) {
-    removeFieldsOnDoomedPages(doc, new Set(targets.map((i) => doc.getPage(i).ref)));
-    for (const i of targets) doc.removePage(i);
+  if (!targets.length) return bytes;
+  if (targets.length === pageCount) {
+    const blank = await PDFDocument.create();
+    blank.addPage();
+    return blank.save();
   }
   // Deleting every page yields a single blank page (save() adds a default
   // page to empty documents) — same net behavior as the old rebuild path.
-  return doc.save();
+  const removed = new Set(targets);
+  const survivors = Array.from({ length: pageCount }, (_, i) => i).filter(
+    (i) => !removed.has(i),
+  );
+  return extractPages(bytes, survivors);
 }
 
 export async function rotatePage(

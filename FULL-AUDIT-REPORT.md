@@ -1,199 +1,262 @@
-# PickPDF Full Product, Engineering, Market, and SEO Audit
+# PickPDF Re-Audit
 
-**Audit date:** 9 July 2026  
-**Scope:** the current checkout, the running local editor, `https://pickpdf.app`, `https://open.pickpdf.app`, available Windows artifacts, and the current PDF-editor market.  
-**Audit type:** read-only except for these report artifacts. Existing source changes were preserved.  
-**Confidence:** high for source, build, runtime, HTTP, and artifact findings; low for rankings, traffic, field Core Web Vitals, and conversion because Search Console, production analytics, and CrUX data were not available.
+**Audit date:** 2026-07-12
+**Previous baseline:** 2026-07-09
+**Base snapshot:** `main` and `origin/main` at `da01514`
+**Fix status:** stop-ship fixes applied in the current working tree
 
-## A. Audit summary
+## Executive verdict
 
-### Verdict
+PickPDF now scores an estimated **50/100 for category-leadership readiness**, up from the original 33/100 baseline. The current stop-ship fix working tree passes 297 tests, typecheck, production build, and npm audit with zero advisories.
 
-PickPDF is a **promising beta with a strong local-first wedge and broad editor UI**. Release-blocking correctness defects make it **unsafe for privacy-critical PDF work today**. The team must make PDF output trustworthy before expanding the toolbar.
+The four confirmed file-safety blockers are fixed in the current working tree:
 
-The audit confirmed release-blocking defects that can lose unsaved byte-level edits, corrupt encrypted documents, target the wrong area on 270-degree pages, report failed redaction as successful, preserve hidden cropped content, and strip forms/outlines during page-copy operations. Public download and repository links return 404, available installers lack production trust, and several public claims describe behavior or commercial infrastructure that remains partial or planned.
+1. Encrypted editing requires an owner-authenticated plaintext working copy and fails closed otherwise.
+2. Redaction recursively removes and verifies images inside nested Form XObjects.
+3. Page deletion rebuilds from surviving pages and excludes detached streams.
+4. Browser download fallback keeps the document dirty because completion cannot be confirmed.
 
-The credible route to category leadership is narrower than “beat Acrobat everywhere”: **become the fastest, highest-fidelity, private-by-default PDF editor that completes real editing jobs without signup, upload, or watermarks**. PickPDF has the beginnings of that product. It needs a correctness moat, visible privacy proof, and distribution engine before professional/enterprise expansion.
+Distribution is also blocked. Public download and GitHub links return 404, available installers are stale and untrusted, and the site sells capabilities that are absent or described as planned in its own legal copy.
 
-### Directional readiness scorecard
+The new Word/text conversion is also lossy: unsupported Unicode is silently replaced with question marks. Its UI warns about layout loss but not character or script loss.
 
-These scores describe readiness to compete with category leaders.
+## Audit scope
 
-| Area | Score | Assessment |
-|---|---:|---|
-| Core feature breadth | 67/100 | Strong early breadth: direct text/object work, annotations, forms, OCR, page tools, compare, security, templates, and local AI. |
-| PDF correctness and fidelity | 25/100 | Multiple confirmed P0 data-integrity, rotation, redaction, encryption, and structure-preservation defects. |
-| Security and privacy engineering | 32/100 | Local processing is a real strength; CSP, headers, link schemes, secret storage, retention controls, and verified redaction are not production-grade. |
-| Reliability and performance | 38/100 | Build is healthy, but rendering/history can exhaust the UI and no large-document safety budgets or corpus exist. |
-| UX and accessibility | 43/100 | Clean desktop layout and discoverable tools; pointer-heavy editing, weak dialog semantics, small controls, and no tagged-PDF accessibility workflow. |
-| SEO and discoverability | 24/100 | Score confidence low: crawl defects, canonical conflicts, orphan pages, thin content, missing authority, and broken conversion links; no GSC/CWV data. |
-| Distribution and commercial readiness | 10/100 | No public release path, trusted installer, working checkout/licensing, release automation, or delivered Team infrastructure. |
-| Professional and enterprise depth | 18/100 | Missing PKI/e-sign, accessibility remediation, PDF standards/preflight, collaboration, admin, compliance, API/SDK, and integrations. |
-| **Overall category-leadership readiness** | **33/100** | **Strong prototype / early beta; not yet safe or distributed enough for a broad launch.** |
+The audit base is `main` at `da01514`; the four stop-ship fixes are uncommitted working-tree changes on top of that synchronized base. Existing user changes and untracked files were preserved.
 
-### Top three issues
+The audit covered:
 
-1. **PDF output cannot yet be trusted across core workflows.** Encryption, redaction, rotation, page operations, crop, and dirty-state defects can damage documents or misstate success.
-2. **The product promise is ahead of delivered evidence.** Compression, redaction, signed downloads, updates, large-file performance, central seats, and DPA support remain partial or planned.
-3. **There is no acquisition-to-install loop.** The public download/repository links return 404, high-intent pages are thin and orphaned, and the app origin creates soft-200 crawl noise.
+- PDF mutation, save, encryption, redaction, page operations, crop, signatures, permissions, undo, and persistence
+- unit, type, build, dependency, and Rust gates on the exact synchronized snapshot
+- a real browser workflow that created a blank PDF, opened the editor, and opened the Word/text conversion screen
+- current Windows installer trust, timestamps, versions, and source freshness
+- live `pickpdf.app` and `open.pickpdf.app` crawling, metadata, canonicals, links, headers, schema, legal copy, and conversion paths
+- product gaps against current Adobe, Foxit, Nitro, Smallpdf, iLovePDF, PDFgear, and e-sign market expectations
 
-### Top three opportunities
+## Readiness scorecard
 
-1. **Own private, local-first editing.** PDFium/WASM, no required account, direct editing, forms, and optional on-device AI form a differentiated base.
-2. **Publish a fidelity and privacy benchmark.** A transparent golden corpus for redaction, encryption, fonts, rotations, forms, and 1,000-page files can become both the engineering moat and the strongest authority content.
-3. **Turn each search intent into a complete job.** A query-specific page should open the exact editor workflow, finish the task locally, chain the next action, and expose a useful desktop upgrade.
+| Area | Jul 9 baseline | Main `da01514` | Re-audit assessment |
+|---|---:|---:|---|
+| Core feature breadth | 67 | 84 | A broad solo editor with several professional editing tools. |
+| PDF correctness and fidelity | 25 | 70 | The four confirmed file-safety paths are fixed; Unicode Create PDF loss and broader structure/interoperability coverage remain. |
+| Security and privacy engineering | 32 | 45 | Redaction and secure deletion improved; CSP, link safety, secret storage, and verifiable privacy remain weak. |
+| Reliability and performance | 38 | 52 | Unit and browser coverage improved; memory, cancellation, large-file limits, and CI remain open. |
+| UX and accessibility | 43 | 50 | Editor depth improved; modal, keyboard, labeling, and PDF accessibility work remains substantial. |
+| SEO and discoverability | 24 | 24 | No material live SEO defect is fixed. |
+| Distribution and commercial readiness | 10 | 8 | Dead CTAs, stale installers, no trusted release, no updater/licensing stack, and claim mismatch. |
+| Professional and enterprise depth | 18 | 41 | Certificate signing, PDF/A preflight, OCR, and layers help; standards, workflows, platforms, integrations, and admin systems remain absent. |
+| **Overall category-leadership readiness** | **33** | **50** | **Core safety is materially better; distribution, Unicode fidelity, accessibility, and release proof still block leadership.** |
 
-## What works today
+Scores are directional product-readiness judgments, not statistical measurements.
 
-- TypeScript typechecking passed.
-- The production build passed.
-- Vitest passed **79/79 tests across eight files**.
-- `npm audit` reported **zero advisories**.
-- Rust compiled and `cargo test` passed, although it contains **zero Rust tests**.
-- The browser editor successfully created a blank PDF and accepted a placed rich-text object during browser testing.
-- The UI exposes a broad, coherent workbench: reader, text/object editing, annotations, reusable signatures, AcroForm filling and design, merge/split/organize, compression, crop, headers/footers/Bates, export, compare, encryption, attachments, templates, and AI.
-- The homepage is server-rendered, has one H1, useful screenshots with dimensions/alt text, a valid robots file, and a sitemap.
-- Local-first processing is a genuine architectural advantage: the application has no document backend and most PDF work happens in-browser or in the desktop WebView.
+## Prior stop-ship finding status
 
-The current tests miss the release-critical invariants that failed this audit.
-
-## B. Verified findings
-
-### P0: stop-ship PDF correctness
-
-| Finding | Evidence | Impact | Required fix |
-|---|---|---|---|
-| Byte-level edits are not marked unsaved | `docHasEdits()` in `src/store.tsx:717-722` checks only annotations, form values, and field ops. Text/object/page/OCR/redaction paths replace bytes. | Close/refresh warnings, dirty dots, and split-view Save can be absent. Applied redactions may never reach the original file. | Track a saved revision/hash and mark every mutation dirty; distinguish crash recovery from saved-to-disk state. |
-| Encrypted documents can become unreadable | `src/lib/pdftools.ts:48` uses `ignoreEncryption:true`; `src/lib/pdfium.ts:53` reopens with an empty password. A diagnostic output could not be reopened with the user password or no password. | Protected files can be corrupted or lose protection. | Use the live authenticated handle or owner-decrypt → mutate → validate → re-encrypt. Test permission/version interoperability. |
-| 270-degree coordinate mapping is wrong | The branches in `src/lib/pdftools.ts:460-475` and `1804-1818` swap page dimensions. A 600×800 fixture produced `(540,450)` instead of PDFium's `(340,650)`. | Crop, redaction, annotation, OCR, and form placement can affect the wrong region. | Use one canonical PDFium-backed converter and fixture-test 0/90/180/270, non-square pages, and offset CropBoxes. |
-| Redaction fails open | `src/lib/pdfium.ts:200-226` skips unloadable pages and ignores a false redaction result; `src/store.tsx:2213-2229` then removes boxes and reports success. | Sensitive content may remain after the user is told it is gone. | Abort on any failure and verify the reopened output through extraction, object inspection, and rendering before removing boxes. |
-| Scanned/image redaction is not destructive | `TODO.md:83-88` records that image-only regions are covered while the underlying image remains. The UI says text and images are deleted. | The core privacy promise fails on scanned PDFs. | Remove intersecting image/path content, safely rasterize the affected region/page, or block unsupported redaction with explicit messaging. |
-| Page-copy operations strip structures | `src/lib/pdftools.ts:52-130` rebuilds documents with `copyPages`. Diagnostics changed `test-form.pdf` from four fields to zero and removed `/Outlines` from `test-outline.pdf`. | Merge/extract/delete/reorder can drop forms, outlines, named destinations, labels, tags, attachments, signatures, and metadata. | Mutate page trees in place or explicitly preserve/remap catalog structures, then round-trip validate. |
-| “Permanent crop” is reversible | `src/lib/pdftools.ts:237-257` sets CropBox/MediaBox; `ToolsScreens.tsx:1105-1114` says the area is removed permanently. | Hidden content remains recoverable by restoring page boxes. | Rename it boundary crop or remove/clamp content and verify output. |
-
-### P1: major security, reliability, and accessibility gaps
-
-| Finding | Evidence | Impact | Required fix |
-|---|---|---|---|
-| Permission checks are UI-dependent | Split/extract, exports, search/replace, and OCR lack centralized permission enforcement. | Restricted PDFs can be modified or copied through alternate paths. | Enforce permissions inside every mutation/export API. |
-| Whole-file history can exhaust memory | Up to 60 complete byte arrays/proxies are retained; dropped entries are not consistently destroyed. | Large files and long sessions can crash. | Use byte budgets/deltas/temp storage and destroy every discarded proxy. |
-| Rendering is synchronous and non-cancellable | The async render wrapper does not yield, cancellation is a no-op, full RGBA buffers are duplicated, and no document/pixel limits exist. | Large or malformed PDFs can freeze the UI. | Worker-based tiled rendering, cancellation, and strict resource budgets. |
-| CSP and web headers are missing | Tauri sets `csp:null`; live headers lacked HSTS, CSP, frame, MIME, referrer, and permissions policies (automated score 25/100). | Injection and clickjacking impact is harder to contain. | Restrictive CSP plus the six baseline headers on marketing and app origins. |
-| Links/endpoints/secrets need hardening | PDF/user link schemes are not strictly allow-listed; custom AI URLs accept arbitrary protocols; API keys are stored in localStorage. | Unsafe launches and secret exposure are possible. | Scheme allow-list, external-launch confirmation, HTTPS except loopback, OS vault on desktop. |
-| “Local” retention is opaque | IndexedDB keeps up to ten 80 MB documents; closing does not delete; signatures/chat persist; the cutoff/failures are silent. | Regulated users cannot reason about local retention. | No-retention mode, per-item deletion, clear-all, visible retention, protected secret storage. |
-| Accessibility is not production-grade | Dialog semantics/focus traps are missing in custom modals; PDF form controls lack programmatic labels; object editing is pointer-only; placed text is an unlabeled contenteditable; several targets are under 44 px. | Keyboard and screen-reader users are blocked; enterprise/public procurement fails. | Accessible primitives, complete labels, keyboard editing, axe/keyboard E2E, then PDF tagging/remediation. |
-
-## Product gap analysis against category leaders
-
-The market has different leaders. Adobe/Foxit own professional depth and enterprise trust; Smallpdf/iLovePDF own simple task funnels and search distribution; PDFgear owns a strong free/local value story. Adobe exposes accessibility, preflight, standards, OCR, redaction, forms, and bulk e-sign across its current plans ([Adobe comparison](https://www.adobe.com/acrobat/pricing/compare-versions.html)). Foxit combines broad editor parity, enterprise deployment, SDKs, and a formal trust center ([Foxit features](https://www.foxit.com/pdf-editor/pricing/), [Foxit Trust Center](https://www.foxit.com/trust-center/)). Smallpdf reports 40 million monthly users and a multi-platform/integration footprint ([Smallpdf About](https://smallpdf.com/about), [Smallpdf integrations](https://smallpdf.com/blog/smallpdf-apps-and-extensions-for-a-paperless-office)). iLovePDF combines low-cost premium, 25 languages, desktop/mobile/web, and an API ([iLovePDF pricing](https://www.ilovepdf.com/pricing), [iLovePDF security](https://www.ilovepdf.com/help/security)). PDFgear already competes aggressively on free local editing across Windows, macOS, iOS, and Android ([PDFgear product](https://www.pdfgear.com/), [client-side tools](https://www.pdfgear.com/secure-pdf-tools/)).
-
-| Capability | PickPDF now | Category-winning requirement |
+| Jul 9 finding | Re-audit status | Evidence |
 |---|---|---|
-| Viewing/search/annotations | Broad and visually coherent | Prove fidelity, cancellation, huge-file behavior, attachments/bookmark/comment round-trip, and malformed-file safety. |
-| Existing text/object editing | Real PDFium page-object work; a strong differentiator | Paragraph reflow, tables, images/layers, bidi/CJK/font substitution, and a published compatibility corpus. |
-| Redaction | Strong intent, unsafe edge behavior | Fail-closed removal of text, images, paths, annotations, metadata, hidden layers, and recoverability verification. |
-| OCR | English Tesseract text layer | 20+ languages, auto language detection, deskew/denoise/rotation, editable output, confidence review, benchmarked accuracy. |
-| Forms | One of the strongest early areas | Preserve forms through every page operation; auto field detection, calculations/actions, import/export, accessibility, signature workflows. |
-| Signatures | Draw/type/upload visual signatures | PKI/PAdES certificate signing, validation, timestamps, audit trail, signer identity, routing, reminders, bulk send. |
-| Compression | Image downsampling with controls | Target-size mode, preview, semantic profiles, perceptual quality metric, transparency/color safety, honest lossy/lossless labeling. |
-| Conversion | Text/HTML/DOCX/images, approximate layout | High-fidelity Word/Excel/PowerPoint/images/HTML, batch processing, scanned tables, and round-trip evaluation. |
-| Standards and print | Bates and basic PDF editing | PDF/A, PDF/X, PDF/E, PDF/VT, PDF 2.0 validation/conversion, preflight, fonts, color/output intents, transparency. |
-| Accessibility | UI basics are incomplete; no PDF remediation | WCAG app conformance, tagged PDF, reading order, alt text, tables, form labels, PDF/UA validation, VPAT. |
-| AI | Local/remote chat, summarize/rewrite/translate | Grounded citations, multi-document search, safe executable actions, plan/preview/diff/undo, layout-preserving translation. |
-| Automation | Individual tools | Reusable workflows, batch jobs, watched folders, CLI, webhooks, API, SDK. |
-| Collaboration | None | Review links, threaded comments, presence, approvals, versions, activity history, recipient-driven signature/forms loops. |
-| Platforms/distribution | Browser + Windows shell; no public release | Windows/macOS/mobile/PWA/extension, Microsoft/Google/Dropbox/Box connectors, store listings, share sheets, file associations. |
-| Enterprise | Mostly marketing/planned | SSO/SCIM, RBAC, domain claim, audit logs, retention/residency, admin analytics, MSI/MDM, SLA, support, DPA/BAA, ISO/SOC 2. |
+| Byte edits were not marked unsaved | **Fixed** | Revision state is now the dirty-state source of truth. Page, OCR, object, text, and redaction mutations bump byte revisions. Dedicated tests cover save races, discard, and undo. |
+| Encrypted PDFs could become unreadable | **Fixed** | Mutation loaders reject encrypted bytes. Editing begins only after PDFium owner authentication and decryption; a user-password-only open stays read-only. The re-encrypted regression output reopens with both password roles. |
+| 270-degree coordinates were wrong | **Fixed** | One coordinate module now covers every rotation and offset CropBoxes. Regression tests include non-square 270-degree pages. |
+| Redaction could silently report success | **Fixed for the confirmed bypass** | Removal and verification recurse through Form XObjects, apply accumulated transforms, and fail on unreadable geometry or removal failure. |
+| Image-only redaction was cosmetic | **Fixed for page/Form images** | Overlapping images are removed at page or nested Form ownership level and the saved output is rechecked recursively. |
+| Page operations stripped structures | **Partial** | Secure delete now rebuilds survivors and preserves metadata/forms, but outlines, destinations, and page labels are omitted until safe remapping exists. |
+| Permanent crop was reversible | **Fixed as a claim issue** | Crop remains a boundary operation, but the UI now states that outside content remains in the file. A secure destructive crop still does not exist. |
 
-## SEO and discoverability audit
+Result: the four confirmed stop-ship paths are fixed in the working tree. The broader page-structure, annotation/metadata redaction, and interoperability work remains a release-quality program rather than one defect.
 
-### Audit summary
+## Stop-ship fixes applied
 
-The server-rendered marketing site gives crawlers usable HTML. Current SEO maturity is poor. A `site:pickpdf.app` query returned no results during the audit. Search Console must confirm the true index count.
+### 1. Encrypted edit/save now fails closed and reopens safely
 
-### Confirmed technical/content findings
+All mutation-capable pdf-lib loaders now reject encrypted bytes. Owner-authenticated documents are decrypted through PDFium into a plaintext working copy, edited there, and re-encrypted for disk. User-password-only documents remain read-only until the owner password is supplied.
 
-- The sitemap contains 23 URLs and all returned 200.
-- The three guide detail pages canonicalize to `/guides` while remaining in the sitemap. This directly tells crawlers to consolidate them.
-- Thirteen commercial routes have no inbound HTML links: eight tool pages, four comparison pages, and the guides hub.
-- Tool pages contain roughly 135–165 rendered words, comparisons 108–121, guides 103–111, and Teams about 132, including shared navigation/footer.
-- Twenty-two descriptions are below 120 characters, the homepage description is 180, six titles are below 30, and pricing is 67.
-- `open.pickpdf.app/robots.txt`, its sitemap path, and arbitrary nonexistent URLs return the same app shell with HTTP 200. The shell has no canonical, description, or noindex.
-- Only the homepage has JSON-LD. The baseline `SoftwareApplication`/`Product` block is useful, but there is no sitewide Organization/WebSite graph, guide Article schema, or BreadcrumbList coverage.
-- `/llms.txt` returns 404 and AI crawlers are governed only by the wildcard robots rule.
-- The homepage lacks a query-descriptive H1; “Where productivity meets privacy” does not identify a PDF editor.
-- No About page, named team, author profiles, security contact, company/legal identity, case studies, public benchmark, independent review, or substantive DPA establishes E-E-A-T.
-- Live “Download” and “GitHub” links return 404.
-- The marketing origin loads Plausible, yet no verified custom conversion goals were found.
-- The production marketing router/source and sitemap generator are absent from this tracked checkout; `.gitignore` excludes `landing/`.
+Regression evidence:
 
-### Positive SEO signals
+- direct pdf-lib mutation of encrypted bytes is rejected
+- owner-decrypt, rotate, re-encrypt completes
+- saved output reopens with both user and owner passwords
+- rotation and text content survive the round trip
 
-- Valid `robots.txt`, sitemap declaration, HTTPS, 200 responses, and SSR content.
-- A substantial 1,300+ word homepage with logical headings.
-- Useful product screenshots with dimensions and descriptive alt text.
-- Privacy, terms, refund, and DPA URLs exist and are linked, although their content/commitments are incomplete.
+Remaining hardening: add AES-128, legacy RC4, empty-user-password, and cross-viewer corpus fixtures.
 
-### SEO unknowns
+### 2. Redaction removal and verification are recursive
 
-- Google/Bing indexed URL counts, exclusions, manual actions, query performance, backlinks, branded/non-branded split, and conversions.
-- Field LCP, INP, and CLS. The PageSpeed API rate-limited both attempts, so no CWV value is claimed.
-- Whether sitemap `lastmod` values reflect real content changes; every URL used the audit date.
+The object walker now descends through nested Form XObjects, accumulates affine transforms, removes children from their real owner, and uses the same traversal after saving. Unreadable objects, bounds, matrices, or removal failures abort the operation.
 
-## Trust and claim audit
+Regression evidence: nested image removal passes, a forced Form removal failure throws, and Poppler renders the redacted output with the image replaced by the black redaction box.
 
-Several claims should be changed before traffic is scaled:
+### 3. Page deletion excludes detached page data
 
-- **“Reduce file size without quality loss”** conflicts with JPEG re-encoding and downsampling in `src/lib/pdfium.ts:1277+`.
-- **“Nothing left behind” / complete redaction** conflicts with image-only regions retaining the underlying image and silent redaction failure paths.
-- **“Remove cropped area permanently”** conflicts with page-box-only cropping.
-- **“Handles very large files without slowing down”** has no benchmark and conflicts with synchronous rendering, full-byte history, and no resource limits.
-- **“Always offline / automatic updates”** conflicts with no service worker in the browser app, runtime model/language downloads, Google Fonts, and no updater plugin.
-- **“Signed installer builds”** conflicts with unsigned/test-signed artifacts and failed trust validation.
-- **Central seat management, silent rollout, DPA, support, and purchase/refund language** conflict with legal pages repeatedly describing commerce and Team delivery as planned.
-- **“No tracking”** is too broad while the marketing site loads Plausible. The correct promise is that document contents remain local by default; remote AI is opt-in and sends selected context to the configured provider; marketing analytics never receives document contents.
+`deletePages` now creates a fresh document from survivor indexes. Metadata and surviving interactive fields are restored, while old page objects and streams are never copied.
 
-## Strategic conclusion
+Regression evidence: the deleted page's unique text is absent from every decoded output stream, surviving text remains, and Poppler reopens and renders the result. The deliberate tradeoff is that outlines, named destinations, and page labels are omitted until safe remapping is implemented.
 
-PickPDF should start with one category:
+### 4. Browser fallback keeps dirty state
 
-> **The private, local-first PDF editor for people who need real existing-text editing, redaction, forms, and page work without uploading a document.**
+When the File System Access API is unavailable, the app downloads a copy and returns before `markSaved`, persistence, or editing-session cleanup. The UI explicitly states that the browser cannot confirm the write.
 
-To make that position defensible:
+Browser evidence: after editing a blank PDF and clicking Save through the anchor fallback, both Unsaved edits indicators and the Discard action remained visible.
 
-1. Make PDF output provably correct across a large public corpus.
-2. Make privacy observable through a network-boundary view, precise per-feature disclosures, and fail-closed redaction.
-3. Keep the workflow simpler than Acrobat/Foxit while matching web-tool speed.
-4. Turn AI into reversible document actions.
-5. Build task pages, integrations, and recipient workflows that create repeat acquisition.
-6. Add professional standards, signatures, accessibility, and enterprise controls after the core correctness gate passes on each release.
+## Remaining current release blocker
 
-**Fidelity + trust + distribution** will create the durable moat.
+### There is no trustworthy release
 
-## D. Unknowns and follow-ups
+- `https://pickpdf.app/download` and `/download/windows` return 404.
+- The public repository and releases links return 404.
+- Jul 8 installers predate audited main `da01514`.
+- Artifacts are unsigned, test-signed with `UnknownError`, or inconsistently versioned.
+- No tag, release manifest, checksums, SBOM, update path, or rollback identifies a shipped commit.
 
-The following require production/business access or additional tooling:
+Release gate: one version source, one audited commit, production code signing, trusted timestamping, checksums, SBOM, release notes, updater, and live download verification.
 
-- Search Console and Bing Webmaster data.
-- Plausible events, funnels, activation, retention, and paid conversion.
-- CrUX/PageSpeed field data and real-device performance traces.
-- Rust advisory scanning (`cargo-audit` is not installed).
-- A representative licensed PDF corpus and fuzz inputs.
-- Production certificate, publisher identity, payment/Merchant-of-Record configuration, support obligations, and signed legal agreements.
-- User interviews by segment: privacy-sensitive individual, legal/finance operator, student, small team, and enterprise administrator.
+## Important non-blocking findings
+
+### PDF structures and permissions
+
+- Extract and merge omit outlines, named destinations, and page labels.
+- Deleted destinations can dangle.
+- Duplicate and imported-page paths do not fully re-register fields.
+- Split/extract, several exports, OCR, and search/replace bypass central permission enforcement.
+- Signature invalidation behavior is not consistently explained before edits.
+
+### Memory and large-file behavior
+
+- Undo retains up to 60 full byte snapshots and is not byte-budgeted.
+- Dropped history entries do not always release every PDF proxy.
+- Rendering is synchronous, has a no-op cancel path, and duplicates full RGBA buffers.
+- No page, pixel, file, time, or malformed-input budget protects the UI.
+- The main build contains a 2.266 MB main JS chunk, a 404.85 KB document-conversion chunk, 4.634 MB PDFium WASM, 23.567 MB ONNX WASM, and a 541 KB worker.
+
+### Security and local privacy
+
+- Tauri still uses `csp:null`.
+- Both live origins scored 25/100 in the security-header check.
+- PDF and user links lack a strict safe-scheme policy.
+- Custom AI endpoints accept arbitrary URLs.
+- API keys remain in localStorage.
+- IndexedDB retains up to ten documents; closing is not deletion.
+- There is no no-retention mode, storage dashboard, or surfaced quota failure.
+
+### Accessibility
+
+About and Confirm dialogs improved. Most other modals still lack complete semantics, focus traps, and restoration. Existing PDF form overlays lack programmatic labels, object editing is pointer-only, placed text uses an unnamed contenteditable, and small targets remain. There is no axe, keyboard end-to-end, or screen-reader suite. PDF tagging, reading-order repair, alt text, table remediation, and PDF/UA validation are absent.
+
+### Certificate signatures
+
+The new RSA `.p12/.pfx` CMS signing and local verification are meaningful. Eight signature tests pass. This is not yet a full professional trust stack. Missing pieces include:
+
+- incremental signing and safe multiple-signature revisions
+- OS trust-store chain validation and revocation
+- ECDSA, smartcards, and hardware-backed keys
+- RFC 3161 timestamps and long-term validation
+- explicit warnings before signature-breaking edits
+- recipient routing, authentication, evidence records, reminders, and APIs
+
+### Create PDF character fidelity
+
+Word/text conversion draws with standard WinAnsi Helvetica fonts. Unsupported Unicode is sanitized to `?` before output, so Arabic, CJK, Indic, emoji, and other characters can be corrupted without a failed conversion. The screen warns about layout, images, columns, and font loss, but not character loss.
+
+Release gate: embed suitable Unicode fonts, shape complex scripts, preserve fallback per run, warn or fail before any lossy conversion, and test multilingual TXT and DOCX fixtures.
+
+## Current `main` feature delta
+
+The synchronized branch includes the prior upstream editing work plus Create PDF. The stop-ship fix working tree raises the suite to 297 passing tests. Added capabilities include:
+
+- paragraph reflow for in-place text editing
+- existing-image replacement
+- import and save of supported native annotations
+- alignment, distribution, and snapping
+- polygon, polyline, and cloud shapes
+- optional-content layer visibility controls
+- 33 OCR languages
+- PDF/A-2b-oriented structural preflight
+- blank PDFs and basic image, DOCX, and text conversion
+
+The current build and tests pass, but the newer features have limits that must remain visible:
+
+- growing paragraphs can overlap content below
+- annotation import reconstructs a reduced model and can lose rich properties
+- layer toggles do not model every locked or application-state rule
+- PDF/A preflight is heuristic, not certification or conversion
+- OCR processes the whole document in one chosen language
+- Word/text conversion replaces unsupported Unicode instead of preserving it
+
+No current commit changes release packaging, public downloads, CI, accessibility, commercial delivery, security headers, collaboration, APIs, integrations, or enterprise administration.
+
+## Live SEO, trust, and conversion re-audit
+
+No material documented live defect was confirmed fixed in the 2026-07-12 refresh.
+
+| Area | Status | Current evidence |
+|---|---|---|
+| Sitemap and canonicals | Unchanged | 23 URLs return 200; three guide detail pages canonicalize to `/guides`; every `lastmod` is 2026-07-09. |
+| App-origin crawl behavior | Unchanged | `/robots.txt`, `/sitemap.xml`, and random paths return the same 730-byte shell with 200 and no `noindex`. |
+| Internal links | Unchanged | The sitemap still lists 23 URLs, while a homepage crawl reaches only the core legal/pricing pages. Tool and comparison routes remain disconnected from primary navigation. |
+| Content depth | Unchanged | Tools are about 101-129 visible words, comparisons 65-78, guide articles 73-81, Teams 91, and legal pages 102-112 including shared chrome. |
+| Metadata | Unchanged | 22/23 descriptions are below 120 characters, six titles are below 30, pricing is 67, and the H1 does not name a PDF editor. |
+| Schema and entity trust | Unchanged | Only the homepage has JSON-LD. About, Contact, Security, Trust, Changelog, security.txt, Authors, and Case Studies return 404. |
+| Headers | Unchanged | Both origins omit the six baseline security headers. |
+| Download and GitHub | Unchanged | `/download`, `/download/windows`, the public repository, and releases path return 404. |
+| AI-search support | Unchanged | `llms.txt` and `llms-full.txt` return 404. |
+| Conversion measurement | Unchanged | Plausible pageviews load, but no explicit download, open-editor, Pro, or Team-lead event was found. |
+
+Positive signals remain: HTTPS works, HTTP and `www` redirect to the canonical host, all sitemap URLs return 200, marketing 404s behave correctly, social metadata is complete, and titles/descriptions are unique.
+
+PageSpeed returned rate-limit responses, so no Core Web Vitals score is claimed.
+
+## What PickPDF still needs to be category number one
+
+The viable position is narrower than "best PDF product for everyone":
+
+> **The private, verifiable, local-first PDF editor for real document work.**
+
+The fastest path is to make local processing provably safer than cloud-first competitors while keeping common work simpler than Acrobat or Foxit.
+
+| Priority | Gap | Market bar | Required PickPDF outcome |
+|---:|---|---|---|
+| 1 | Fidelity and save architecture | Professional editors preserve complex files across repeated edits. [Foxit advanced editing](https://www.foxit.com/pdf-editor/advanced-editing/), [Nitro PDF Pro](https://www.gonitro.com/user-guide/mac/article/introduction) | Incremental saves where possible, a public adversarial corpus, cross-viewer round trips, and zero silent structure or privacy loss. |
+| 2 | Accessibility and standards | Acrobat repairs tags, reading order, tables, figures, and forms; Foxit covers broad compliance and preflight. [Adobe accessibility](https://helpx.adobe.com/acrobat/using/create-verify-pdf-accessibility.html), [Foxit compliance](https://help.foxit.com/csh/q/product/phantom/id/Home_Compliance_PDFA/language/en-us/version/11.2.0) | Tagged-PDF remediation, PDF/UA, validator-backed PDF/A conversion, PDF/X/E/VT preflight, and accessible form workflows. |
+| 3 | Trusted signatures and agreements | E-sign leaders provide routing, identity, evidence, templates, reminders, APIs, and qualified-signature options. [DocuSign features](https://www.docusign.com/products/electronic-signature/features), [Acrobat Sign API](https://developer.adobe.com/acrobat-sign/docs/overview/developer_guide/) | Finish local certificate trust first, then add optional recipient workflows, evidence records, webhooks, and embedded signing. |
+| 4 | Release trust and platforms | Category leaders ship maintained desktop, mobile, and web products. [iLovePDF features](https://www.ilovepdf.com/features), [PDFgear](https://www.pdfgear.com/) | Reproducible signed Windows releases, updates and rollback, macOS next, then mobile or a strong installable web experience. |
+| 5 | Collaboration and automation | Leaders support shared review, DMS/cloud integrations, APIs, and chained workflows. [Adobe Acrobat](https://www.adobe.com/acrobat/features.html), [iLovePDF Business](https://www.ilovepdf.com/business) | Shared reviews, versions, approvals, optional connectors, batch workflows, CLI, REST API, SDK, and webhooks. |
+| 6 | Enterprise trust | Buyers expect SSO, SCIM, RBAC, audit logs, policy control, managed deployment, DPA/SLA, and independent assurance. [Smallpdf Trust Center](https://smallpdf.com/trust-center), [DocuSign certifications](https://www.docusign.com/trust/compliance/certifications) | Admin and compliance foundations after the core file-safety gate passes. |
+| 7 | Action-oriented local AI | AI leaders can execute document tasks, not only chat. [Adobe smart assistance](https://helpx.adobe.com/acrobat/using/get-smart-assistance-pdf-tools.html), [Nitro PDF Pro 26](https://www.gonitro.com/release-hub/nitro-pdf-pro-26) | Local plan, preview, diff, apply, and undo; cited multi-document answers; PII detection; form/table extraction; layout-preserving translation. |
+| 8 | Global product | Competitors localize the interface and support many OCR/translation languages. [iLovePDF press](https://www.ilovepdf.com/press) | Localized UI and support, proven RTL/CJK editing, locale-aware forms and signatures, and language-specific acquisition pages. |
+
+## Recommended sequence
+
+1. Commit and review the four stop-ship fixes with the new regression fixtures.
+2. Build a tracked golden corpus and make it a mandatory CI release gate.
+3. Publish one signed, versioned Windows release with a working download path.
+4. Remove unsupported claims and publish complete trust, security, legal, and operator information.
+5. Fix live canonicals, app `noindex`/404 behavior, headers, internal links, and conversion tracking.
+6. Improve accessibility, resource limits, permissions, and signature trust.
+7. Publish the fidelity/privacy benchmark as the product's proof and acquisition asset.
+8. Expand into standards, workflows, platforms, and enterprise only after the safety gate stays green.
 
 ## Verification log
 
 | Check | Result |
 |---|---|
-| `npm run typecheck` | Pass |
-| `npm test -- --reporter=verbose` | 79/79 pass |
-| `npm run build` | Pass; 2.19 MB main JS, 4.63 MB PDFium WASM, 23.57 MB ONNX runtime WASM |
-| `npm audit --json` | 0 advisories |
-| `cargo test` | Pass; 0 Rust tests |
-| Browser workflow | Local/live app loaded; blank PDF created; text box placed and edited; no immediate console errors |
-| Responsive checks | Marketing page fit 375 px; app uses drawers, but the assistant occupies most of a narrow viewport by default |
-| Live crawl | 23 sitemap URLs, canonical/internal-link/content/metadata checks completed |
-| Security headers | HTTPS pass; six baseline headers missing; automated score 25/100 |
-| Broken links | 3 confirmed, including public GitHub and releases URLs |
-| Finding verifier | 29 raw, 29 verified, 0 dropped |
+| Stop-ship working tree `npm test` | 297/297 pass across 28 files |
+| Main typecheck and production build | Pass |
+| Main `npm audit --json` | 0 advisories |
+| `cargo test` | Compiles and passes; 0 Rust tests |
+| Branch synchronization | Local `main` and `origin/main` both resolve to `da01514` |
+| Browser workflow | Blank PDF edited; anchor fallback downloaded a copy and retained Unsaved edits plus Discard |
+| Encryption regression | Owner-decrypt, edit, re-encrypt reopens with user and owner passwords; direct encrypted pdf-lib mutation rejects |
+| Redaction regression | Nested Form-XObject image removed; forced nested removal failure aborts; Poppler render verified |
+| Page-delete regression | Deleted text absent from all decoded streams; surviving page reopens and renders in Poppler |
+| Installer trust | Unsigned or test-signed/UnknownError; all artifacts stale |
+| Live sitemap | 23 URLs; canonical, links, metadata, content, and schema checked |
+| Security headers | Both origins 25/100; six baseline headers missing |
+| Finding verifier | 35 raw, 35 verified, 0 dropped |
+
+## Unknowns requiring access or additional tooling
+
+- Search Console, Bing Webmaster, CrUX, Plausible goals, activation, retention, and purchase data
+- private GitHub settings, Actions history, branch protection, and private release state
+- Rust dependency advisories because `cargo-audit` is not installed
+- production signing identity, payment provider, licensing service, support commitments, and executed legal agreements
+- a representative licensed PDF corpus and independent accessibility/security review
+
+The re-audit ledger is in `AUDIT-FINDINGS.json`. Execution order and exit criteria are in `ACTION-PLAN.md`.

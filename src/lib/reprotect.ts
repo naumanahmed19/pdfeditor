@@ -1,13 +1,10 @@
 // Re-protection recipes for documents that were STANDARD-ENCRYPTED when they
 // were opened.
 //
-// Every edit path in the app operates on effectively decrypted bytes —
-// pdftools' pdf-lib loader passes `ignoreEncryption: true`, and PDFium's
-// save-as-copy of an edited document doesn't re-emit the original encryption.
-// Left alone, that means "open an encrypted PDF, edit, save" silently writes
-// an UNENCRYPTED file. To prevent that, the store captures a recipe when an
-// encrypted document is opened and `protectForDisk` re-applies it to every
-// subsequent save/download.
+// Every edit path operates on an owner-authenticated plaintext working copy.
+// The store captures a recipe when an encrypted document is opened and
+// `protectForDisk` re-applies it to every subsequent save/download. A
+// user-password-only document remains read-only until owner authentication.
 //
 // This module holds the pure decision logic (no PDFium/WASM imports) so it is
 // unit-testable under plain node.

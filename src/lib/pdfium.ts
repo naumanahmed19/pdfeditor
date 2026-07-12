@@ -173,6 +173,110 @@ interface NormRect {
   top: number;
 }
 
+interface PdfMatrix {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
+const IDENTITY_MATRIX: PdfMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+const FPDF_PAGEOBJ_FORM = 5;
+
+function multiplyMatrix(parent: PdfMatrix, child: PdfMatrix): PdfMatrix {
+  return {
+    a: parent.a * child.a + parent.c * child.b,
+    b: parent.b * child.a + parent.d * child.b,
+    c: parent.a * child.c + parent.c * child.d,
+    d: parent.b * child.c + parent.d * child.d,
+    e: parent.a * child.e + parent.c * child.f + parent.e,
+    f: parent.b * child.e + parent.d * child.f + parent.f,
+  };
+}
+
+function transformBounds(b: NormRect, m: PdfMatrix): NormRect {
+  const points = [
+    [b.left, b.bottom],
+    [b.left, b.top],
+    [b.right, b.bottom],
+    [b.right, b.top],
+  ].map(([x, y]) => ({ x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f }));
+  return {
+    left: Math.min(...points.map((p) => p.x)),
+    bottom: Math.min(...points.map((p) => p.y)),
+    right: Math.max(...points.map((p) => p.x)),
+    top: Math.max(...points.map((p) => p.y)),
+  };
+}
+
+type ObjectOwner = { kind: "page" | "form"; handle: number };
+
+function walkPageObjects(
+  mod: WrappedPdfiumModule,
+  page: number,
+  visit: (obj: number, type: number, bounds: NormRect, owner: ObjectOwner) => void,
+): void {
+  const rt = rtx(mod);
+  const f4 = rt.wasmExports.malloc(16);
+  const m6 = rt.wasmExports.malloc(24);
+  const walk = (owner: ObjectOwner, ancestor: PdfMatrix, depth: number) => {
+    if (depth > 32) throw new Error("Redaction failed: nested Form XObjects exceed the safety limit");
+    const count =
+      owner.kind === "page"
+        ? mod.FPDFPage_CountObjects(owner.handle)
+        : mod.FPDFFormObj_CountObjects(owner.handle);
+    for (let i = 0; i < count; i++) {
+      const obj =
+        owner.kind === "page"
+          ? mod.FPDFPage_GetObject(owner.handle, i)
+          : mod.FPDFFormObj_GetObject(owner.handle, i);
+      if (!obj) throw new Error("Redaction failed: a page object could not be read");
+      const type = mod.FPDFPageObj_GetType(obj);
+      if (type === FPDF_PAGEOBJ_FORM) {
+        if (!mod.FPDFPageObj_GetMatrix(obj, m6)) {
+          throw new Error("Redaction failed: a Form XObject matrix could not be read");
+        }
+        const formMatrix: PdfMatrix = {
+          a: rt.getValue(m6, "float"),
+          b: rt.getValue(m6 + 4, "float"),
+          c: rt.getValue(m6 + 8, "float"),
+          d: rt.getValue(m6 + 12, "float"),
+          e: rt.getValue(m6 + 16, "float"),
+          f: rt.getValue(m6 + 20, "float"),
+        };
+        walk({ kind: "form", handle: obj }, multiplyMatrix(ancestor, formMatrix), depth + 1);
+        continue;
+      }
+      if (type !== FPDF_PAGEOBJ_IMAGE && type !== FPDF_PAGEOBJ_PATH) continue;
+      if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) {
+        throw new Error("Redaction failed: object bounds could not be read");
+      }
+      visit(
+        obj,
+        type,
+        transformBounds(
+          {
+            left: rt.getValue(f4, "float"),
+            bottom: rt.getValue(f4 + 4, "float"),
+            right: rt.getValue(f4 + 8, "float"),
+            top: rt.getValue(f4 + 12, "float"),
+          },
+          ancestor,
+        ),
+        owner,
+      );
+    }
+  };
+  try {
+    walk({ kind: "page", handle: page }, IDENTITY_MATRIX, 0);
+  } finally {
+    rt.wasmExports.free(m6);
+    rt.wasmExports.free(f4);
+  }
+}
+
 /** Group rects by page and normalize their edge order. */
 function rectsByPage(rects: RedactRect[]): Map<number, NormRect[]> {
   const byPage = new Map<number, NormRect[]>();
@@ -271,36 +375,27 @@ function removeObjectsInRects(
   rects: NormRect[],
   pageIndex: number,
 ): void {
-  const rt = rtx(mod);
-  const f4 = rt.wasmExports.malloc(16); // 4 floats: left, bottom, right, top
-  try {
-    const doomed: Array<{ obj: number; kind: "image" | "path" }> = [];
-    const count = mod.FPDFPage_CountObjects(page);
-    for (let i = 0; i < count; i++) {
-      const obj = mod.FPDFPage_GetObject(page, i);
-      const type = mod.FPDFPageObj_GetType(obj);
-      if (type !== FPDF_PAGEOBJ_IMAGE && type !== FPDF_PAGEOBJ_PATH) continue;
-      if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
-      const kind = type === FPDF_PAGEOBJ_IMAGE ? "image" : "path";
-      const b: NormRect = {
-        left: rt.getValue(f4, "float"),
-        bottom: rt.getValue(f4 + 4, "float"),
-        right: rt.getValue(f4 + 8, "float"),
-        top: rt.getValue(f4 + 12, "float"),
-      };
-      if (boundsHitRects(kind, b, rects)) doomed.push({ obj, kind });
+  const doomed = new Map<
+    string,
+    { obj: number; kind: "image" | "path"; owner: ObjectOwner }
+  >();
+  walkPageObjects(mod, page, (obj, type, bounds, owner) => {
+    const kind = type === FPDF_PAGEOBJ_IMAGE ? "image" : "path";
+    if (boundsHitRects(kind, bounds, rects)) {
+      doomed.set(`${owner.kind}:${owner.handle}:${obj}`, { obj, kind, owner });
     }
-    // Remove after enumerating — removal by handle doesn't disturb the others.
-    for (const { obj, kind } of doomed) {
-      if (!mod.FPDFPage_RemoveObject(page, obj)) {
-        throw new Error(
-          `Redaction failed: could not remove a covered ${kind} on page ${pageIndex + 1}`,
-        );
-      }
-      mod.FPDFPageObj_Destroy(obj);
+  });
+  for (const { obj, kind, owner } of doomed.values()) {
+    const removed =
+      owner.kind === "page"
+        ? mod.FPDFPage_RemoveObject(owner.handle, obj)
+        : mod.FPDFFormObj_RemoveObject(owner.handle, obj);
+    if (!removed) {
+      throw new Error(
+        `Redaction failed: could not remove a covered ${kind} on page ${pageIndex + 1}`,
+      );
     }
-  } finally {
-    rt.wasmExports.free(f4);
+    mod.FPDFPageObj_Destroy(obj);
   }
 }
 
@@ -324,7 +419,6 @@ function verifyRedaction(
     throw new Error("Redaction verification failed: could not reopen the redacted document");
   }
   const problems: string[] = [];
-  const f4 = rt.wasmExports.malloc(16);
   try {
     for (const [pageIndex, rects] of byPage) {
       const page = mod.FPDF_LoadPage(doc, pageIndex);
@@ -349,21 +443,14 @@ function verifyRedaction(
             mod.FPDFText_ClosePage(textPage);
           }
         }
-        // Image check: any surviving image still overlapping a redacted rect.
+        // Image check: recurse through every nested Form XObject using the
+        // same accumulated transforms as the removal pass.
         let images = 0;
-        const count = mod.FPDFPage_CountObjects(page);
-        for (let i = 0; i < count; i++) {
-          const obj = mod.FPDFPage_GetObject(page, i);
-          if (mod.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) continue;
-          if (!mod.FPDFPageObj_GetBounds(obj, f4, f4 + 4, f4 + 8, f4 + 12)) continue;
-          const b: NormRect = {
-            left: rt.getValue(f4, "float"),
-            bottom: rt.getValue(f4 + 4, "float"),
-            right: rt.getValue(f4 + 8, "float"),
-            top: rt.getValue(f4 + 12, "float"),
-          };
-          if (boundsHitRects("image", b, rects)) images++;
-        }
+        walkPageObjects(mod, page, (_obj, type, bounds) => {
+          if (type === FPDF_PAGEOBJ_IMAGE && boundsHitRects("image", bounds, rects)) {
+            images++;
+          }
+        });
         if (images > 0) {
           problems.push(
             `${images} image${images === 1 ? "" : "s"} still present on page ${pageIndex + 1}`,
@@ -374,7 +461,6 @@ function verifyRedaction(
       }
     }
   } finally {
-    rt.wasmExports.free(f4);
     mod.FPDF_CloseDocument(doc);
     rt.wasmExports.free(filePtr);
   }

@@ -1,350 +1,334 @@
 # PickPDF Prioritized Action Plan
 
-> **Verification status (2026-07-09):** Phase 0 technical claims were verified against the current source. 12 of 15 verifiable claims confirmed as written; items 1, 3, and 6 were rescoped to match what the code actually does (see inline notes in those sections).
+**Updated:** 2026-07-12
+**Audited snapshot:** `main` and `origin/main` at `da01514`
 
 ## Objective
 
-Build PickPDF into the category leader for **private, local-first PDF editing**, then expand into professional and enterprise workflows. The plan is ordered by dependency: correctness and trust first, reliable release/distribution second, growth third, professional breadth fourth.
+Make PickPDF the most trustworthy local-first PDF editor before expanding into a general Acrobat replacement.
 
-The north-star metric should be:
+The release metric is:
 
-> **Successful document jobs per active user**, with no document-integrity or privacy regression.
+> **Successful document jobs with zero silent loss, corruption, privacy failure, or false save confirmation.**
 
-## Phase 0: stop-ship fixes (0–2 weeks)
+Feature count is not the next constraint. File integrity, proof, distribution, and trust are.
 
-### 1. Establish one document-integrity gate
+## Release gates
 
-**Impact:** critical  
-**Effort:** medium  
-**Owner:** PDF engine/state
+Do not call the product production-ready, sell Team delivery, or direct broad traffic to Download until every gate below passes.
 
-- Replace `docHasEdits()` (`src/store.tsx:724` — a heuristic over the annotation/form/fieldOps maps only) with an explicit saved revision/hash.
-- Every byte, annotation, form, metadata, protection, OCR, redaction, page, and object mutation must advance the working revision. Today the byte-level paths (page ops, OCR, protect, redaction, in-place text/object edits) commit new bytes and *clear* those maps, so the doc reads clean with unsaved changes.
-- Save must update the saved revision only after the write succeeds. *Verified scope:* the file-handle path already awaits write+close before committing (`store.tsx:2392-2416`); the gap is the browser anchor-download path (`store.tsx:2397`, `src/lib/utils.ts:30-36`), which is fire-and-forget.
-- Close, refresh, dirty dots, Discard, split-pane Save, recovery, and autosave must use the same state model. *Verified scope:* the dirty-indicator surfaces (dots, beforeunload, close confirm, Discard) already share `docHasEdits`; the real split is between that indicator model and the byte-level persistence/undo model — autosave/recovery see byte edits the dirty indicator misses, and Discard (`store.tsx:1383-1394`) cannot revert committed byte edits.
-- Add tests for edit → close, edit → refresh, redact → close, OCR → close, page reorder → close, save failure, and Discard.
+| Gate | Current state | Required evidence |
+|---|---|---|
+| Encrypted edit/save | Fixed in working tree | Owner-authenticated edit/re-encrypt output reopens with both password roles; user-only input remains read-only. Cross-viewer legacy-encryption corpus remains. |
+| Redaction | Confirmed nested-image bypass fixed | Text, page/Form images, and contained paths fail closed and are rechecked recursively. Annotation, metadata, and optional-content policy remains broader hardening. |
+| Page deletion | Fixed in working tree | Deleted content is absent from decoded streams and the survivor output reopens/renders in Poppler. Safe outline/destination remapping remains. |
+| Save completion | Fixed in browser fallback | Anchor download keeps dirty state; only awaited file-handle writes clear it. |
+| Create PDF text fidelity | Fails for unsupported Unicode | Multilingual source text converts without silent character replacement and passes render/extraction checks. |
+| Golden corpus | Missing | Mandatory CI opens, mutates, saves, reopens, renders, extracts, and validates every fixture. |
+| Installer trust | Fails | Current source commit produces production-signed, timestamped, version-consistent artifacts with checksums and SBOM. |
+| Public install loop | Fails | Every Download/GitHub CTA resolves to a tested release destination. |
+| Claims and legal | Fails | Public copy matches shipped behavior and complete legal/support terms. |
+| Security baseline | Fails | Tested CSP plus HSTS, frame, MIME, referrer, and permissions headers on both origins and desktop. |
 
-**Exit metric:** no mutating command can leave the document visually “clean” before a successful save.
+## Phase 0: close stop-ship defects
 
-### 2. Replace the encrypted-document pipeline
+### 1. Lock the synchronized snapshot into a release identity
 
-**Impact:** critical  
-**Effort:** high  
+**Owner:** release engineering
+**Effort:** small
+**Impact:** critical
+
+- Completed for this audit: local `main` now exactly matches `origin/main` at `da01514`, with existing user work preserved.
+- Freeze a release candidate and assign one version from a single source.
+- Generate the commit, version, build time, dependency lock hash, and feature flags into an artifact manifest.
+- Use a signed tag for every public build.
+
+**Exit:** website, source, tests, installers, checksums, release notes, and About dialog all identify the same commit and version.
+
+### 2. Replace encrypted editing with an authenticated plaintext pipeline
+
+**Status:** completed for the confirmed corruption path; retain the legacy/cross-viewer matrix below.
+
 **Owner:** PDF engine/security
+**Effort:** large
+**Impact:** critical
 
-- Remove `ignoreEncryption:true` from generic helpers.
-- Stop reopening protected bytes with an empty password.
-- Choose one supported model:
-  - mutate through the authenticated PDFium handle, or
-  - owner-decrypt to a controlled working copy, mutate, validate, and re-encrypt with the original policy.
-- Preserve user/owner password semantics and permissions.
-- Test AES-128/AES-256, user/owner password, permissions-only files, malformed encryption dictionaries, save/reopen in Acrobat/Foxit/Chrome/PDFium, and wrong-password behavior.
+- Stop passing encrypted bytes to pdf-lib with `ignoreEncryption:true` as if they were plaintext.
+- Use the authenticated PDFium document to produce verified decrypted working bytes, or use an encryption-capable library that preserves the security handler correctly.
+- Separate user-password and owner-password semantics. Do not silently replace an unknown recipient password.
+- Reapply protection only after the edited plaintext validates.
+- Reopen saved output with intended passwords and verify permissions, page count, text, forms, outline, attachments, annotations, and render hashes.
 
-**Exit metric:** every protected-fixture workflow reopens with the expected password and preserves the expected permission flags.
+Test matrix:
 
-### 3. Unify coordinate conversion
+- empty user password plus owner password
+- distinct user and owner passwords
+- owner-only open
+- AES-128, AES-256, and legacy RC4 input
+- every permission flag, including document assembly
+- overlay edit, text edit, page operation, form fill, OCR, redaction, and signature paths
 
-**Impact:** critical  
-**Effort:** medium  
-**Owner:** PDF engine
+**Exit:** no encrypted corpus fixture can become unreadable or silently change access semantics.
 
-- *Verified scope:* most paths already share one transform, `toPdfRect()` (`src/lib/pdftools.ts:460-477`) — this is not per-module duplication. The actual work: consolidate `toPdfRect()`, the near-identical `displayPointToPdf()` (`pdftools.ts:1804-1820`), and the rotation-blind OCR text-layer math (`pdftools.ts:1849`) into one PDFium-backed converter.
-- Fix the rotated-page mapping. (Resolved during implementation: derivation against the pdf.js viewport transform proved the 90° branch was *correct* — the **270° branches** of both `toPdfRect` and `displayPointToPdf` had `pw`/`ph` swapped in their offset terms, displacing content diagonally on non-square pages; square pages masked it. Fixed in PR #46.)
-- Cover points, rectangles, matrices, CropBox offsets, MediaBox offsets, and non-square pages. Today crop uses CropBox with origin offset (`pdftools.ts:249-253`) while redaction/annotations/OCR use MediaBox with no CropBox offset (`pdftools.ts:498-499, 809`), so shifted-CropBox pages diverge between features.
-- Apply the same converter to crop, redaction, form placement, annotation baking, object movement, and OCR.
+### 3. Make redaction recursive and independently verifiable
 
-**Exit metric:** property/fixture tests pass for all rotations and round-trip device → PDF → device within a small tolerance.
+**Status:** completed for nested Form images and unreadable object geometry; continue the broader content-class corpus below.
 
-### 4. Make redaction fail closed and verifiable
-
-**Impact:** critical  
-**Effort:** high  
 **Owner:** PDF engine/security
+**Effort:** large
+**Impact:** critical
 
-- Treat any page-load, quad, content-generation, or save failure as a complete failure.
-- Keep pending redaction boxes until verification passes.
-- Remove intersecting text, image, path, annotation, form, metadata, and hidden-layer content where applicable.
-- For unsupported image/path cases, block completion with an exact explanation.
-- Reopen the output and verify with text extraction, page-object inspection, and raster comparison.
-- Fix the redaction copy until removal is actually complete: the confirm dialog says "The text and images beneath will be deleted" (`src/store.tsx:2216-2218`) and the toolbar says "Permanently removes covered content" (`src/components/viewer/Toolbar.tsx:118`) — but `redactRegions` (`src/lib/pdfium.ts:178-237`) removes only text plus recursed form-field text; images, vector paths, annotations, and metadata survive. (The overclaiming marketing landing page was removed from the workspace on 2026-07-10.)
-- Add adversarial fixtures: scanned page, vector text, image mask, rotated page, annotations, forms, OCR layer, clipped text, layers, and malformed content streams.
+- Traverse nested Form XObjects and optional-content groups.
+- Treat unreadable object geometry or a failed removal as an error.
+- Cover text, raster images, paths, annotations, form appearances, metadata, attachments, thumbnails, and hidden layers.
+- If a construct cannot be safely edited, rasterize the affected page at a documented quality or block the operation.
+- Verify fresh output through text extraction, object traversal, raw stream scan, and render comparison.
+- Keep redaction boxes and original bytes on every failure.
 
-**Exit metric:** 100% of redaction fixtures contain no recoverable target content; a failed verification never produces a success toast.
+**Exit:** adversarial fixtures cannot recover the secret with text extraction, object extraction, layer toggling, stream inspection, or alternate viewers.
 
-### 5. Preserve document structures during page operations
+### 4. Sanitize deleted pages and destructive crop output
 
-**Impact:** critical  
-**Effort:** high  
+**Status:** secure page deletion completed through survivor rebuild; outline/destination remapping remains.
+
 **Owner:** PDF engine
+**Effort:** medium
+**Impact:** critical
 
-- Replace new-document `copyPages` flows for reorder/delete where in-place page-tree mutation is possible.
-- For merge/extract, explicitly map/preserve forms, outlines, named destinations, page labels, metadata, attachments, tags, annotations, optional-content groups, and signatures when semantically valid.
-- Define what must be invalidated when pages change, especially digital signatures.
-- Validate repository form/outline fixtures and add tagged, signed, portfolio, attachment, and destination fixtures.
+- Garbage-collect unreachable page objects after deletion.
+- Remap or remove outlines, named destinations, page labels, form fields, attachments, and actions that point to removed pages.
+- Add a separate **Secure remove page** operation if ordinary deletion cannot guarantee erasure.
+- Keep boundary crop named and described as non-destructive.
 
-**Exit metric:** no undocumented catalog structure disappears from a successful operation.
+**Exit:** deleted-page secrets are absent from all saved streams and every surviving structure remains valid.
 
-### 6. Correct crop behavior and copy
+### 5. Correct save and download state semantics
 
-**Impact:** critical  
-**Effort:** low for copy; high for true destructive crop
+**Status:** completed and verified in the browser anchor-fallback path.
 
-- *Verified scope:* permanent mode already rewrites MediaBox as well as CropBox (`src/lib/pdftools.ts:254-255`), and the in-app copy is already measured ("rewrites the page boundaries", `src/components/tools/ToolsScreens.tsx:1112-1113`). The overstated claim is the code comment "the cropped area is gone for every consumer" (`pdftools.ts:235`) — content streams are untouched, so cropped content remains recoverable by enlarging the boxes. The user-facing "permanent removal" problem belongs to redaction (moved to item 4).
-- Fix or remove the `pdftools.ts:235` comment; if destructive crop is retained as a feature, clip/rewrite content streams and verify that objects outside the retained rectangle are unrecoverable.
+**Owner:** application state/platform
+**Effort:** small
+**Impact:** critical
 
-### 7. Stop overstated public claims
+- Reserve **Save** for an awaited filesystem or desktop write.
+- Rename anchor fallback to **Download copy** and keep the document dirty.
+- Preserve dirty state when a picker is cancelled, a download is blocked, a write fails, or an edit lands during a write.
+- Show the saved path or downloaded-copy status precisely.
+- Add browser and Tauri end-to-end tests for every branch.
 
-**Impact:** critical  
-**Effort:** low  
-**Owner:** product/legal/growth
+**Exit:** no failed or unconfirmed write can clear the unsaved-edit warning.
 
-Change or hide these claims until evidence exists:
+### 6. Build the document-integrity test gate
 
-- “Compression without quality loss” → “lossy image compression with adjustable quality.”
-- Complete redaction → clarify supported content and verification.
-- Permanent crop → visible-boundary crop.
-- “Handles very large files without slowing down” → remove until benchmarked.
-- Automatic updates → planned until an updater is shipped.
-- Signed installers → remove until production signing validates.
-- Central seats, silent deployment, DPA, priority support, and checkout → preview/waitlist until operational.
-- “No tracking / nothing leaves” → document processing is local by default; remote AI is opt-in; marketing analytics excludes document contents.
+**Owner:** quality/PDF engine
+**Effort:** medium
+**Impact:** critical
 
-### 8. Repair the public acquisition path
+- Track `test-fixtures/` and define licenses/provenance for every sample.
+- Add malformed, huge, encrypted, signed, tagged, layered, scanned, font-heavy, form, portfolio, attachment, rotation, CropBox, and nested-XObject files.
+- Add property tests for coordinates and page trees.
+- Add corpus and fuzz runs for every parser and mutation entry point.
+- Compare output in PDFium, qpdf, veraPDF, Acrobat, and Foxit where licensing permits.
+- Run Windows browser/Tauri end-to-end tests, axe, screenshots, and Rust tests in CI.
 
-**Impact:** critical  
-**Effort:** low–medium  
-**Owner:** release/growth
+**Exit:** pull requests cannot merge when file invariants, accessibility, security, or release packaging regress.
 
-- Replace the 404 GitHub/release CTAs with a real public destination or waitlist.
-- Publish production-signed MSI/NSIS artifacts, SHA-256 checksums, versioned release notes, supported OS requirements, privacy note, and rollback instructions.
-- Use a real publisher identity and timestamp; automate signature verification before publish.
-- Do not expose test-signed or unsigned artifacts as production downloads.
+### 7. Ship one trustworthy Windows release
 
-### 9. Fix immediate web/security/SEO blockers
+**Owner:** release engineering
+**Effort:** medium
+**Impact:** critical
 
-**Impact:** high  
-**Effort:** low–medium
+- Replace the test certificate with a production code-signing identity.
+- Sign and timestamp MSI/NSIS artifacts and fail the build on any invalid signature.
+- Add reproducible builds, dependency inventory, SBOM, checksums, release notes, malware scan, and clean-VM install/uninstall tests.
+- Add updater signing, staged rollout, rollback, file associations, single-instance/open-with behavior, and crash diagnostics with explicit privacy controls.
+- Publish the release at a stable first-party URL.
 
-- Self-canonicalize the three guide pages or remove them from the sitemap.
-- Return real 404s from `open.pickpdf.app` and add `X-Robots-Tag: noindex, nofollow` to the app shell.
-- Add HSTS, CSP, X-Frame-Options/frame-ancestors, X-Content-Type-Options, Referrer-Policy, and Permissions-Policy.
-- Add strict URL-scheme allow-lists and safe external-launch confirmation.
-- Bring the production marketing router, routes, sitemap generator, and infrastructure into version control.
-- Make every tool/comparison/guide reachable through HTML links.
+**Exit:** a clean Windows machine installs the exact audited commit without trust errors and can safely update or roll back.
 
-### Phase 0 release gate
+### 8. Correct claims, security headers, and legal delivery
 
-Do not open paid checkout or make regulated-industry claims until all conditions pass:
+**Owner:** product, legal, web, security
+**Effort:** medium
+**Impact:** critical
 
-- P0 correctness fixtures green.
-- Redaction verification green.
-- Protected file interoperability green.
-- No structure loss in supported operations.
-- Public download succeeds and signature validates.
-- Public copy matches delivered capabilities.
-- No critical/high known security advisory in JavaScript, Rust, or bundled native/WASM dependencies.
+- Remove claims for central seats, silent deployment, PO billing, priority support, delivered DPA, automatic updates, proven huge-file performance, or absolute offline behavior until each exists.
+- Mark Pro and Team as preview if checkout, licensing, support, and legal delivery are not live.
+- Publish complete Privacy, Terms, Refund, DPA, EULA, Security, and support commitments.
+- Add a restrictive CSP and all six baseline headers to both origins and Tauri.
+- Add safe link schemes, external-launch confirmation, HTTPS endpoint validation, and OS vault storage for desktop API keys.
 
-## Phase 1: reliability foundation (weeks 2–6)
+**Exit:** every public promise maps to a tested feature, contract, or published measurement.
 
-### 1. Create the PDF fidelity corpus and CI moat
+## Phase 1: harden the solo editor
 
-- Start with 250 curated fixtures; grow toward 5,000–10,000 licensed/synthetic documents.
-- Include versions 1.3–2.0, encryption variants, rotations, offset boxes, subset fonts, CJK/RTL, forms, outlines, tags, layers, transparency, attachments, signatures, portfolios, huge images, malformed objects, and scanned pages.
-- For each operation, assert invariants across open → render → edit → save → reopen → extract → validate.
-- Add pixel baselines with perceptual tolerances and structural assertions with PDFium/qpdf/veraPDF-compatible tooling.
-- Add fuzzing for parser boundaries and operation sequences.
-- Run the matrix on Windows browser/Tauri; add macOS/Linux browsers as targets expand.
+### 9. Finish page and annotation round-trip fidelity
 
-**Metrics:** corpus pass rate ≥99.9%; zero unexplained structure loss; redaction/security invariants 100%.
+- Preserve and remap outlines, destinations, labels, forms, tags, attachments, actions, layers, and metadata for every page operation.
+- Do not flatten imported annotations into a reduced model without a warning or lossless preservation path.
+- Add incremental save where it protects signatures and reduces rewrite risk.
+- Warn before any action invalidates an existing signature.
 
-### 2. Add CI and release governance
+### 10. Centralize authorization
 
-- Required checks: typecheck, unit, integration, E2E, a11y, corpus, dependency audit, cargo advisory scan, bundle budget, live-route crawl, security headers, installer signature, SBOM.
-- Add coverage thresholds for critical engine/state modules.
-- Produce reproducible builds, checksums, SBOM, and signed provenance.
-- Use preview deployments for marketing changes and crawl them before merge.
+- Move permission enforcement into mutation and export services.
+- Model print quality, copy/accessibility extraction, modification classes, annotation, form fill, and document assembly separately.
+- Test every operation under every permission combination.
 
-### 3. Make large-file behavior bounded
+### 11. Put memory and work on budgets
 
-- Move page rendering/text extraction/OCR to workers.
-- Add tiled rendering, true cancellation, page-handle eviction, virtualized thumbnails/text layers, and a byte-budgeted undo history.
-- Define maximum pixels/page, pages/document, decompressed image bytes, attachment size, OCR work, and AI context.
-- Add graceful recovery and explicit resource-limit messages.
+- Replace the 60-step full-file history cap with a byte budget.
+- Use deltas or temporary files for large content revisions.
+- Dispose every dropped PDFium handle deterministically.
+- Workerize rendering, extraction, OCR, compression, and long edits.
+- Add cancellation, tiling, virtualization, and page/pixel/file/time limits.
+- Define supported limits from measured p75 and worst-case data.
 
-**Metrics:** crash-free sessions ≥99.9%; p75 first-page render ≤1.5 seconds for the agreed benchmark; p75 interaction latency ≤200 ms; memory stays inside a documented budget.
+### 12. Make the application accessible
 
-### 4. Add autosave and recovery with privacy controls
+- Use one accessible modal primitive with focus trap, restoration, Escape, title, and description.
+- Label all existing PDF form controls and contenteditables.
+- Add keyboard selection, movement, resize, ordering, and deletion for page objects and annotations.
+- Enforce 44 px targets where practical and visible focus everywhere.
+- Run axe, keyboard, high-contrast, zoom, and screen-reader tests in CI.
 
-- Separate disk save, recovery snapshot, recent-document cache, and version history.
-- Add no-retention mode, per-document delete, clear-all, and retention status.
-- Do not silently ignore an 80 MB persistence cutoff.
-- Store API keys in the OS credential vault on desktop; offer session-only keys on web.
-- Encrypt sensitive local caches where feasible and document browser limitations.
+### 13. Complete local certificate trust
 
-### 5. Make the editor UI accessible
+- Use incremental revisions for signing.
+- Add ECDSA, OS certificate stores, smartcards, chain building, revocation, timestamps, and LTV.
+- Distinguish cryptographic validity, certificate validity, identity trust, document modification, and whole-document coverage.
+- Preserve and verify multiple signatures.
 
-- Use accessible dialog primitives and focus traps everywhere.
-- Label form inputs and contenteditable surfaces.
-- Make object selection/move/resize/delete keyboard-operable.
-- Raise mobile/touch targets and test at 360/375/768/1024 widths.
-- Add axe, keyboard-only, high-contrast, zoom, and screen-reader smoke tests.
+### 14. Add explicit local-retention controls
 
-**Metric:** zero serious/critical axe violations in app chrome; all primary jobs complete keyboard-only.
+- Provide ephemeral/no-retention mode.
+- Add per-document delete, clear-all, chat/signature/model cache controls, and retention duration.
+- Show current local storage use and failures.
+- Keep protected working copies protected at rest.
 
-### 6. Instrument privacy-safe product quality
+### 15. Make Create PDF Unicode-safe
 
-- Opt-in crash/error reports with no document content.
-- Local structured logs with a user-controlled export.
-- Measure operation success/failure, duration, file size/page count buckets, recovery, and crash-free sessions without file names or contents.
-- Publish the telemetry schema and allow complete opt-out.
+- Replace WinAnsi-only standard fonts with embedded fonts that cover the selected scripts.
+- Shape Arabic, Indic, and other complex scripts and preserve bidirectional order.
+- Use explicit fallback fonts per text run.
+- Detect unsupported characters before conversion and block or obtain informed consent for any lossy result.
+- Add multilingual TXT and DOCX fixtures covering Latin extensions, Arabic, CJK, Indic, emoji, and mixed-direction content.
 
-## Phase 2: win the private-editor wedge (weeks 6–12)
+**Exit:** conversion never silently replaces a source character and rendered output matches extracted text for every supported script.
 
-### Product promises to complete
+## Phase 2: build a working acquisition loop
 
-1. **High-fidelity existing-content editing**
-   - Finish paragraph reflow, image replace/move/resize/delete, links, tables, bidi/RTL/CJK, and predictable font substitution.
-   - Show a preview/diff before destructive layout changes.
+### 16. Fix technical SEO and crawl architecture
 
-2. **Production OCR**
-   - Add multi-language packs, auto-detection, deskew, rotation, denoise, confidence review, and selective page OCR.
-   - Benchmark accuracy against a reproducible set.
+- Self-canonicalize the three guide detail pages.
+- Return real 404s on `open.pickpdf.app` and send `X-Robots-Tag: noindex, nofollow` for the app shell.
+- Build linked Tools, Guides, and Comparisons hubs.
+- Convert homepage tool tiles into crawlable links.
+- Use permanent redirects for canonical HTTP and `www` normalization.
+- Add Organization, WebSite, BreadcrumbList, Article, and appropriate SoftwareApplication schema.
 
-3. **Useful compression**
-   - Add target-size mode, side-by-side preview, profiles, transparency/color safeguards, and perceptual-quality reporting.
+### 17. Replace thin pages with complete task experiences
 
-4. **Honest conversions**
-   - Improve layout-preserving DOCX and add tables/CSV/Excel where quality can be measured.
-   - Expose accuracy/limitations; avoid promising full fidelity before corpus results support it.
+Each tool page should:
 
-5. **Action-oriented local AI**
-   - Replace the 3 GB default with a smaller practical model or explicit opt-in.
-   - Add grounded page citations and multi-document search.
-   - Implement safe commands such as “redact every account number,” “compress under 5 MB,” or “translate pages 4–8” as plan → preview → apply → diff → undo.
-   - Never silently execute destructive actions.
+- open the exact workflow
+- explain what happens locally and what leaves the device
+- show inputs, outputs, limitations, and supported cases
+- include real screenshots or short demos
+- answer task-specific questions
+- link to adjacent jobs and the desktop value proposition
+- cite a named author and last verified date
 
-### Trust product
+Comparison pages should use reproducible tests, not generic feature grids.
 
-- Publish `/security`, `/privacy-architecture`, `/status`, `/changelog`, `/about`, and `/contact`.
-- Show a per-feature data-boundary label: local, downloads model/language data, or sends selected context to a configured endpoint.
-- Add a network activity view that demonstrates document bytes are not uploaded.
-- Publish the corpus methodology and benchmark dashboard.
-- Establish a vulnerability disclosure policy and security contact; commission an independent review when the P0 gate is stable.
+### 18. Publish trust and authority evidence
 
-### Public beta gate
+- About, Contact, Security, Trust, Changelog, Authors, Case Studies, and `security.txt`
+- public fidelity, redaction, encryption, accessibility, and large-file benchmark methodology
+- responsible disclosure and response targets
+- named operator/company and support channels
+- release notes and independently verifiable artifacts
 
-- 500+ corpus fixtures passing.
-- Public, trusted installer and release notes.
-- Task completion ≥90% for edit, redact, sign, form fill, merge, split, compress, OCR, and save in moderated tests.
-- Median time to first useful result under 60 seconds.
-- Support and rollback path operational.
+### 19. Instrument the funnel without instrumenting documents
 
-## Phase 3: distribution and growth engine (months 3–6)
+Track:
 
-### 1. Turn search pages into real product workflows
+- tool page to exact workflow open
+- browser editor activation
+- download attempt and verified release fetch
+- first document job completed
+- return use
+- Pro interest and Team lead receipt
 
-Each tool page must:
+Never send document names, contents, text, annotations, or editor actions to marketing analytics.
 
-- Be self-canonical and internally linked.
-- Explain the exact local-processing boundary.
-- Open the editor directly in the matching workflow.
-- Include an original screenshot/video, limitations, example PDF, related tools, and a complete answer to the search intent.
-- Contain meaningful, human-reviewed content; use 600–1,000+ words only when the intent needs it.
-- Track start, successful output, chained task, desktop download, and return.
+## Phase 3: earn category leadership
 
-Fix the existing pages before adding more. Priority cluster:
+### 20. Standards and PDF accessibility
 
-1. edit PDF
-2. redact PDF
-3. fill/design forms
-4. OCR scanned PDF
-5. merge/split/organize
-6. compress PDF
-7. sign PDF
-8. compare PDFs
-9. protect/encrypt PDF
-10. crop/watermark/page numbers/export
+- tagged-PDF creation and repair
+- reading order, headings, lists, tables, figures, alt text, language, and form labels
+- PDF/UA validation and reports
+- validator-backed PDF/A conversion
+- PDF/X, PDF/E, PDF/VT, output intents, fonts, transparency, and preflight
 
-### 2. Build authority content
+### 21. Optional agreement workflows
 
-- Convert README engineering evidence into dated, authored guides.
-- Publish redaction-vs-whiteout, subset fonts, AcroForms, PDF permissions, local AI privacy, and OCR-layer explainers.
-- Publish balanced, sourced competitor comparisons with methodology and “best for” conclusions.
-- Add Organization/WebSite, SoftwareApplication, BreadcrumbList, and TechArticle JSON-LD with stable IDs.
-- Add `llms.txt`; explicitly decide search/citation versus model-training crawler policy.
-- Do not use commercial FAQPage schema.
+- recipient routing, roles, templates, authentication, reminders, expiry, bulk send, and audit evidence
+- embedded signing, webhooks, APIs, and qualified-signature partners where required
+- keep local certificate signing available without an account
 
-### 3. Measure search and conversion
+### 22. Automation, collaboration, and integrations
 
-- Verify Google Search Console, Bing Webmaster Tools, and IndexNow.
-- Plausible goals: `open_app`, `tool_started`, `tool_success`, `export_success`, `chain_tool`, `download_windows`, `pricing_view`, `checkout_start`, `team_lead`.
-- Track cross-domain attribution between marketing, app, and download/checkout.
+- reusable local batch workflows and watched folders
+- CLI, REST API, SDK, and webhooks
+- shared review links, threaded comments, mentions, assignments, approvals, and version history
+- opt-in Microsoft 365, Google Drive, Dropbox, Box, SharePoint, and DMS connectors
 
-**Metrics:** ≥95% valid sitemap URLs indexed; zero canonical conflicts/soft 404s; task-page → tool-start and tool-start → success improve weekly; organic activation measured by route/query.
+### 23. Platforms and enterprise controls
 
-### 4. Distribution surfaces
+- macOS after Windows release quality is stable
+- mobile or an installable high-quality web experience based on measured demand
+- SAML/OIDC, SCIM, RBAC, domain claim, audit logs, retention/residency, policy control, MSI/MDM, and air-gapped licensing
+- DPA, SLA, support operations, third-party assessment, and compliance evidence
 
-- Microsoft Store and trusted direct download.
-- Browser extension and PWA/offline shell.
-- Google Drive/Workspace, OneDrive/Microsoft 365, Dropbox, and Box opening/saving.
-- File associations, shell context actions, print-to-PDF, and share sheets.
-- macOS desktop after the Windows release process is stable.
-- Localize only proven pages/workflows; begin with 3–5 languages, then expand based on demand.
+### 24. Action-oriented local AI
 
-## Phase 4: professional and enterprise expansion (months 6–18)
+- local plan, preview, diff, apply, and undo for document actions
+- cited multi-document answers
+- PII detection and redaction proposals
+- form and table extraction
+- auto-form creation
+- layout-preserving translation
+- evaluation datasets for accuracy, grounding, privacy boundaries, and unsafe actions
 
-### Professional parity
+## Product metrics
 
-- Certificate signing and validation: PKCS#7/PAdES, timestamping, trust chains, change detection, certificate stores/smartcards.
-- E-sign workflows: recipients, identity, routing, audit trail, reminders, templates, bulk send.
-- Accessibility: auto-tagging, reading order, headings/tables/alt text/forms, PDF/UA and WCAG validation/remediation.
-- Standards/prepress: PDF/A/X/E/VT and PDF 2.0 validation/conversion, preflight, embedded fonts, color/output intents, transparency, image resolution.
-- Sanitization and safe view: JavaScript/attachment/executable warnings, metadata/hidden-content removal, malformed-PDF isolation.
-- Document portfolios/binders, action sequences, watched folders, and batch processing.
+Track these from the first trusted release:
 
-### Collaboration and platform moat
-
-- Review links, roles, threaded comments, approvals, version diff, activity history, and multi-document workspaces.
-- API and SDK for rendering, editing, OCR, conversion, forms, redaction, and signatures.
-- Webhooks, workflow builder, and developer usage/billing.
-
-### Enterprise procurement
-
-- SAML/OIDC SSO, SCIM, RBAC, domain claiming, audit logs, admin analytics, retention/residency controls.
-- MSI/MSIX/MDM deployment, on-prem/air-gapped rights, SLAs, invoicing/POs, support operations.
-- Subprocessor list, DPA/BAA where applicable, security whitepaper, penetration tests, SBOM/CVE policy.
-- Pursue SOC 2 Type II and ISO 27001 after operational controls are real and auditable.
-
-## Commercial ladder
-
-Launch only the tiers that can be delivered:
-
-- **Free web:** common jobs, no watermark, no account, clear local-processing boundaries.
-- **Pro desktop:** one-time purchase after the trusted installer, updater policy, licensing, support, and refund flow exist.
-- **Team:** annual per-seat only after central seats, deployment, invoicing, support, and signed DPA are operational.
-- **Enterprise:** custom terms after SSO/SCIM, audit, residency/retention, SLA, and compliance evidence.
-- **Developer:** metered API/SDK once the engine is stable enough to support external integrations.
-
-## Leadership scorecard
-
-Report weekly:
-
-| Dimension | Core metric |
+| Metric | Why it matters |
 |---|---|
-| Correctness | Corpus open/edit/save/reopen pass rate; unexplained structure loss |
-| Privacy | Verified local-processing rate; redaction invariant pass; retention opt-out usage |
-| Reliability | Crash-free sessions; recovery success; operation failure rate |
-| Performance | p50/p75/p95 first page, interaction, operation, export, and peak memory |
-| Activation | First useful result under 60 seconds; primary task completion |
-| Depth | Users completing two or more chained tools |
-| Retention | Weekly/monthly retained job creators |
-| Growth | Search impression → tool start → successful output → return/download |
-| Trust | Signed-release validation, security review pass, unresolved critical/high vulnerabilities |
-| Commercial | Free-to-paid conversion, refunds, support contacts per 1,000 customers |
-| Network effects | Review/sign/form recipients who become active creators |
+| Successful document-job rate | Measures whether users finish the task. |
+| Save/reopen invariant pass rate | Detects file-integrity regressions. |
+| Redaction verification pass and blocked rate | Measures both safety and unsupported cases. |
+| Crash-free and out-of-memory-free sessions | Validates large-file reliability. |
+| p75 first-page render and edit latency | Keeps local processing usable. |
+| Download to first completed job | Measures the real acquisition loop. |
+| 7-day return rate by job type | Identifies the durable wedge. |
+| Support cases per 1,000 completed jobs | Exposes hidden fidelity and UX failures. |
 
-## Realistic ambition
+## Immediate execution order
 
-Becoming the broad global “#1 PDF product” is a multi-year company-building effort because incumbents combine decades of format expertise, hundreds of millions of users, integrations, certifications, and distribution. Becoming the **best private local-first editor for real PDF work** is a credible first win.
+1. Freeze `da01514` or its safety-fix successor as a signed release candidate.
+2. Commit the passing regressions for encrypted edit/save, nested-image redaction, deleted-page remanence, and browser save fallback; add the multilingual Create PDF failure next.
+3. Fix Unicode Create PDF loss before adding more editing tools.
+4. Track the golden corpus and add CI.
+5. Build and verify a production-signed installer from the same commit.
+6. Publish a working download destination.
+7. Correct claims and complete security/legal pages.
+8. Fix headers, app-origin crawl behavior, guide canonicals, and internal links.
+9. Run an external PDF-security, accessibility, and interoperability review.
+10. Publish the benchmark and use it as the basis of PickPDF's local-first position.
 
-With a focused senior team, a release-safe beta is plausible after the P0/P1 program; a category-leading privacy wedge can be pursued over the next 6–12 months. Broad professional/enterprise parity is more likely a 12–24+ month program. For a solo developer, the same sequence remains correct, but scope should stay on the private-editor wedge until reliability and distribution compound.
+Completion means the evidence passes. A merged implementation without the required tests and cross-viewer output is not complete.

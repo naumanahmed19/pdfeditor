@@ -51,8 +51,8 @@ import {
   WatermarkScreen,
 } from "./components/tools/ToolsScreens";
 import { CompareScreen } from "./components/tools/CompareScreen";
-import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { DocToPdfScreen, ImagesToPdfScreen } from "./components/tools/CreatePdfScreen";
+import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 
 const SCREEN_TITLES: Record<string, string> = {

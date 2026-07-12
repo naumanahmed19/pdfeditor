@@ -55,6 +55,21 @@ async function samplePdf(): Promise<Uint8Array> {
   return doc.save();
 }
 
+async function nestedImagePdf(): Promise<Uint8Array> {
+  const source = await PDFDocument.create();
+  const sourcePage = source.addPage([100, 100]);
+  const png = await source.embedPng(RED_PIXEL_PNG);
+  sourcePage.drawImage(png, { x: 20, y: 20, width: 60, height: 60 });
+
+  const out = await PDFDocument.create();
+  const page = out.addPage([300, 150]);
+  const [embedded] = await out.embedPdf(await source.save(), [0]);
+  // The image is nested inside the embedded page's Form XObject and lands at
+  // x=120..180, y=40..100 on the destination page.
+  page.drawPage(embedded, { x: 100, y: 20, width: 100, height: 100 });
+  return out.save();
+}
+
 async function pageText(bytes: Uint8Array, pageIndex = 0): Promise<string> {
   const objs = await getTextObjects(bytes, pageIndex);
   return objs.map((o) => o.text).join(" ");
@@ -130,6 +145,14 @@ describe("redactRegions — removal and verification", () => {
     expect(images).toHaveLength(1);
   });
 
+  it("removes images nested inside Form XObjects", async () => {
+    await expect(
+      redactRegions(await nestedImagePdf(), [
+        { pageIndex: 0, left: 115, bottom: 35, right: 185, top: 105 },
+      ]),
+    ).resolves.toBeInstanceOf(Uint8Array);
+  });
+
   it("redacts a region with no text at all (still paints the box)", async () => {
     const doc = await PDFDocument.create();
     doc.addPage([300, 150]); // completely blank page
@@ -189,6 +212,21 @@ describe("redactRegions — fail closed", () => {
       );
     } finally {
       (mod as { EPDFText_RedactInQuads: unknown }).EPDFText_RedactInQuads = original;
+    }
+  });
+
+  it("fails closed when a covered nested image cannot be removed", async () => {
+    const mod = await getPdfium();
+    const original = mod.FPDFFormObj_RemoveObject;
+    (mod as { FPDFFormObj_RemoveObject: unknown }).FPDFFormObj_RemoveObject = () => false;
+    try {
+      await expect(
+        redactRegions(await nestedImagePdf(), [
+          { pageIndex: 0, left: 115, bottom: 35, right: 185, top: 105 },
+        ]),
+      ).rejects.toThrow(/covered image on page 1/i);
+    } finally {
+      (mod as { FPDFFormObj_RemoveObject: unknown }).FPDFFormObj_RemoveObject = original;
     }
   });
 });
