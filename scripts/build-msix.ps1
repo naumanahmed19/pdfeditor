@@ -199,7 +199,15 @@ if (-not $Unsigned) {
   }
 }
 
-$signature = Get-AuthenticodeSignature -LiteralPath $msixPath
+if ($Unsigned) {
+  $signature = [pscustomobject]@{
+    Status = "NotSigned"
+    StatusMessage = "Unsigned package created for Microsoft Store certification."
+  }
+}
+else {
+  $signature = Get-AuthenticodeSignature -LiteralPath $msixPath
+}
 
 $msixUploadPath = $null
 if ($StoreUpload) {
