@@ -1,5 +1,8 @@
-import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { RefreshCw, X } from "lucide-react";
+import packageInfo from "../../../package.json";
 import { isTauri } from "../../lib/tauri";
+import { isAppUpdaterEnabled, requestAppUpdateCheck } from "../../lib/updater";
 import { Button } from "../ui/button";
 import { BrandLogo } from "./BrandLogo";
 
@@ -8,11 +11,20 @@ interface Props {
   onClose: () => void;
 }
 
-const APP_VERSION = "0.1.0";
 const APP_TAGLINE =
   "A local-first PDF reader, editor, form designer and organizer with a built-in local-AI assistant.";
 
 export function AboutModal({ open, onClose }: Props) {
+  const [version, setVersion] = useState(packageInfo.version);
+
+  useEffect(() => {
+    if (!open || !isTauri) return;
+    void import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion())
+      .then(setVersion)
+      .catch((error) => console.error("Could not read app version", error));
+  }, [open]);
+
   if (!open) return null;
 
   return (
@@ -42,9 +54,24 @@ export function AboutModal({ open, onClose }: Props) {
         <BrandLogo variant="asset" className="mx-auto mt-1 h-32 w-48" />
 
         <p className="text-xs text-muted-foreground">
-          Version {APP_VERSION}
+          Version {version}
           {isTauri ? " - Desktop" : " - Web"}
         </p>
+
+        {isAppUpdaterEnabled() && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mx-auto mt-4"
+            onClick={() => {
+              requestAppUpdateCheck();
+              onClose();
+            }}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Check for updates
+          </Button>
+        )}
 
         <p className="px-2 pt-3 text-sm text-muted-foreground">{APP_TAGLINE}</p>
 

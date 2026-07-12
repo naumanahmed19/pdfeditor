@@ -231,6 +231,22 @@ The macOS build uses an ad-hoc signature until Apple Developer signing and
 notarization secrets are configured. Users must approve an ad-hoc signed build
 in macOS Privacy & Security settings.
 
+Direct-download macOS and Linux builds use Tauri's signed updater. Release
+artifacts and `stable/latest.json` are published to the `pickpdf-updates`
+Cloudflare R2 bucket at `https://releases.pickpdf.app`. The release workflow
+requires these GitHub Actions secrets:
+
+```text
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
+TAURI_SIGNING_PRIVATE_KEY
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+```
+
+The updater private key and its recovery password must be backed up outside the
+repository. Microsoft Store installations use the Store's update mechanism and
+do not run the custom updater.
+
 ## Tech
 
 - **React 18 + Vite + TypeScript + Tailwind**, base-ui (shadcn-style) primitives.
