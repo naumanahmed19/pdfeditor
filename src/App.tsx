@@ -37,6 +37,7 @@ import { Viewer } from "./components/viewer/Viewer";
 import { ReaderPane } from "./components/viewer/ReaderPane";
 import { EditorToolbar } from "./components/viewer/Toolbar";
 import { SignatureModal } from "./components/viewer/SignatureModal";
+import { CalibrateModal } from "./components/viewer/CalibrateModal";
 import { AiPanel } from "./components/ai/AiPanel";
 import { SettingsScreen } from "./components/settings/SettingsScreen";
 import {
@@ -575,6 +576,7 @@ function Shell() {
       </div>
       <CommandPalette />
       <SignatureModal />
+      <CalibrateModal />
       <DropZone />
       <Toaster />
     </div>

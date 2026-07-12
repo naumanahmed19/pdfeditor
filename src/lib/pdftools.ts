@@ -49,6 +49,12 @@ import { hexToRgb01 } from "./utils";
 import { MARK_STROKE_FRAC, markSegments } from "./marks";
 import { CLOUD_RADIUS, cloudPathD, polyPathD } from "./poly";
 import {
+  distanceTicks,
+  measureLabel,
+  midpointAlong,
+  polygonCentroid,
+} from "./measure";
+import {
   DEFAULT_LINE_HEIGHT,
   LIST_INDENT_PTS,
   LIST_MARKER_GAP_PTS,
@@ -2332,6 +2338,63 @@ async function drawAnnotation(
         borderWidth: ann.strokeWidth > 0 ? ann.strokeWidth : undefined,
         borderLineCap: 1 as any,
       });
+      break;
+    }
+    case "measure": {
+      const c = hexToRgb01(ann.color);
+      const color = rgb(c.r, c.g, c.b);
+      const stroke = Math.max(0.5, ann.strokeWidth);
+      // Geometry bakes like polygon/polyline: the box-relative y-down `d`
+      // string is exactly drawSvgPath's convention.
+      page.drawSvgPath(polyPathD(ann.points, ann.mode === "area"), {
+        x: r.x,
+        y: r.y + r.h,
+        borderColor: color,
+        borderWidth: stroke,
+        borderLineCap: 1 as any,
+      });
+      const abs = ann.points.map((p) => ({ x: ann.x + p.x, y: ann.y + p.y }));
+      if (ann.mode === "distance" && abs.length >= 2) {
+        for (const [a, b] of distanceTicks(abs[0], abs[abs.length - 1])) {
+          page.drawLine({
+            start: toFrame(a),
+            end: toFrame(b),
+            color,
+            thickness: stroke,
+            lineCap: 1 as any,
+          });
+        }
+      }
+      // Value label on a white pill, so the printed/saved page carries the
+      // measurement — same derived text as the on-screen chip.
+      const label = measureLabel(ann.mode, ann.points, ann.scale, ann.unit);
+      const lp =
+        ann.mode === "area" ? polygonCentroid(abs) : midpointAlong(abs);
+      const size = 9;
+      const pad = 2.5;
+      const tw = font.widthOfTextAtSize(label, size);
+      page.drawRectangle({
+        x: lp.x - tw / 2 - pad,
+        y: dispHeight - lp.y - size / 2 - pad,
+        width: tw + pad * 2,
+        height: size + pad * 2,
+        color: rgb(1, 1, 1),
+        borderColor: rgb(0.6, 0.6, 0.6),
+        borderWidth: 0.5,
+      });
+      const opts = {
+        x: lp.x - tw / 2,
+        // Baseline ≈ optical center for Helvetica's ~0.72em cap height.
+        y: dispHeight - lp.y - size * 0.36,
+        size,
+        font,
+        color: rgb(0.1, 0.1, 0.1),
+      };
+      try {
+        page.drawText(label, opts);
+      } catch {
+        page.drawText(sanitizeWinAnsi(label), opts);
+      }
       break;
     }
     case "ink": {
