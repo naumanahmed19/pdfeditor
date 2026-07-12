@@ -245,7 +245,9 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 The updater private key and its recovery password must be backed up outside the
 repository. Microsoft Store installations use the Store's update mechanism and
-do not run the custom updater.
+do not run the custom updater. The custom update UI is enabled only in
+production macOS and Linux release builds, so development builds do not report
+a missing update feed before the first release is published.
 
 ## Tech
 
