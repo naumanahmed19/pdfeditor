@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
   CirclePlus,
+  Flag,
   ListChecks,
   ScrollText,
   Send,
@@ -24,6 +25,7 @@ import {
 } from "../../lib/modelConfig";
 import { isHandheldDevice } from "../../lib/device";
 import type { ChatMessage } from "../../types";
+import { AiReportDialog } from "./AiReportDialog";
 
 interface UiMessage {
   id: string;
@@ -118,6 +120,7 @@ function AiPanelImpl() {
     shallowEqual,
   );
   const [messages, setMessages] = useState<UiMessage[]>(loadChat);
+  const [reportMessage, setReportMessage] = useState<UiMessage | null>(null);
   const [models, setModels] = useState<string[]>([]);
 
   // Persist the conversation across reloads (last 40 messages).
@@ -520,6 +523,22 @@ function AiPanelImpl() {
     },
   ];
 
+  const activeModelLabel =
+    app.settings.provider === "browser"
+      ? browserModelLabel(
+          effectiveBrowserModel(app.settings.browserModelId, isHandheldDevice()),
+        )
+      : app.settings.model;
+  const activeProviderLabel =
+    app.settings.provider === "browser"
+      ? "Built-in"
+      : app.settings.provider === "ollama"
+        ? "Ollama"
+        : app.settings.provider === "lmstudio"
+          ? "LM Studio"
+          : "Custom API";
+  const activeGenerationId = busy ? messages[messages.length - 1]?.id : null;
+
   return (
     <>
     {selectionFab}
@@ -543,7 +562,10 @@ function AiPanelImpl() {
             size="icon"
             className="h-6 w-6"
             title="Clear conversation"
-            onClick={() => setMessages([])}
+            onClick={() => {
+              setReportMessage(null);
+              setMessages([]);
+            }}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -593,14 +615,26 @@ function AiPanelImpl() {
                 )}
               >
                 {m.content || <TypingDots />}
-                {m.role === "assistant" && m.content && !busy && (
-                  <button
-                    onClick={() => insertAsTextBox(m.content)}
-                    className="mt-2 flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <CirclePlus className="h-3 w-3" />
-                    Insert into page as text box
-                  </button>
+                {m.role === "assistant" &&
+                  m.content &&
+                  m.id !== activeGenerationId && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      onClick={() => insertAsTextBox(m.content)}
+                      className="flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    >
+                      <CirclePlus className="h-3 w-3" />
+                      Insert into page as text box
+                    </button>
+                    <button
+                      onClick={() => setReportMessage(m)}
+                      className="flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      aria-label="Report AI response"
+                    >
+                      <Flag className="h-3 w-3" />
+                      Report
+                    </button>
+                  </div>
                 )}
               </div>
             ))}
@@ -709,6 +743,15 @@ function AiPanelImpl() {
         </div>
       </div>
     </aside>
+    <AiReportDialog
+      open={reportMessage !== null}
+      onOpenChange={(open) => {
+        if (!open) setReportMessage(null);
+      }}
+      response={reportMessage?.content ?? ""}
+      provider={activeProviderLabel}
+      model={activeModelLabel}
+    />
     </>
   );
 }
