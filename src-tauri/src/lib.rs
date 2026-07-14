@@ -7,6 +7,7 @@ pub fn run() {
 
   tauri::Builder::default()
     .plugin(tauri_plugin_process::init())
+    .plugin(tauri_plugin_opener::init())
     .plugin(updater.build())
     .setup(|app| {
       if cfg!(debug_assertions) {
