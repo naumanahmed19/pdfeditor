@@ -211,21 +211,23 @@ bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/targe
 
 ## Desktop releases
 
-The GitHub Actions workflow in `.github/workflows/release-desktop.yml` builds
-and publishes the Windows, macOS, and Linux packages. Keep the versions in
-`package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`
-identical, then push a matching tag:
+Release Please maintains a release pull request whenever conventional commits
+land on `main`. Merging that pull request updates `CHANGELOG.md` and keeps the
+versions in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`,
+`src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` synchronized. It then
+creates the matching `vMAJOR.MINOR.PATCH` tag and starts the desktop release
+workflow automatically.
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+Use `fix:` for patch releases, `feat:` for minor releases, and a conventional
+commit with `!` (for example, `feat!:`) for a major release. Merge the generated
+Release Please pull request only when the accumulated changes are ready to ship.
 
-The workflow runs the type-check and tests, then produces a Windows Store
+The workflow in `.github/workflows/release-desktop.yml` runs the type-check and
+tests, then produces a Windows Store
 `.msixupload`, a universal macOS `.dmg`, and Linux `.AppImage` and `.deb`
 packages. It generates SHA-256 checksums and attaches everything to one GitHub
-Release. It can also be started manually from the Actions tab; a manual run
-uses the current app version as its release tag.
+Release. It can still be started manually from the Actions tab for recovery;
+the selected ref must be the matching release tag.
 
 The macOS build uses an ad-hoc signature until Apple Developer signing and
 notarization secrets are configured. Users must approve an ad-hoc signed build
