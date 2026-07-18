@@ -969,6 +969,34 @@ export class PdfDoc {
     return this.page(oneBased - 1);
   }
 
+  /**
+   * Page size (points, rotation applied) WITHOUT loading the page.
+   * FPDF_GetPageSizeByIndexF only reads the page dict, so measuring a
+   * 500-page document stays cheap — FPDF_LoadPage for every page (plus its
+   * form-environment setup) is exactly what made large documents freeze on
+   * open.
+   */
+  pageSize(index: number): { width: number; height: number } {
+    const cached = this.pages.get(index);
+    if (cached) return { width: cached.width, height: cached.height };
+    const m = this.mod;
+    const r = rt(m);
+    const ptr = r.wasmExports.malloc(8); // FS_SIZEF { float width, height; }
+    try {
+      if (m.FPDF_GetPageSizeByIndexF(this.handle, index, ptr)) {
+        return {
+          width: r.getValue(ptr, "float"),
+          height: r.getValue(ptr + 4, "float"),
+        };
+      }
+    } finally {
+      r.wasmExports.free(ptr);
+    }
+    // Malformed page dict: fall back to a real load (and cache it).
+    const page = this.page(index);
+    return { width: page.width, height: page.height };
+  }
+
   /** Movable objects on a page, read from the live handle (no reparse). */
   getPageObjects(pageIndex: number): PageObject[] {
     return this.page(pageIndex).getObjects();

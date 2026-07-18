@@ -97,25 +97,16 @@ function ViewerImpl() {
 
   const pdf = app.pdf;
 
-  // Measure base page sizes (scale 1, rotation applied).
+  // Measure base page sizes (scale 1, rotation applied). Dict-level reads —
+  // loading every page here froze the UI on large documents.
   useEffect(() => {
-    let alive = true;
     if (!pdf) {
       setDims([]);
       return;
     }
-    (async () => {
-      const out: PageDims[] = [];
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const vp = page.getViewport({ scale: 1 });
-        out.push({ width: vp.width, height: vp.height });
-      }
-      if (alive) setDims(out);
-    })();
-    return () => {
-      alive = false;
-    };
+    const out: PageDims[] = [];
+    for (let i = 0; i < pdf.numPages; i++) out.push(pdf.pageSize(i));
+    setDims(out);
   }, [pdf, app.docVersion]);
 
   useLayoutEffect(() => {
