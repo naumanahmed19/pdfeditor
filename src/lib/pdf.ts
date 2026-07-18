@@ -57,23 +57,41 @@ export interface PageText {
   full: string;
 }
 
-const textCache = new WeakMap<PdfDoc, PageText[]>();
+// Caches the in-flight promise (not the result) so concurrent callers — the
+// scanned-PDF check at open plus an early search — share one extraction pass.
+const textCache = new WeakMap<PdfDoc, Promise<PageText[]>>();
 
-export async function extractAllText(pdf: PdfDoc): Promise<PageText[]> {
+export function extractAllText(pdf: PdfDoc): Promise<PageText[]> {
   const cached = textCache.get(pdf);
   if (cached) return cached;
-  const pages: PageText[] = [];
-  for (let i = 0; i < pdf.numPages; i++) {
-    const page = pdf.page(i);
-    const items = page.getTextRuns().map((r) => r.text);
-    pages.push({
-      pageIndex: i,
-      items,
-      full: items.length ? items.join(" ") : page.getText(),
-    });
-  }
-  textCache.set(pdf, pages);
-  return pages;
+  const promise = (async () => {
+    const pages: PageText[] = [];
+    // Extraction parses each page's full content stream synchronously; on a
+    // large document that's seconds of main-thread work, so yield to the
+    // event loop between time slices to keep the UI responsive.
+    let sliceStart = performance.now();
+    for (let i = 0; i < pdf.numPages; i++) {
+      if (performance.now() - sliceStart > 12) {
+        await new Promise((r) => setTimeout(r, 0));
+        sliceStart = performance.now();
+      }
+      const page = pdf.page(i);
+      const items = page.getTextRuns().map((r) => r.text);
+      pages.push({
+        pageIndex: i,
+        items,
+        full: items.length ? items.join(" ") : page.getText(),
+      });
+    }
+    return pages;
+  })();
+  textCache.set(pdf, promise);
+  // A failed pass (e.g. the document was closed mid-extraction) must not
+  // poison the cache for a retry.
+  promise.catch(() => {
+    if (textCache.get(pdf) === promise) textCache.delete(pdf);
+  });
+  return promise;
 }
 
 /**
