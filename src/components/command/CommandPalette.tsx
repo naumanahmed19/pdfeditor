@@ -33,7 +33,6 @@ import {
   Minimize2,
   Minus,
   MousePointer2,
-  MousePointerClick,
   Move,
   MoveUpRight,
   PanelLeft,
@@ -76,6 +75,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "../ui/command";
+import { Tip } from "../ui/tooltip";
 
 type CommandGroupId =
   | "global"
@@ -122,11 +122,11 @@ const EDITOR_TOOLS: Array<{
   },
   {
     key: "select",
-    label: "Select",
-    description: "Move, resize, or delete annotations.",
+    label: "Move / select",
+    description: "Move annotations, native page objects, or form fields.",
     icon: Move,
     shortcut: "M",
-    aliases: ["move"],
+    aliases: ["move", "objects"],
   },
   {
     key: "text",
@@ -141,13 +141,6 @@ const EDITOR_TOOLS: Array<{
     description: "Retype existing PDF text.",
     icon: TextCursorInput,
     shortcut: "E",
-  },
-  {
-    key: "editobject",
-    label: "Move objects",
-    description: "Move, resize, recolor, or delete existing page objects.",
-    icon: MousePointerClick,
-    shortcut: "G",
   },
   {
     key: "highlight",
@@ -458,14 +451,13 @@ function CommandRow({
   const Icon = command.icon;
   const disabled = !!command.disabledReason;
 
-  return (
+  const item = (
     <CommandItem
       value={command.label}
       keywords={command.aliases}
       disabled={disabled}
       onSelect={() => onRun(command)}
       className="group items-center gap-3"
-      title={command.disabledReason}
     >
       <Icon
         className={cn(
@@ -480,6 +472,14 @@ function CommandRow({
         <CommandShortcut>{command.shortcut}</CommandShortcut>
       )}
     </CommandItem>
+  );
+
+  return command.disabledReason ? (
+    <Tip label="Unavailable" desc={command.disabledReason} side="right">
+      {item}
+    </Tip>
+  ) : (
+    item
   );
 }
 
@@ -545,7 +545,7 @@ export function CommandPalette() {
     if (!app.pdf) return hasPdfReason;
     const p = app.docPermissions;
     if (!p.restricted || tool === "read") return undefined;
-    if (tool === "edittext" || tool === "editobject" || tool === "redact") {
+    if (tool === "edittext" || tool === "redact") {
       return p.modify ? undefined : permissionReason;
     }
     if (tool.startsWith("form")) {

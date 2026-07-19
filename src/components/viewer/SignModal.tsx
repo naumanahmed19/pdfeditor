@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Tip } from "../ui/tooltip";
 import type { CertIdentity } from "../../lib/signatures";
 
 interface Props {
@@ -168,9 +169,11 @@ export function SignModal({ open, onClose }: Props) {
                   {certFile ? "Change file" : "Choose file"}
                 </Button>
                 {certFile && (
-                  <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={certFile.name}>
-                    {certFile.name}
-                  </span>
+                  <Tip label={certFile.name}>
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {certFile.name}
+                    </span>
+                  </Tip>
                 )}
               </div>
               <input

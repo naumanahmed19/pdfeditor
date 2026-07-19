@@ -35,7 +35,14 @@ function DropZoneImpl() {
       e.preventDefault();
 
       const files = Array.from(e.dataTransfer?.files ?? []);
-      const pdfs = files.filter(isPdf);
+      // Capture handles synchronously; Chromium clears DataTransfer.items as
+      // soon as the event handler yields.
+      const handlePromises = Array.from(e.dataTransfer?.items ?? []).map(
+        (item) => (item as any).getAsFileSystemHandle?.() ?? null,
+      );
+      const pdfs = files.flatMap((file, index) =>
+        isPdf(file) ? [{ file, index }] : [],
+      );
       const skipped = files.length - pdfs.length;
       if (skipped > 0) {
         toast.error(
@@ -45,7 +52,11 @@ function DropZoneImpl() {
         );
       }
       void (async () => {
-        for (const f of pdfs) await openFile(f);
+        const handles = await Promise.all(handlePromises);
+        for (const { file, index } of pdfs) {
+          const handle = handles[index];
+          await openFile(file, handle?.kind === "file" ? handle : undefined);
+        }
       })();
     };
 

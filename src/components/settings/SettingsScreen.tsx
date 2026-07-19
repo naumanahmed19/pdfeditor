@@ -15,6 +15,7 @@ import { Combobox } from "../ui/combobox";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Slider } from "../ui/slider";
+import { Tip } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
 import {
   checkConnection,
@@ -193,20 +194,20 @@ export function SettingsScreen() {
           <Row title="Accent color" description="Primary color used across buttons and highlights.">
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               {ACCENTS.map((a) => (
-                <button
-                  key={a.id}
-                  title={a.label}
-                  aria-label={a.label}
-                  aria-pressed={app.accent === a.id}
-                  onClick={() => app.setAccent(a.id)}
-                  className={cn(
-                    "h-6 w-6 rounded-full border transition",
-                    app.accent === a.id
-                      ? "ring-2 ring-ring ring-offset-2 ring-offset-card"
-                      : "border-border hover:scale-110",
-                  )}
-                  style={{ backgroundColor: a.swatch }}
-                />
+                <Tip key={a.id} label={a.label}>
+                  <button
+                    aria-label={a.label}
+                    aria-pressed={app.accent === a.id}
+                    onClick={() => app.setAccent(a.id)}
+                    className={cn(
+                      "h-6 w-6 rounded-full border transition",
+                      app.accent === a.id
+                        ? "ring-2 ring-ring ring-offset-2 ring-offset-card"
+                        : "border-border hover:scale-110",
+                    )}
+                    style={{ backgroundColor: a.swatch }}
+                  />
+                </Tip>
               ))}
             </div>
           </Row>
@@ -216,19 +217,19 @@ export function SettingsScreen() {
           <Row title="Provider" description="Where AI requests are sent.">
             <div className="inline-flex rounded-md bg-muted p-0.5">
               {providers.map((p) => (
-                <button
-                  key={p.value}
-                  title={p.hint}
-                  onClick={() => app.setSettings({ ...s, provider: p.value })}
-                  className={cn(
-                    "h-7 rounded-sm px-3 text-xs font-medium transition",
-                    s.provider === p.value
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {p.label}
-                </button>
+                <Tip key={p.value} label={p.label} desc={p.hint}>
+                  <button
+                    onClick={() => app.setSettings({ ...s, provider: p.value })}
+                    className={cn(
+                      "h-7 rounded-sm px-3 text-xs font-medium transition",
+                      s.provider === p.value
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                </Tip>
               ))}
             </div>
           </Row>
@@ -460,19 +461,19 @@ function BrowserModelSection({ handheld }: { handheld: boolean }) {
         ) : (
           <div className="flex flex-wrap justify-end gap-0.5 rounded-md bg-muted p-0.5">
             {models.map((m) => (
-              <button
-                key={m.id}
-                title={`${m.blurb} (${m.sizeLabel})`}
-                onClick={() => app.setSettings({ ...s, browserModelId: m.id })}
-                className={cn(
-                  "h-7 rounded-sm px-3 text-xs font-medium transition",
-                  selected.id === m.id
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground",
-                )}
-              >
-                {m.name}
-              </button>
+              <Tip key={m.id} label={m.name} desc={`${m.blurb} (${m.sizeLabel})`}>
+                <button
+                  onClick={() => app.setSettings({ ...s, browserModelId: m.id })}
+                  className={cn(
+                    "h-7 rounded-sm px-3 text-xs font-medium transition",
+                    selected.id === m.id
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {m.name}
+                </button>
+              </Tip>
             ))}
           </div>
         )}

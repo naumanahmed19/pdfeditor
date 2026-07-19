@@ -26,6 +26,7 @@ import {
 import { collectParagraph } from "./paragraph";
 import { makeParagraphMeasure, planReflow } from "./reflow";
 import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
+import { canMoveNativeContent } from "../../lib/selectionPolicy";
 import { InlineTextEditor } from "./InlineTextEditor";
 import { ObjectLayer } from "./objectlayer";
 import { LinkLayer } from "./LinkLayer";
@@ -68,6 +69,7 @@ export function PageView({
 
   const w = baseDims.width * scale;
   const h = baseDims.height * scale;
+  const canMovePageObjects = canMoveNativeContent(app.tool, app.docPermissions);
 
   // Drop a field dragged from the sidebar palette, centered on the cursor.
   const onFieldDrop = (e: React.DragEvent) => {
@@ -254,8 +256,17 @@ export function PageView({
   // uniform (one face/size) the commit may REFLOW it: edits that add/remove
   // breaks or overflow a line re-wrap to the column width (see reflow.ts);
   // mixed-style paragraphs and line scope keep the document's fixed breaks.
-  const onTextLayerClick = async (e: React.MouseEvent) => {
-    if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
+  const openTextAtPoint = async (
+    clientX: number,
+    clientY: number,
+    options?: { force?: boolean; objectIndex?: number },
+  ) => {
+    if (
+      (!options?.force && app.tool !== "edittext") ||
+      !app.docBytes ||
+      !wrapRef.current
+    )
+      return;
     // A click while an edit is open (or still committing) is the gesture that
     // dismisses it — never a request to start another edit, and never worth a
     // "click a line" hint.
@@ -277,24 +288,30 @@ export function PageView({
     }
     // Click point in PDF page coordinates (handles rotation + crop origin).
     const [xPt, yPt] = viewport.convertToPdfPoint(
-      e.clientX - pr.left,
-      e.clientY - pr.top,
+      clientX - pr.left,
+      clientY - pr.top,
     );
-    // Smallest text run whose bounds contain the click point.
-    const hit = objs
-      .filter(
-        (o) =>
-          o.text.trim() &&
-          xPt >= o.left &&
-          xPt <= o.right &&
-          yPt >= o.bottom &&
-          yPt <= o.top,
-      )
-      .sort(
-        (a, b) =>
-          (a.right - a.left) * (a.top - a.bottom) -
-          (b.right - b.left) * (b.top - b.bottom),
-      )[0];
+    // A native-object double click supplies its exact PDFium object index.
+    // Direct Edit-text clicks still use the smallest run under the pointer.
+    const hit =
+      options?.objectIndex == null
+        ? objs
+            .filter(
+              (o) =>
+                o.text.trim() &&
+                xPt >= o.left &&
+                xPt <= o.right &&
+                yPt >= o.bottom &&
+                yPt <= o.top,
+            )
+            .sort(
+              (a, b) =>
+                (a.right - a.left) * (a.top - a.bottom) -
+                (b.right - b.left) * (b.top - b.bottom),
+            )[0]
+        : objs.find(
+            (o) => o.index === options.objectIndex && o.text.trim(),
+          );
     // A miss (margin, image, whitespace) simply does nothing — the tool's
     // hover affordance already shows what's editable, a toast would only nag.
     if (!hit) return;
@@ -493,6 +510,21 @@ export function PageView({
         );
       }
     })();
+  };
+
+  const onTextLayerClick = (e: React.MouseEvent) => {
+    void openTextAtPoint(e.clientX, e.clientY);
+  };
+
+  const onNativeTextDoubleClick = (
+    objectIndex: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    // Reflect the active interaction in the toolbar. `force` opens the editor
+    // immediately, without waiting for the tool-state update to render first.
+    app.setTool("edittext");
+    void openTextAtPoint(clientX, clientY, { force: true, objectIndex });
   };
 
   /**
@@ -1078,6 +1110,9 @@ export function PageView({
       style={{ width: w, height: h, scrollMarginTop: 16 }}
       onPointerDown={() => {
         if (app.tool === "select") {
+          window.dispatchEvent(
+            new CustomEvent("pdfwb:object-selection", { detail: null }),
+          );
           app.setSelected(null);
           app.setSelectedField(null);
         }
@@ -1117,20 +1152,17 @@ export function PageView({
         onClick={onTextLayerClick}
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
-      {/* Existing-content editing lives on the "Move objects" tool
-          (app.tool === "editobject"), kept separate from Select in the normal
-          editor. In the form builder (design, not preview) the Select tool
-          doubles as it — one tool moves/deletes existing labels and fields.
-          Rendered BELOW the form/annotation layers so fields keep priority and
-          only clicks that miss them fall through to editing page content. */}
-      {(app.tool === "editobject" ||
-        (app.formBuilder && !app.formPreview && app.tool === "select")) &&
-        visible && (
+      {/* Move/select handles both annotations and native PDF content. This
+          layer stays BELOW fields and annotations, giving those overlays first
+          pick; clicks that miss them reach page text/images. Restricted
+          annotate-only documents omit this modifying layer. */}
+      {canMovePageObjects && visible && (
         <ObjectLayer
           pdf={pdf}
           pageIndex={pageIndex}
           scale={scale}
           canvasRef={canvasRef}
+          onEditText={onNativeTextDoubleClick}
         />
       )}
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />

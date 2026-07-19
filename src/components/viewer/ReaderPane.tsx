@@ -13,6 +13,7 @@ import { attachTextSelection } from "../../lib/textselect";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 import { Skeleton } from "../ui/skeleton";
+import { Tip } from "../ui/tooltip";
 
 const PAGE_GAP = 20;
 
@@ -130,29 +131,15 @@ export function ReaderPane({ docId }: { docId: string }) {
         {/* mini nav pill */}
         <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center">
           <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border/60 bg-background/80 px-1.5 py-1 opacity-80 shadow-shell backdrop-blur-md transition-opacity hover:opacity-100">
-            <button className={navBtn} title="Previous" disabled={page <= 0} onClick={() => goToPage(page - 1)}>
-              <ChevronLeft className="h-4 w-4" />
-            </button>
+            <Tip label="Previous page"><button className={navBtn} aria-label="Previous page" disabled={page <= 0} onClick={() => goToPage(page - 1)}><ChevronLeft className="h-4 w-4" /></button></Tip>
             <span className="px-1 text-xs tabular-nums text-muted-foreground">
               {page + 1}/{doc.numPages}
             </span>
-            <button className={navBtn} title="Next" disabled={page >= doc.numPages - 1} onClick={() => goToPage(page + 1)}>
-              <ChevronRight className="h-4 w-4" />
-            </button>
+            <Tip label="Next page"><button className={navBtn} aria-label="Next page" disabled={page >= doc.numPages - 1} onClick={() => goToPage(page + 1)}><ChevronRight className="h-4 w-4" /></button></Tip>
             <div className="mx-0.5 h-4 w-px bg-border" />
-            <button className={navBtn} title="Zoom out" onClick={() => setManualScale(Math.max(0.2, scale - 0.15))}>
-              <ZoomOut className="h-4 w-4" />
-            </button>
-            <button
-              className="h-6 min-w-10 rounded-full px-1 text-xs font-medium tabular-nums text-muted-foreground hover:bg-accent"
-              title="Fit width"
-              onClick={() => setManualScale(null)}
-            >
-              {manualScale == null ? "Fit" : `${Math.round(scale * 100)}%`}
-            </button>
-            <button className={navBtn} title="Zoom in" onClick={() => setManualScale(Math.min(3, scale + 0.15))}>
-              <ZoomIn className="h-4 w-4" />
-            </button>
+            <Tip label="Zoom out"><button className={navBtn} aria-label="Zoom out" onClick={() => setManualScale(Math.max(0.2, scale - 0.15))}><ZoomOut className="h-4 w-4" /></button></Tip>
+            <Tip label="Fit width"><button className="h-6 min-w-10 rounded-full px-1 text-xs font-medium tabular-nums text-muted-foreground hover:bg-accent" aria-label="Fit width" onClick={() => setManualScale(null)}>{manualScale == null ? "Fit" : `${Math.round(scale * 100)}%`}</button></Tip>
+            <Tip label="Zoom in"><button className={navBtn} aria-label="Zoom in" onClick={() => setManualScale(Math.min(3, scale + 0.15))}><ZoomIn className="h-4 w-4" /></button></Tip>
           </div>
         </div>
       </div>

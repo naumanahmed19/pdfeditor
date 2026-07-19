@@ -26,6 +26,8 @@ import {
 import { isHandheldDevice } from "../../lib/device";
 import type { ChatMessage } from "../../types";
 import { AiReportDialog } from "./AiReportDialog";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
+import { Tip } from "../ui/tooltip";
 
 interface UiMessage {
   id: string;
@@ -455,26 +457,25 @@ function AiPanelImpl() {
       // preventDefault keeps the text selection alive through clicks.
       onMouseDown={(e) => e.preventDefault()}
     >
-      <button
-        onClick={() => setFabMenuOpen((o) => !o)}
-        className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-primary shadow-md transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        title="Ask AI about this selection"
-        aria-label="Ask AI about this selection"
-      >
-        <Bot className="h-4 w-4" />
-      </button>
-      {fabMenuOpen && (
-        <div
-          className={cn(
-            "absolute top-9 flex w-44 flex-col rounded-lg border bg-popover p-1 shadow-lg",
-            selectionPos.x > window.innerWidth - 200 ? "right-0" : "left-0",
-          )}
+      <Menu open={fabMenuOpen} onOpenChange={setFabMenuOpen}>
+        <Tip label="Ask AI about this selection">
+          <MenuTrigger
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-primary shadow-md transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Ask AI about this selection"
+          >
+            <Bot className="h-4 w-4" />
+          </MenuTrigger>
+        </Tip>
+        <MenuContent
+          side="bottom"
+          align={selectionPos.x > window.innerWidth - 200 ? "end" : "start"}
+          className="min-w-44"
         >
           {SELECTION_ACTIONS.map(([label, instruction]) => (
-            <button
+            <MenuItem
               key={label}
               disabled={busy}
-              className="rounded-md px-2 py-1.5 text-left text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+              className="text-xs font-medium"
               onClick={() => {
                 setFabMenuOpen(false);
                 app.setAiOpen(true);
@@ -485,10 +486,10 @@ function AiPanelImpl() {
               }}
             >
               {label}
-            </button>
+            </MenuItem>
           ))}
-        </div>
-      )}
+        </MenuContent>
+      </Menu>
     </div>
   );
 
@@ -547,37 +548,43 @@ function AiPanelImpl() {
       <div className="flex items-center gap-2 border-b border-sidebar-border px-4 py-2.5">
         <Bot className="h-4 w-4" />
         <span className="text-sm font-semibold">AI Assistant</span>
-        <span
-          title={statusDetail}
-          className={cn(
-            "ml-1 h-2 w-2 shrink-0 rounded-full",
-            status === "ok" && "bg-emerald-500",
-            status === "error" && "bg-red-500",
-            status === "unknown" && "bg-amber-400",
-          )}
-        />
+        <Tip label={statusDetail}>
+          <span
+            aria-label={statusDetail}
+            className={cn(
+              "ml-1 h-2 w-2 shrink-0 rounded-full",
+              status === "ok" && "bg-emerald-500",
+              status === "error" && "bg-red-500",
+              status === "unknown" && "bg-amber-400",
+            )}
+          />
+        </Tip>
         <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            title="Clear conversation"
-            onClick={() => {
-              setReportMessage(null);
-              setMessages([]);
-            }}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            title="Hide assistant"
-            onClick={() => app.setAiOpen(false)}
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
+          <Tip label="Clear conversation">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label="Clear conversation"
+              onClick={() => {
+                setReportMessage(null);
+                setMessages([]);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </Tip>
+          <Tip label="Hide assistant">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label="Hide assistant"
+              onClick={() => app.setAiOpen(false)}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </Tip>
         </div>
       </div>
 
@@ -725,19 +732,29 @@ function AiPanelImpl() {
               <option value={SWITCH_PROVIDER}>Switch provider…</option>
             </Select>
             {busy ? (
-              <Button variant="outline" size="icon" className="h-7 w-7" onClick={stop} title="Stop">
-                <Square className="h-3.5 w-3.5" />
-              </Button>
+              <Tip label="Stop">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label="Stop"
+                  onClick={stop}
+                >
+                  <Square className="h-3.5 w-3.5" />
+                </Button>
+              </Tip>
             ) : (
-              <Button
-                size="icon"
-                className="h-7 w-7"
-                disabled={!input.trim()}
-                onClick={() => void send(input)}
-                title="Send (Enter)"
-              >
-                <Send className="h-3.5 w-3.5" />
-              </Button>
+              <Tip label="Send" shortcut="Enter">
+                <Button
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label="Send"
+                  disabled={!input.trim()}
+                  onClick={() => void send(input)}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                </Button>
+              </Tip>
             )}
           </div>
         </div>

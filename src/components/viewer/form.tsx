@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Pencil, PenLine } from "lucide-react";
+import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
@@ -19,6 +20,9 @@ import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
+import { Tip } from "../ui/tooltip";
+import { canMoveExistingFormField } from "../../lib/selectionPolicy";
+import { isDoublePress, type PressPoint } from "../../lib/doublePress";
 
 interface FormFieldSpec {
   key: string;
@@ -40,6 +44,33 @@ interface FormFieldSpec {
   multiSelect?: boolean;
   /** Text field format preset (from /AA AF actions). */
   format?: FieldFormat;
+}
+
+let existingFieldClipboard: {
+  name: string;
+  rect: { x: number; y: number; w: number; h: number };
+  spec: ExistingFieldSpec;
+} | null = null;
+
+function existingFieldSpec(field: FormFieldSpec): ExistingFieldSpec {
+  return {
+    fieldType:
+      field.kind === "checkbox" || field.kind === "button"
+        ? "Btn"
+        : field.kind === "dropdown" || field.kind === "listbox"
+          ? "Ch"
+          : "Tx",
+    checkBox: field.kind === "checkbox",
+    radioButton: field.kind === "radio",
+    combo: field.kind === "dropdown",
+    multiSelect: !!field.multiSelect,
+    comb: !!field.comb,
+    multiLine: field.kind === "multiline",
+    maxLen: field.maxLen,
+    readOnly: field.readOnly,
+    fieldValue: field.initial,
+    options: (field.options ?? []).map((option) => option.value),
+  };
 }
 
 /** Renders the PDF's AcroForm fields as fillable inputs. */
@@ -199,21 +230,22 @@ export function FormLayer({
           // Transparent hit target over the button baked into the page; the
           // action (Reset/Submit/JS) is delegated to PDFium on click.
           return (
-            <button
-              key={f.key}
-              type="button"
-              disabled={f.readOnly}
-              onClick={() => void runFieldAction(f)}
-              title={f.name}
-              className="absolute cursor-pointer bg-transparent"
-              style={{
-                left: rect.x * scale,
-                top: rect.y * scale,
-                width: rect.w * scale,
-                height: rect.h * scale,
-                pointerEvents: "auto",
-              }}
-            />
+            <Tip key={f.key} label={f.name}>
+              <button
+                type="button"
+                disabled={f.readOnly}
+                aria-label={f.name}
+                onClick={() => void runFieldAction(f)}
+                className="absolute cursor-pointer bg-transparent"
+                style={{
+                  left: rect.x * scale,
+                  top: rect.y * scale,
+                  width: rect.w * scale,
+                  height: rect.h * scale,
+                  pointerEvents: "auto",
+                }}
+              />
+            </Tip>
           );
         }
 
@@ -397,18 +429,20 @@ function FormatTextField({
   const error = fieldValueError(format, value);
   const display = focused ? value : formatFieldValue(format, value);
   return (
-    <input
-      type="text"
-      value={display}
-      disabled={readOnly}
-      maxLength={maxLength}
-      title={error ?? undefined}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      onChange={(e) => onChange(e.target.value)}
-      className={cn(className, error && "ring-1 ring-red-500")}
-      style={style}
-    />
+    <Tip label="Invalid value" desc={error} disabled={!error}>
+      <input
+        type="text"
+        value={display}
+        disabled={readOnly}
+        maxLength={maxLength}
+        aria-invalid={!!error}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(className, error && "ring-1 ring-red-500")}
+        style={style}
+      />
+    </Tip>
   );
 }
 
@@ -594,47 +628,113 @@ function FieldDesigner({
   };
   const op = app.fieldOps[key];
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const lastDown = useRef<PressPoint | null>(null);
 
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
-  // In the form builder, existing fields are first-class editable objects, so
-  // they move with the Select tool alongside the new fields you're placing. In
-  // the regular editor they're existing page content — like page text/images —
-  // and move only on the "Move objects" tool, NOT the Select tool that drags
-  // annotations you added. A read-only widget acts as "locked" (clicks pass
-  // through) in either case.
-  const canEdit =
-    ((app.formBuilder && app.tool === "select") || app.tool === "editobject") &&
-    !field.readOnly;
+  const rectRef = useRef(rect);
+  const displayNameRef = useRef(displayName);
+  rectRef.current = rect;
+  displayNameRef.current = displayName;
+  // Read mode fills fields; Move/select edits their geometry. Existing fields
+  // take pointer priority over native page objects, so selecting a widget can
+  // never accidentally grab the text or border painted underneath it. A
+  // read-only or permission-locked widget passes clicks through.
+  const canEdit = canMoveExistingFormField(
+    app.tool,
+    app.docPermissions,
+    field.readOnly,
+  );
+
+  const addFieldCopy = (
+    source: NonNullable<typeof existingFieldClipboard>,
+    targetPage = pageIndex,
+  ) => {
+    if (source.spec.radioButton) {
+      toast.info("Radio-group duplication is not supported yet.");
+      return false;
+    }
+    const copy = existingFieldToFormField(
+      app.annotations,
+      source.name,
+      {
+        ...source.rect,
+        x: source.rect.x + 10,
+        y: source.rect.y + 10,
+      },
+      source.spec,
+    );
+    if (!copy) return false;
+    const used = new Set(
+      Object.values(app.annotations)
+        .flat()
+        .filter((annotation): annotation is FormFieldAnnotation => annotation.kind === "formfield")
+        .map((annotation) => annotation.fieldName),
+    );
+    const baseName = `${source.name}_copy`;
+    let fieldName = baseName;
+    let suffix = 2;
+    while (used.has(fieldName)) fieldName = `${baseName}_${suffix++}`;
+    copy.fieldName = fieldName;
+    app.addAnnotation(targetPage, copy);
+    app.setSelectedField(null);
+    app.setSelected({ page: targetPage, id: copy.id });
+    return true;
+  };
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
     if (!canEdit) return;
     e.stopPropagation();
     e.preventDefault();
+    window.dispatchEvent(
+      new CustomEvent("pdfwb:object-selection", { detail: null }),
+    );
     app.setSelectedField(base);
     app.setSelected(null);
+    const press = { at: performance.now(), x: e.clientX, y: e.clientY };
+    const doublePress =
+      mode === "move" && isDoublePress(lastDown.current, press, e.detail);
+    lastDown.current = press;
+    if (doublePress) {
+      app.setFormBuilder(true);
+      return;
+    }
     const start = { x: e.clientX, y: e.clientY };
     const orig = op?.newRect ?? base.origRect;
+    let started = false;
+    let finalRect: { x: number; y: number; w: number; h: number } | null = null;
     const onMove = (ev: PointerEvent) => {
-      const dx = (ev.clientX - start.x) / scale;
-      const dy = (ev.clientY - start.y) / scale;
-      setLive(
+      const screenDx = ev.clientX - start.x;
+      const screenDy = ev.clientY - start.y;
+      if (!started && Math.hypot(screenDx, screenDy) < 4) return;
+      started = true;
+      const dx = screenDx / scale;
+      const dy = screenDy / scale;
+      finalRect =
         mode === "move"
           ? { ...orig, x: orig.x + dx, y: orig.y + dy }
-          : { ...orig, w: Math.max(10, orig.w + dx), h: Math.max(10, orig.h + dy) },
-      );
+          : {
+              ...orig,
+              w: Math.max(10, orig.w + dx),
+              h: Math.max(10, orig.h + dy),
+            };
+      setLive(finalRect);
     };
-    const onUp = () => {
+    const finish = () => {
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      setLive((finalRect) => {
-        if (finalRect) app.upsertFieldOp(base, { newRect: finalRect });
-        return null;
-      });
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      if (finalRect) app.upsertFieldOp(base, { newRect: finalRect });
+      setLive(null);
+    };
+    const cancel = () => {
+      finalRect = null;
+      finish();
     };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
   };
 
   // Delete key removes the selected existing field.
@@ -642,12 +742,77 @@ function FieldDesigner({
     if (!isSelected) return;
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      )
+        return;
       if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
         app.upsertFieldOp(base, { deleted: true });
         app.setSelectedField(null);
+        return;
       }
-      if (e.key === "Escape") app.setSelectedField(null);
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const step = e.shiftKey ? 10 : 1;
+        const currentRect = rectRef.current;
+        app.upsertFieldOp(base, {
+          newRect: {
+            ...currentRect,
+            x:
+              currentRect.x +
+              (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
+            y:
+              currentRect.y +
+              (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0),
+          },
+        });
+        return;
+      }
+      if (e.key === "Enter" || e.key === "F2") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        app.setFormBuilder(true);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        existingFieldClipboard = {
+          name: displayNameRef.current,
+          rect: rectRef.current,
+          spec: existingFieldSpec(field),
+        };
+        toast.success("Form field copied - Ctrl+V to paste");
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        if (!existingFieldClipboard) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (addFieldCopy(existingFieldClipboard)) toast.success("Form field pasted");
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const source = {
+          name: displayNameRef.current,
+          rect: rectRef.current,
+          spec: existingFieldSpec(field),
+        };
+        if (addFieldCopy(source)) toast.success("Form field duplicated");
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        app.setSelectedField(null);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -658,24 +823,7 @@ function FieldDesigner({
   // sidebar's Edit action): promote to a placeholder, delete the original.
   const canPromote = app.formBuilder && field.kind !== "radio";
   const promote = () => {
-    const spec: ExistingFieldSpec = {
-      fieldType:
-        field.kind === "checkbox" || field.kind === "button"
-          ? "Btn"
-          : field.kind === "dropdown" || field.kind === "listbox"
-            ? "Ch"
-            : "Tx",
-      checkBox: field.kind === "checkbox",
-      radioButton: false,
-      combo: field.kind === "dropdown",
-      multiSelect: !!field.multiSelect,
-      comb: !!field.comb,
-      multiLine: field.kind === "multiline",
-      maxLen: field.maxLen,
-      readOnly: field.readOnly,
-      fieldValue: field.initial,
-      options: (field.options ?? []).map((o) => o.value),
-    };
+    const spec = existingFieldSpec(field);
     const ann = existingFieldToFormField(app.annotations, field.name, rect, spec);
     if (!ann) return;
     app.upsertFieldOp(base, { deleted: true });
@@ -705,6 +853,12 @@ function FieldDesigner({
         !isSelected && canEdit && "hover:ring-1 hover:ring-blue-400/60",
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        app.setFormBuilder(true);
+      }}
+      aria-label={`Form field ${displayName}. Drag to move; double-click to open field properties.`}
     >
       <div
         className={cn(
@@ -725,15 +879,17 @@ function FieldDesigner({
         </span>
       </div>
       {isSelected && canPromote && (
-        <button
-          type="button"
-          title="Edit this field"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={promote}
-          className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-sm border border-white bg-blue-500 text-white shadow-sm hover:bg-blue-600"
-        >
-          <Pencil className="h-2.5 w-2.5" />
-        </button>
+        <Tip label="Edit this field">
+          <button
+            type="button"
+            aria-label="Edit this field"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={promote}
+            className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-sm border border-white bg-blue-500 text-white shadow-sm hover:bg-blue-600"
+          >
+            <Pencil className="h-2.5 w-2.5" />
+          </button>
+        </Tip>
       )}
       {isSelected && (
         <div
@@ -996,15 +1152,17 @@ export function FieldPreviewInput({
       const fmtError = fmt && fmt !== "none" ? fieldValueError(fmt, value) : null;
       const displayValue = fmt && fmt !== "none" && !focused ? formatFieldValue(fmt, value) : value;
       return (
-        <input
-          {...common}
-          type={ann.fieldType === "text" && ann.password ? "password" : "text"}
-          value={displayValue}
-          title={fmtError ?? undefined}
-          placeholder={ann.fieldType === "date" ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
-          className={cn(base, "px-1", fmtError && "ring-1 ring-inset ring-red-500")}
-          onChange={(e) => app.setPreviewValue(name, e.target.value)}
-        />
+        <Tip label="Invalid value" desc={fmtError} disabled={!fmtError}>
+          <input
+            {...common}
+            type={ann.fieldType === "text" && ann.password ? "password" : "text"}
+            value={displayValue}
+            aria-invalid={!!fmtError}
+            placeholder={ann.fieldType === "date" ? ann.dateFormat ?? "mm/dd/yyyy" : undefined}
+            className={cn(base, "px-1", fmtError && "ring-1 ring-inset ring-red-500")}
+            onChange={(e) => app.setPreviewValue(name, e.target.value)}
+          />
+        </Tip>
       );
     }
   }
@@ -1183,13 +1341,14 @@ export function FieldProperties({
       {isCheck && (
         <div className="space-y-0.5">
           <div className={lbl}>Export value</div>
-          <Input
-            key={`exp-${ann.id}`}
-            className={sm}
-            defaultValue={ann.exportValue ?? "Yes"}
-            title="The value submitted when the box is checked"
-            onBlur={(e) => onPatch({ exportValue: e.target.value.trim() || undefined })}
-          />
+          <Tip label="Export value" desc="The value submitted when the box is checked">
+            <Input
+              key={`exp-${ann.id}`}
+              className={sm}
+              defaultValue={ann.exportValue ?? "Yes"}
+              onBlur={(e) => onPatch({ exportValue: e.target.value.trim() || undefined })}
+            />
+          </Tip>
         </div>
       )}
 
@@ -1275,9 +1434,11 @@ export function FieldProperties({
               aria-label="Text alignment"
             >
               {(["left", "center", "right"] as const).map((a) => (
-                <ToggleGroupItem key={a} value={a} title={a} className="text-[11px] capitalize">
-                  {a[0].toUpperCase()}
-                </ToggleGroupItem>
+                <Tip key={a} label={`${a[0].toUpperCase()}${a.slice(1)} align`}>
+                  <ToggleGroupItem value={a} className="text-[11px] capitalize">
+                    {a[0].toUpperCase()}
+                  </ToggleGroupItem>
+                </Tip>
               ))}
             </ToggleGroup>
           </div>
@@ -1310,26 +1471,27 @@ export function FieldProperties({
             </label>
             {!ann.multiline && (
               <>
-                <label
-                  className="flex items-center gap-1.5 text-[11px]"
-                  title="Fixed character cells — requires a max length"
-                >
-                  <Checkbox
-                    checked={!!ann.comb}
-                    onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
-                  />
-                  Comb (fixed cells)
-                  {ann.comb && !ann.maxLength && (
-                    <span className="text-[10px] text-amber-600">needs max length</span>
-                  )}
-                </label>
-                <label className="flex items-center gap-1.5 text-[11px]" title="Masks the value with dots">
-                  <Checkbox
-                    checked={!!ann.password}
-                    onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
-                  />
-                  Password
-                </label>
+                <Tip label="Comb" desc="Fixed character cells; requires a max length">
+                  <label className="flex items-center gap-1.5 text-[11px]">
+                    <Checkbox
+                      checked={!!ann.comb}
+                      onCheckedChange={(v: boolean) => onPatch({ comb: v, password: v ? false : ann.password })}
+                    />
+                    Comb (fixed cells)
+                    {ann.comb && !ann.maxLength && (
+                      <span className="text-[10px] text-amber-600">needs max length</span>
+                    )}
+                  </label>
+                </Tip>
+                <Tip label="Password" desc="Masks the value with dots">
+                  <label className="flex items-center gap-1.5 text-[11px]">
+                    <Checkbox
+                      checked={!!ann.password}
+                      onCheckedChange={(v: boolean) => onPatch({ password: v, comb: v ? false : ann.comb })}
+                    />
+                    Password
+                  </label>
+                </Tip>
               </>
             )}
           </div>
