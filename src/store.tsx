@@ -1092,7 +1092,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [fontColor, setFontColor] = useState("#000000");
   const [highlightColor, setHighlightColor] = useState("#facc15");
   const [highlightMode, setHighlightMode] = useState<"text" | "area">("text");
-  const [editTextScope, setEditTextScope] = useState<EditTextScope>("paragraph");
+  const [editTextScope, setEditTextScope] = useState<EditTextScope>("line");
   const [markupColor, setMarkupColor] = useState("#dc2626");
   // Fill color for new rect/ellipse shapes; null = no fill (outline only).
   const [toolFill, setToolFill] = useState<string | null>(null);
