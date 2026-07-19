@@ -15,7 +15,7 @@ const requiredProps = {
   open: true,
   response: "The response being reported",
   provider: "Built-in",
-  model: "Gemma 4 (in-browser)",
+  model: "Gemma 4 (built-in)",
 };
 
 describe("AiReportDialog", () => {

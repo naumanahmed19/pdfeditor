@@ -57,6 +57,53 @@ export interface PageText {
   full: string;
 }
 
+/** Extract one page without forcing a full-document indexing pass. */
+export function extractPageText(pdf: PdfDoc, pageIndex: number): PageText | null {
+  if (pageIndex < 0 || pageIndex >= pdf.numPages) return null;
+  const page = pdf.page(pageIndex);
+  const items = page.getTextRuns().map((r) => r.text);
+  return {
+    pageIndex,
+    items,
+    full: items.length ? items.join(" ") : page.getText(),
+  };
+}
+
+/**
+ * Build a bounded AI context without materializing the entire document.
+ * The current page is most relevant, then pages are read from the beginning
+ * until the character budget is full.
+ */
+export function extractTextContext(
+  pdf: PdfDoc,
+  currentPage: number,
+  limit: number,
+): string {
+  if (limit <= 0 || pdf.numPages <= 0) return "";
+  let context = "";
+
+  const appendPage = (pageIndex: number): boolean => {
+    const page = extractPageText(pdf, pageIndex);
+    if (!page?.full.trim()) return false;
+    const chunk = `\n--- Page ${page.pageIndex + 1} ---\n${page.full}`;
+    const remaining = limit - context.length;
+    if (chunk.length >= remaining) {
+      context += chunk.slice(0, remaining);
+      return true;
+    }
+    context += chunk;
+    return context.length >= limit;
+  };
+
+  const safeCurrent = Math.min(Math.max(0, currentPage), pdf.numPages - 1);
+  if (appendPage(safeCurrent)) return context;
+  for (let pageIndex = 0; pageIndex < pdf.numPages; pageIndex++) {
+    if (pageIndex === safeCurrent) continue;
+    if (appendPage(pageIndex)) break;
+  }
+  return context;
+}
+
 // Caches the in-flight promise (not the result) so concurrent callers — the
 // scanned-PDF check at open plus an early search — share one extraction pass.
 const textCache = new WeakMap<PdfDoc, Promise<PageText[]>>();
@@ -75,13 +122,8 @@ export function extractAllText(pdf: PdfDoc): Promise<PageText[]> {
         await new Promise((r) => setTimeout(r, 0));
         sliceStart = performance.now();
       }
-      const page = pdf.page(i);
-      const items = page.getTextRuns().map((r) => r.text);
-      pages.push({
-        pageIndex: i,
-        items,
-        full: items.length ? items.join(" ") : page.getText(),
-      });
+      const page = extractPageText(pdf, i);
+      if (page) pages.push(page);
     }
     return pages;
   })();

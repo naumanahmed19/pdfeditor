@@ -46,7 +46,28 @@ export async function runOcr(
   onProgress: (page: number, total: number, phase: "prepare" | "recognize") => void = () => {},
   signal?: AbortSignal,
 ): Promise<OcrPage[]> {
-  const total = pdf.numPages;
+  return runOcrPages(
+    pdf,
+    Array.from({ length: pdf.numPages }, (_, pageIndex) => pageIndex),
+    lang,
+    onProgress,
+    signal,
+  );
+}
+
+/** Recognize only selected zero-based pages, avoiding a whole-document OCR pass. */
+export async function runOcrPages(
+  pdf: PdfDoc,
+  pageIndexes: readonly number[],
+  lang: string = DEFAULT_OCR_LANGUAGE,
+  onProgress: (page: number, total: number, phase: "prepare" | "recognize") => void = () => {},
+  signal?: AbortSignal,
+): Promise<OcrPage[]> {
+  const indexes = [...new Set(pageIndexes)].filter(
+    (pageIndex) => pageIndex >= 0 && pageIndex < pdf.numPages,
+  );
+  const total = indexes.length;
+  if (!total) return [];
   onProgress(0, total, "prepare");
   const worker = await createWorker(normalizeOcrLanguage(lang), OEM.LSTM_ONLY, {
     logger: () => {},
@@ -54,11 +75,12 @@ export async function runOcr(
   });
   const pages: OcrPage[] = [];
   try {
-    for (let i = 1; i <= total; i++) {
+    for (let position = 0; position < indexes.length; position++) {
       if (signal?.aborted) throw new Error("OCR cancelled");
-      onProgress(i - 1, total, "recognize");
+      onProgress(position, total, "recognize");
 
-      const page = await pdf.getPage(i);
+      const pageIndex = indexes[position];
+      const page = await pdf.getPage(pageIndex + 1);
       const vp1 = page.getViewport({ scale: 1 });
       const vp = page.getViewport({ scale: RENDER_SCALE });
       const canvas = document.createElement("canvas");
@@ -91,7 +113,7 @@ export async function runOcr(
         }
       }
       pages.push({
-        pageIndex: i - 1,
+        pageIndex,
         width: vp1.width,
         height: vp1.height,
         renderScale: RENDER_SCALE,
@@ -105,4 +127,36 @@ export async function runOcr(
   }
   onProgress(total, total, "recognize");
   return pages;
+}
+
+const recognizedTextCache = new WeakMap<PdfDoc, Map<string, string>>();
+
+/** OCR one page for AI context without modifying the PDF. */
+export async function recognizePageText(
+  pdf: PdfDoc,
+  pageIndex: number,
+  lang: string = DEFAULT_OCR_LANGUAGE,
+  onProgress: (phase: "prepare" | "recognize") => void = () => {},
+  signal?: AbortSignal,
+): Promise<string> {
+  const normalizedLang = normalizeOcrLanguage(lang);
+  const key = `${pageIndex}:${normalizedLang}`;
+  const cached = recognizedTextCache.get(pdf)?.get(key);
+  if (cached !== undefined) return cached;
+
+  const [page] = await runOcrPages(
+    pdf,
+    [pageIndex],
+    normalizedLang,
+    (_page, _total, phase) => onProgress(phase),
+    signal,
+  );
+  const text = page?.words.map((word) => word.text).join(" ").trim() ?? "";
+  let documentCache = recognizedTextCache.get(pdf);
+  if (!documentCache) {
+    documentCache = new Map();
+    recognizedTextCache.set(pdf, documentCache);
+  }
+  documentCache.set(key, text);
+  return text;
 }

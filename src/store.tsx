@@ -90,6 +90,7 @@ import {
 } from "./lib/revision";
 
 const SETTINGS_KEY = "pickpdf-settings";
+const API_KEY_SESSION_KEY = "pickpdf-api-key-session";
 const SIGNATURES_KEY = "pickpdf-signatures";
 const THEME_KEY = "pickpdf-theme";
 const ACCENT_KEY = "pickpdf-accent";
@@ -379,6 +380,8 @@ interface AppStore {
   /** Open documents as tabs; all doc-scoped fields below refer to the active tab. */
   tabs: TabInfo[];
   activeTabId: string | null;
+  /** True until startup has finished restoring the last active document. */
+  sessionRestoring: boolean;
   switchTab: (id: string) => void;
   closeTab: (id: string) => void;
   closeAllTabs: () => void;
@@ -746,7 +749,7 @@ interface AppStore {
   searchMatches: SearchMatch[];
   activeMatch: number;
   searchError: string | null;
-  runSearch: (q: string, options?: Partial<SearchOptions>) => Promise<void>;
+  runSearch: (q: string, options?: Partial<SearchOptions>) => Promise<number>;
   setSearchOptions: (options: Partial<SearchOptions>) => void;
   gotoMatch: (i: number) => void;
   replaceMatch: (replacement: string, index?: number) => Promise<void>;
@@ -1047,6 +1050,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingPdfEdits = useRef(new Map<string, PendingPdfEdits>());
   const flushPdfEditsRef = useRef<(id: string) => Promise<void>>(async () => {});
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [sessionRestoring, setSessionRestoring] = useState(true);
   const [panes, setPanes] = useState<Array<{ id: string; docId: string }>>([]);
   const [activePaneId, setActivePaneId] = useState<string | null>(null);
   const [paneSizes, setPaneSizes] = useState<number[]>([]);
@@ -1346,17 +1350,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [settings, setSettingsState] = useState<AppSettings>(() => {
     const loaded = loadJson(SETTINGS_KEY, DEFAULT_SETTINGS);
-    // The built-in (in-browser) model is desktop-only — its weights OOM-crash a
+    // API credentials are session-only. Migrate keys saved by older versions
+    // into sessionStorage and immediately scrub the persistent settings record.
+    let apiKey = loaded.customApiKey;
+    try {
+      apiKey = sessionStorage.getItem(API_KEY_SESSION_KEY) ?? apiKey;
+      if (apiKey) sessionStorage.setItem(API_KEY_SESSION_KEY, apiKey);
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ ...loaded, customApiKey: "" }),
+      );
+    } catch {
+      // Keep the value in memory for this run even if browser storage is denied.
+    }
+    const safeLoaded = { ...loaded, customApiKey: apiKey };
+    // The built-in on-device model is desktop-only — its weights OOM-crash a
     // mobile tab. On phones/tablets, fall back to a remote Custom API so a fresh
     // user (who defaults to "browser") isn't left pointing at an unusable model.
-    if (isHandheldDevice() && loaded.provider === "browser") {
-      return { ...loaded, provider: "openai_compatible" };
+    if (isHandheldDevice() && safeLoaded.provider === "browser") {
+      return { ...safeLoaded, provider: "openai_compatible" };
     }
-    return loaded;
+    return safeLoaded;
   });
   const setSettings = useCallback((s: AppSettings) => {
     setSettingsState(s);
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+    try {
+      if (s.customApiKey) sessionStorage.setItem(API_KEY_SESSION_KEY, s.customApiKey);
+      else sessionStorage.removeItem(API_KEY_SESSION_KEY);
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ ...s, customApiKey: "" }),
+      );
+    } catch {
+      /* settings remain available in memory for this session */
+    }
   }, []);
 
   const [signatures, setSignatures] = useState<SavedSignature[]>(() =>
@@ -2487,28 +2514,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (restoredRef.current) return;
     restoredRef.current = true;
     void (async () => {
-      const stored = await listStoredDocs();
+      try {
+        const stored = await listStoredDocs();
       // Metadata is cheap: render the complete session immediately. Reading
       // and parsing the active PDF happens afterward and must not hold the
       // sidebar in its loading state.
       await refreshRecent();
       setRecentLoading(false);
-      const active = stored
-        .filter((d) => d.open)
-        .sort((a, b) => b.lastOpened - a.lastOpened)[0];
-      const activeDoc = active ? await getStoredDoc(active.id) : undefined;
+        const active = stored
+          .filter((d) => d.open)
+          .sort((a, b) => b.lastOpened - a.lastOpened)[0];
+        const activeDoc = active ? await getStoredDoc(active.id) : undefined;
       // Skip auto-open when the active doc is locked (PickPDF wrapper or
       // standard-encrypted) — it would pop a password dialog on startup. It
       // unlocks lazily when the user activates it.
-      if (activeDoc && !(await needsPasswordToOpen(activeDoc.bytes))) {
-        await openBytesInternal(
-          activeDoc.bytes,
-          activeDoc.name,
-          activeDoc.id,
-          true,
-          activeDoc.annotations,
-          activeDoc.sourceKey ?? legacyBytesSourceKey(activeDoc.name, activeDoc.bytes),
-        );
+        if (activeDoc && !(await needsPasswordToOpen(activeDoc.bytes))) {
+          await openBytesInternal(
+            activeDoc.bytes,
+            activeDoc.name,
+            activeDoc.id,
+            true,
+            activeDoc.annotations,
+            activeDoc.sourceKey ?? legacyBytesSourceKey(activeDoc.name, activeDoc.bytes),
+          );
+        }
+      } catch (error) {
+        // A damaged/unavailable recent-files database must not leave the whole
+        // application in a permanent startup state.
+        console.error("Could not restore the previous session:", error);
+        setRecentLoading(false);
+      } finally {
+        // AiPanel is keyed by activeTabId to keep chats document-scoped. Do not
+        // let it start work until that id is stable, otherwise session restore
+        // remounts the panel and aborts the first model request.
+        setSessionRestoring(false);
       }
     })();
   }, [openBytesInternal, refreshRecent, needsPasswordToOpen]);
@@ -4102,7 +4141,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!active?.pdf || !q.trim()) {
         setSearchMatches([]);
         setActiveMatch(0);
-        return;
+        return 0;
       }
       try {
         const pdfMatches = options.includePdfText
@@ -4115,11 +4154,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSearchMatches(matches);
         setActiveMatch(0);
         if (matches.length) scrollToPage(matches[0].page);
+        return matches.length;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Search failed.";
         setSearchError(message);
         setSearchMatches([]);
         setActiveMatch(0);
+        return 0;
       }
     },
     [active, scrollToPage, searchOptions],
@@ -4416,6 +4457,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setScreen,
     tabs,
     activeTabId,
+    sessionRestoring,
     switchTab,
     closeTab,
     closeAllTabs,

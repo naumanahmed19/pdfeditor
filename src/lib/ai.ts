@@ -19,7 +19,7 @@ export const OPENROUTER_DEFAULT_URL = "https://openrouter.ai/api/v1";
 export const VERCEL_AI_GATEWAY_DEFAULT_URL = "https://ai-gateway.vercel.sh/v1";
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  // Default to the zero-config in-browser model, so users without a local model
+  // Default to the zero-config built-in model, so users without a local model
   // server (Ollama / LM Studio) can use the assistant with no setup.
   provider: "browser",
   model: DEFAULT_MODEL,
@@ -121,13 +121,17 @@ async function fetchWithFallback(
   try {
     return await fetch(url, init);
   } catch (err) {
+    if ((err as Error)?.name === "AbortError") throw err;
     const fallback = proxyUrl(url, provider);
     if (fallback) return fetch(fallback, init);
     throw err;
   }
 }
 
-export async function listModels(settings: AppSettings): Promise<string[]> {
+export async function listModels(
+  settings: AppSettings,
+  signal?: AbortSignal,
+): Promise<string[]> {
   if (settings.provider === "browser") {
     const model = effectiveBrowserModel(settings.browserModelId, isHandheldDevice());
     return [browserModelLabel(model)];
@@ -147,7 +151,7 @@ export async function listModels(settings: AppSettings): Promise<string[]> {
   // Ollama native endpoint gives the richest listing.
   if (settings.provider === "ollama") {
     try {
-      const res = await fetchWithFallback(`${base}/api/tags`, "ollama", { headers });
+      const res = await fetchWithFallback(`${base}/api/tags`, "ollama", { headers, signal });
       if (res.ok) {
         const json = await res.json();
         const names = (json.models ?? [])
@@ -166,6 +170,7 @@ export async function listModels(settings: AppSettings): Promise<string[]> {
       : localOpenAiEndpoint(settings, "models");
   const res = await fetchWithFallback(modelsUrl, settings.provider, {
     headers,
+    signal,
   });
   if (!res.ok) throw new Error(`Model listing failed (${res.status})`);
   const json = await res.json();
@@ -198,26 +203,35 @@ export async function checkConnection(settings: AppSettings): Promise<{
       models: [gpu ? label : `${label} (CPU mode — slower, no WebGPU)`],
     };
   }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const models = await listModels(settings);
+    const models = await listModels(settings, controller.signal);
     return { ok: true, models };
   } catch (err) {
     return {
       ok: false,
       models: [],
-      error: err instanceof Error ? err.message : "Connection failed",
+      error:
+        (err as Error)?.name === "AbortError"
+          ? "Connection timed out"
+          : err instanceof Error
+            ? err.message
+            : "Connection failed",
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-/** Pick the configured model, preferring an exact then fuzzy match from what's installed. */
+/** Keep the configured model exact; silently choosing another can change cost and behavior. */
 export function resolveModel(configured: string, available: string[]): string {
+  if (!configured.trim()) throw new Error("No model is configured.");
   if (!available.length) return configured;
   if (available.includes(configured)) return configured;
-  const fuzzy = available.find((m) =>
-    m.toLowerCase().includes(configured.toLowerCase()),
+  throw new Error(
+    `The configured model "${configured}" is not available. Choose an available model in Settings.`,
   );
-  return fuzzy ?? available[0];
 }
 
 export async function streamChat(
@@ -244,11 +258,15 @@ export async function streamChat(
   }
 
   let model = settings.model;
+  let availableModels: string[] | null = null;
   try {
-    model = resolveModel(settings.model, await listModels(settings));
-  } catch {
-    /* use configured name as-is */
+    availableModels = await listModels(settings, signal);
+  } catch (error) {
+    if ((error as Error)?.name === "AbortError") throw error;
+    // Some endpoints do not permit model listing. In that case, send the exact
+    // configured id and let the chat endpoint validate it.
   }
+  if (availableModels) model = resolveModel(settings.model, availableModels);
 
   if (settings.provider === "openai_compatible" && shouldUseAiSdkForCustomApi(base)) {
     return streamAiSdkChat(settings, model, messages, onToken, signal);

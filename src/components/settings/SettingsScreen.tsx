@@ -27,9 +27,9 @@ import {
 } from "../../lib/ai";
 import {
   clearBrowserModelCache,
-  isBrowserModelDownloaded,
   type ModelLoadProgress,
   preloadBrowserModel,
+  verifyBrowserModelDownloaded,
   webgpuAvailable,
 } from "../../lib/browserLlm";
 import {
@@ -47,7 +47,7 @@ const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   {
     value: "browser",
     label: "Built-in",
-    hint: "Runs privately in your browser — no setup or API key. Downloads once, then works offline. Uses your GPU (WebGPU) when available, otherwise CPU (slower).",
+    hint: "Runs privately on your device — no setup or API key. Downloads once, then works offline. Uses your GPU when available, otherwise CPU (slower).",
   },
   { value: "ollama", label: "Ollama", hint: "Local models via Ollama (default port 11434)" },
   { value: "lmstudio", label: "LM Studio", hint: "Local models via LM Studio server (default port 1234)" },
@@ -55,7 +55,7 @@ const PROVIDERS: Array<{ value: ProviderKind; label: string; hint: string }> = [
 ];
 
 /** On a phone/tablet only a remote Custom API works: Ollama & LM Studio speak to
- *  localhost (the device itself — unreachable), and the built-in in-browser model
+ *  localhost (the device itself — unreachable), and the built-in on-device model
  *  is desktop-only because its weights OOM-crash a mobile tab. */
 const HANDHELD_PROVIDERS: ProviderKind[] = ["openai_compatible"];
 
@@ -272,7 +272,7 @@ export function SettingsScreen() {
               </Row>
               <Row
                 title="API key"
-                description={usesGoogleApi ? "Sent as x-goog-api-key." : "Sent as a Bearer token."}
+                description={`${usesGoogleApi ? "Sent as x-goog-api-key." : "Sent as a Bearer token."} Kept only for this app session.`}
               >
                 <Input
                   className="w-full sm:w-64"
@@ -430,10 +430,10 @@ function Row({
   );
 }
 
-type DownloadState = "idle" | "downloading" | "preparing" | "ready" | "error";
+type DownloadState = "checking" | "idle" | "downloading" | "preparing" | "ready" | "error";
 
 /**
- * The in-browser model chooser: a segmented picker on desktop (Gemma 4 vs the
+ * The built-in model chooser: a segmented picker on desktop (Gemma 4 vs the
  * lightweight Qwen2.5), or a locked note on phones/tablets — which are pinned to
  * the mobile-safe model because Gemma 4's ~3 GB weights OOM-crash a mobile tab.
  * Below it, download controls for whichever model is selected.
@@ -485,19 +485,30 @@ function BrowserModelSection({ handheld }: { handheld: boolean }) {
 }
 
 /**
- * Download status, progress and controls for a given in-browser model — lets
+ * Download status, progress and controls for a given built-in model — lets
  * users pre-download it, watch progress, retry a failed load, or clear a bad
  * cache, all without having to start a chat.
  */
 function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
-  const [state, setState] = useState<DownloadState>(() =>
-    isBrowserModelDownloaded(model.id) ? "ready" : "idle",
-  );
+  const [state, setState] = useState<DownloadState>("checking");
   const [progress, setProgress] = useState<ModelLoadProgress | null>(null);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   const handheld = isHandheldDevice();
   const gpu = webgpuAvailable();
+
+  useEffect(() => {
+    let alive = true;
+    void verifyBrowserModelDownloaded(model).then((ready) => {
+      if (alive) setState(ready ? "ready" : "idle");
+    });
+    return () => {
+      alive = false;
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, [model]);
 
   const start = async () => {
     setError("");
@@ -507,21 +518,25 @@ function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
     abortRef.current = ac;
     try {
       await preloadBrowserModel(model, (p) => {
+        if (!mountedRef.current) return;
         setProgress(p);
         setState(p.phase === "preparing" ? "preparing" : "downloading");
       }, ac.signal);
-      setState("ready");
-      setProgress(null);
-      toast.success(`${model.name} is ready — it now runs offline`);
+      if (mountedRef.current) {
+        setState("ready");
+        setProgress(null);
+        toast.success(`${model.name} is ready — it now runs offline`);
+      }
     } catch (e) {
+      if (!mountedRef.current) return;
       if ((e as Error).name === "AbortError") {
-        setState(isBrowserModelDownloaded(model.id) ? "ready" : "idle");
+        setState((await verifyBrowserModelDownloaded(model)) ? "ready" : "idle");
       } else {
         setError((e as Error).message || "Download failed");
         setState("error");
       }
     } finally {
-      abortRef.current = null;
+      if (mountedRef.current) abortRef.current = null;
     }
   };
 
@@ -529,11 +544,18 @@ function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
 
   const clear = async () => {
     cancel();
-    await clearBrowserModelCache();
-    setState("idle");
-    setProgress(null);
-    setError("");
-    toast.success("Cached model data cleared — it will download again on next use");
+    try {
+      await clearBrowserModelCache();
+      if (!mountedRef.current) return;
+      setState("idle");
+      setProgress(null);
+      setError("");
+      toast.success("Cached model data cleared — it will download again on next use");
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setError((e as Error).message || "Could not clear the model cache");
+      setState("error");
+    }
   };
 
   const busy = state === "downloading" || state === "preparing";
@@ -545,7 +567,7 @@ function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
         <div className="min-w-0">
           <p className="text-sm">Download</p>
           <p className="pt-0.5 text-xs text-muted-foreground">
-            {model.name} runs privately in your browser — no server or API
+            {model.name} runs privately on your device — no server or API
             key. Downloads once ({model.sizeLabel}), then works offline.{" "}
             {handheld
               ? "On phones and tablets it runs on the CPU (slower, but avoids mobile-GPU crashes)."
@@ -555,6 +577,11 @@ function BrowserModelPanel({ model }: { model: BrowserModelConfig }) {
           </p>
         </div>
         <div className="shrink-0">
+          {state === "checking" && (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking cache…
+            </span>
+          )}
           {state === "ready" && (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-600">
               <Check className="h-3.5 w-3.5" /> Ready · offline

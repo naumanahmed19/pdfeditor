@@ -68,6 +68,17 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("recent history removal", () => {
+  it("exposes startup restoration until the active-document lookup settles", async () => {
+    render(
+      <AppProvider>
+        <Capture />
+      </AppProvider>,
+    );
+
+    expect(store.sessionRestoring).toBe(true);
+    await waitFor(() => expect(store.sessionRestoring).toBe(false));
+  });
+
   it("shows every open session entry even when there are more than ten", async () => {
     persistence.docs = Array.from({ length: 15 }, (_, index) => ({
       id: `open-${index}`,

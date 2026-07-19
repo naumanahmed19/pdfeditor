@@ -360,7 +360,7 @@ export type ProviderKind =
 export interface AppSettings {
   provider: ProviderKind;
   model: string;
-  /** Which built-in in-browser model to use (see lib/modelConfig). Desktop only;
+  /** Which built-in on-device model to use (see lib/modelConfig). Desktop only;
    *  phones/tablets are always pinned to the mobile-safe model. */
   browserModelId: string;
   ollamaBaseUrl: string;
