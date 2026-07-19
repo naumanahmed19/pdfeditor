@@ -68,6 +68,7 @@ import {
   listStoredDocs,
   markDocClosed,
   persistDoc,
+  removeStoredDocs,
   MAX_PERSIST_BYTES,
   type PersistResult,
 } from "./lib/persist";
@@ -75,6 +76,7 @@ import { applyAccent, type AccentId } from "./lib/accents";
 import { editPdfsInBackground } from "./lib/pdfEditWorker";
 import { appendPdfEdit } from "./lib/pdfEditJournal";
 import type { PdfEditOperation } from "./lib/pdfEditTypes";
+import { fileSourceKey, legacyBytesSourceKey } from "./lib/fileIdentity";
 import {
   type DocRevision,
   bumpBytesRevision,
@@ -167,6 +169,7 @@ interface BaseState {
 interface OpenDoc {
   id: string;
   name: string;
+  sourceKey?: string;
   bytes: Uint8Array;
   pdf: PdfDoc;
   annotations: AnnotationMap;
@@ -355,6 +358,7 @@ export interface TabInfo {
 export interface RecentFile {
   id: string;
   name: string;
+  sourceKey?: string;
   lastOpened: number;
   open: boolean;
 }
@@ -411,7 +415,7 @@ interface AppStore {
    *  bump repaints the live page without a remount. */
   contentRev: number;
 
-  openFile: (file: File) => Promise<void>;
+  openFile: (file: File, handle?: unknown) => Promise<string | null>;
   openBytes: (bytes: Uint8Array, name: string) => Promise<string | null>;
   /** Open via the File System Access picker when available (enables save-in-place). */
   requestOpen: () => Promise<void>;
@@ -424,6 +428,8 @@ interface AppStore {
   /** True until the first recent-files load completes (drives sidebar skeleton). */
   recentLoading: boolean;
   openRecent: (id: string) => Promise<void>;
+  removeRecent: (id: string) => Promise<void>;
+  clearRecent: () => Promise<void>;
   closeDocument: () => void;
 
   /** Opened folder tree (PDFs only, nested folders included). */
@@ -1650,6 +1656,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         void persistDoc({
           id,
           name: latest.name,
+          sourceKey: latest.sourceKey,
           bytes: saved.bytes,
           annotations: saved.annotations,
           lastOpened: Date.now(),
@@ -1784,6 +1791,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [folderRoot, setFolderRoot] = useState<FolderNode | null>(null);
   const [folderBusy, setFolderBusy] = useState(false);
   const docHandles = useRef(new Map<string, any>());
+  const openingSources = useRef(new Map<string, Promise<string | null>>());
   const runOcrRef = useRef<(() => Promise<void>) | null>(null);
   /** Docs opened from (or saved as) a PickPDF-locked wrapper: how to re-wrap
    *  on save. `permissions`/`ownerPassword` re-apply inner restrictions. */
@@ -1852,6 +1860,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         persistDoc({
           id,
           name,
+          sourceKey:
+            docsRef.current.find((doc) => doc.id === id)?.sourceKey ?? prev?.sourceKey,
           bytes,
           ...(prev?.annotations ? { annotations: prev.annotations } : {}),
           lastOpened: Date.now(),
@@ -1873,11 +1883,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       encryptedAtOpen.current.has(active.id)
     )
       return;
-    const { id, name, bytes, annotations } = active;
+    const { id, name, sourceKey, bytes, annotations } = active;
     const t = setTimeout(() => {
       void persistDoc({
         id,
         name,
+        sourceKey,
         bytes,
         annotations,
         lastOpened: Date.now(),
@@ -1891,14 +1902,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshRecent = useCallback(async () => {
     const stored = await listStoredDocs();
+    const seen = new Set<string>();
     setRecentFiles(
-      stored.map((d) => ({
-        id: d.id,
-        name: d.name,
-        lastOpened: d.lastOpened,
-        open: d.open,
-      })),
+      stored.flatMap((d) => {
+        const sourceKey = d.sourceKey ?? legacyBytesSourceKey(d.name, d.bytes);
+        if (seen.has(sourceKey)) return [];
+        seen.add(sourceKey);
+        return [
+          {
+            id: d.id,
+            name: d.name,
+            sourceKey,
+            lastOpened: d.lastOpened,
+            open: d.open,
+          },
+        ];
+      }),
     );
+  }, []);
+
+  const activateLoadedDoc = useCallback(
+    (id: string) => {
+      if (panes.length > 0) {
+        const inPane = panes.find((p) => p.docId === id);
+        if (inPane) {
+          setActivePaneId(inPane.id);
+        } else if (activePaneId) {
+          setPanes((prev) =>
+            prev.map((p) => (p.id === activePaneId ? { ...p, docId: id } : p)),
+          );
+        }
+      }
+      if (id !== activeTabId) {
+        setActiveTabId(id);
+        setDocVersion((v) => v + 1);
+        resetTransient();
+      }
+      setScreen("viewer");
+    },
+    [panes, activePaneId, activeTabId, resetTransient],
+  );
+
+  const docIdForHandle = useCallback(async (handle: any): Promise<string | null> => {
+    if (!handle || typeof handle.isSameEntry !== "function") return null;
+    for (const [id, existing] of docHandles.current) {
+      if (!existing || typeof existing.isSameEntry !== "function") continue;
+      try {
+        if (await handle.isSameEntry(existing)) return id;
+      } catch {
+        /* a revoked handle simply cannot participate in identity matching */
+      }
+    }
+    return null;
   }, []);
 
   const openBytesInternal = useCallback(
@@ -1908,7 +1963,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       id?: string,
       persist = true,
       storedAnnotations?: AnnotationMap,
+      sourceKey?: string,
     ): Promise<string | null> => {
+      if (sourceKey) {
+        const existing = docsRef.current.find((doc) => doc.sourceKey === sourceKey);
+        if (existing) {
+          activateLoadedDoc(existing.id);
+          return existing.id;
+        }
+      }
       try {
         let pdfDoc = await loadPdf(bytes);
         let realBytes = bytes;
@@ -1994,7 +2057,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         for (const [p, list] of Object.entries(storedAnnotations ?? {})) {
           if (list.length) overlaySeed[Number(p)] = [...list];
         }
-        if (!pdfDoc.isEncrypted()) {
+        // Persisted plain documents already have their source annotations
+        // stripped and their editable overlay stored separately. Re-running
+        // pdf-lib's full-document import here delays large sidebar opens for
+        // work that cannot find anything. Protected, new, and legacy records
+        // omit storedAnnotations and still take the import path below.
+        if (!pdfDoc.isEncrypted() && storedAnnotations === undefined) {
           try {
             const { importAnnotations } = await import("./lib/annotimport");
             const imported = await importAnnotations(realBytes);
@@ -2023,6 +2091,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const doc: OpenDoc = {
           id: id ?? uid(),
           name,
+          sourceKey,
           bytes: realBytes,
           pdf: pdfDoc,
           annotations: overlaySeed,
@@ -2066,7 +2135,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
             markProtected(doc.id, true);
           }
         }
+        const openedAt = Date.now();
         setDocs((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
+        // The document is live now, so reflect it in the sidebar immediately.
+        // IndexedDB persistence can take seconds for a large byte array and is
+        // deliberately kept off the visible-open critical path.
+        setRecentFiles((prev) => [
+          {
+            id: doc.id,
+            name: doc.name,
+            sourceKey: doc.sourceKey,
+            lastOpened: openedAt,
+            open: true,
+          },
+          ...prev.filter(
+            (recent) =>
+              recent.id !== doc.id &&
+              (!doc.sourceKey || recent.sourceKey !== doc.sourceKey),
+          ),
+        ]);
         setActiveTabId(doc.id);
         // In split view, show the newly opened document in the focused pane —
         // panes render from panes[].docId, so without this the new doc becomes
@@ -2111,13 +2198,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
           void persistDoc({
             id: doc.id,
             name,
+            sourceKey,
             bytes: isProtected ? bytes : realBytes,
             ...(isProtected ? {} : { annotations: overlaySeed }),
-            lastOpened: Date.now(),
+            lastOpened: openedAt,
             open: true,
           }).then((result) => {
             noteAutosaveSkipped(doc.id, result);
-            return refreshRecent();
+            // A file that is too large for persistence (or hit a transient
+            // storage error) is still open in this session and must stay in
+            // the sidebar. Successful writes can reconcile/prune recents in
+            // the background without delaying the optimistic entry above.
+            if (result === "stored") return refreshRecent();
           });
         }
         // Offer OCR only for a genuine scan: essentially no extractable text
@@ -2153,7 +2245,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [resetTransient, refreshRecent, markProtected, requestPassword, noteAutosaveSkipped, activePaneId],
+    [
+      resetTransient,
+      refreshRecent,
+      markProtected,
+      requestPassword,
+      noteAutosaveSkipped,
+      activePaneId,
+      activateLoadedDoc,
+    ],
   );
 
   const openBytes = useCallback(
@@ -2162,11 +2262,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const openFile = useCallback(
-    async (file: File) => {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      await openBytes(buf, file.name);
+    async (file: File, handle?: unknown): Promise<string | null> => {
+      const handleMatch = await docIdForHandle(handle);
+      if (handleMatch) {
+        activateLoadedDoc(handleMatch);
+        return handleMatch;
+      }
+
+      const sourceKey = fileSourceKey(file);
+      const existing = docsRef.current.find((doc) => doc.sourceKey === sourceKey);
+      if (existing) {
+        if (handle) docHandles.current.set(existing.id, handle);
+        activateLoadedDoc(existing.id);
+        return existing.id;
+      }
+
+      const pending = openingSources.current.get(sourceKey);
+      if (pending) {
+        const id = await pending;
+        if (id && handle) docHandles.current.set(id, handle);
+        if (id) activateLoadedDoc(id);
+        return id;
+      }
+
+      const opening = (async () => {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        return openBytesInternal(buf, file.name, undefined, true, undefined, sourceKey);
+      })();
+      openingSources.current.set(sourceKey, opening);
+      try {
+        const id = await opening;
+        if (id && handle) docHandles.current.set(id, handle);
+        return id;
+      } finally {
+        if (openingSources.current.get(sourceKey) === opening) {
+          openingSources.current.delete(sourceKey);
+        }
+      }
     },
-    [openBytes],
+    [activateLoadedDoc, docIdForHandle, openBytesInternal],
   );
 
   const openFolder = useCallback(async () => {
@@ -2193,16 +2327,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (node: FolderNode) => {
       if (node.kind !== "file") return;
       try {
-        const { bytes, name, handle } = await readNode(node);
-        const id = await openBytes(bytes, name);
-        if (id && handle) docHandles.current.set(id, handle);
+        const { file, handle } = await readNode(node);
+        await openFile(file, handle);
       } catch (err) {
         toast.error(
           `Could not open ${node.name}: ${err instanceof Error ? err.message : "error"}`,
         );
       }
     },
-    [openBytes],
+    [openFile],
   );
 
   const requestOpen = useCallback(async () => {
@@ -2220,16 +2353,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       for (const handle of handles) {
         const file = await handle.getFile();
-        const id = await openBytesInternal(
-          new Uint8Array(await file.arrayBuffer()),
-          file.name,
-        );
-        if (id) docHandles.current.set(id, handle);
+        await openFile(file, handle);
       }
     } catch {
       /* user cancelled the picker */
     }
-  }, [openBytesInternal]);
+  }, [openFile]);
 
   // Peek whether stored bytes need a password to open — WITHOUT prompting for
   // one. Covers both lock types so session restore can defer the dialog:
@@ -2283,6 +2412,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           active.id,
           true,
           active.annotations,
+          active.sourceKey ?? legacyBytesSourceKey(active.name, active.bytes),
         );
       }
       await refreshRecent();
@@ -2294,24 +2424,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (id: string) => {
       const existing = docs.find((d) => d.id === id);
       if (existing) {
-        // In split view: focus the pane already showing this doc, otherwise
-        // load it into the focused pane (never desync active doc from panes).
-        if (panes.length > 0) {
-          const inPane = panes.find((p) => p.docId === id);
-          if (inPane) {
-            setActivePaneId(inPane.id);
-          } else if (activePaneId) {
-            setPanes((prev) =>
-              prev.map((p) => (p.id === activePaneId ? { ...p, docId: id } : p)),
-            );
-          }
-        }
-        if (id !== activeTabId) {
-          setActiveTabId(id);
-          setDocVersion((v) => v + 1);
-          resetTransient();
-        }
-        setScreen("viewer");
+        activateLoadedDoc(existing.id);
         return;
       }
       const stored = await getStoredDoc(id);
@@ -2326,10 +2439,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
         stored.id,
         true,
         stored.annotations,
+        stored.sourceKey ?? legacyBytesSourceKey(stored.name, stored.bytes),
       );
     },
-    [docs, panes, activePaneId, activeTabId, openBytesInternal, resetTransient, refreshRecent],
+    [docs, activateLoadedDoc, openBytesInternal, refreshRecent],
   );
+
+  const removeRecent = useCallback(
+    async (id: string) => {
+      const target = recentFiles.find((recent) => recent.id === id);
+      if (!target || target.open) return;
+      setRecentFiles((prev) => prev.filter((recent) => recent.id !== id));
+
+      // Remove hidden legacy duplicates for the same source too, otherwise a
+      // duplicate record could reappear on the next refresh.
+      const stored = await listStoredDocs();
+      const ids = stored
+        .filter((doc) => {
+          if (doc.open) return false;
+          const sourceKey = doc.sourceKey ?? legacyBytesSourceKey(doc.name, doc.bytes);
+          return target.sourceKey ? sourceKey === target.sourceKey : doc.id === id;
+        })
+        .map((doc) => doc.id);
+      const removed = await removeStoredDocs(ids.length ? ids : [id]);
+      if (!removed) {
+        toast.error("Could not remove the recent item");
+        await refreshRecent();
+      }
+    },
+    [recentFiles, refreshRecent],
+  );
+
+  const clearRecent = useCallback(async () => {
+    if (!recentFiles.some((recent) => !recent.open)) return;
+    setRecentFiles((prev) => prev.filter((recent) => recent.open));
+    const stored = await listStoredDocs();
+    const removed = await removeStoredDocs(
+      stored.filter((doc) => !doc.open).map((doc) => doc.id),
+    );
+    if (!removed) {
+      toast.error("Could not clear recent items");
+      await refreshRecent();
+    }
+  }, [recentFiles, refreshRecent]);
 
   const switchTab = useCallback(
     (id: string) => {
@@ -3173,6 +3325,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         void persistDoc({
           id: active.id,
           name: next,
+          sourceKey: active.sourceKey,
           bytes: active.bytes,
           lastOpened: Date.now(),
           open: true,
@@ -3299,6 +3452,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void persistDoc({
         id: current.id,
         name: current.name,
+        sourceKey: current.sourceKey,
         // Persist what's on disk — wrapped for locked docs, so a session
         // restore prompts for the password again instead of bypassing it.
         bytes: out,
@@ -3446,6 +3600,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         void persistDoc({
           id,
           name: current.name,
+          sourceKey: current.sourceKey,
           bytes: protectedBytes,
           lastOpened: Date.now(),
           open: true,
@@ -4182,6 +4337,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     recentFiles,
     recentLoading,
     openRecent,
+    removeRecent,
+    clearRecent,
     closeDocument,
     folderRoot,
     folderBusy,

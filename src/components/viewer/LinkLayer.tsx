@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
+import { Tip } from "../ui/tooltip";
 
 interface LinkRect {
   left: number;
@@ -67,27 +68,28 @@ export function LinkLayer({
   return (
     <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
       {links.map((l, i) => (
-        <a
-          key={i}
-          href={l.url ?? "#"}
-          target={l.url ? "_blank" : undefined}
-          rel={l.url ? "noopener noreferrer" : undefined}
-          title={l.url ?? `Go to page ${(l.destPage ?? 0) + 1}`}
-          onClick={(e) => {
-            if (l.destPage !== undefined) {
-              e.preventDefault();
-              app.scrollToPage(l.destPage);
-            }
-          }}
-          className="absolute rounded-sm hover:bg-blue-500/10 hover:ring-1 hover:ring-blue-400/50"
-          style={{
-            left: l.left * scale,
-            top: l.top * scale,
-            width: l.width * scale,
-            height: l.height * scale,
-            pointerEvents: "auto",
-          }}
-        />
+        <Tip key={i} label={l.url ?? `Go to page ${(l.destPage ?? 0) + 1}`}>
+          <a
+            href={l.url ?? "#"}
+            target={l.url ? "_blank" : undefined}
+            rel={l.url ? "noopener noreferrer" : undefined}
+            aria-label={l.url ?? `Go to page ${(l.destPage ?? 0) + 1}`}
+            onClick={(e) => {
+              if (l.destPage !== undefined) {
+                e.preventDefault();
+                app.scrollToPage(l.destPage);
+              }
+            }}
+            className="absolute rounded-sm hover:bg-blue-500/10 hover:ring-1 hover:ring-blue-400/50"
+            style={{
+              left: l.left * scale,
+              top: l.top * scale,
+              width: l.width * scale,
+              height: l.height * scale,
+              pointerEvents: "auto",
+            }}
+          />
+        </Tip>
       ))}
     </div>
   );

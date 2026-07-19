@@ -96,18 +96,18 @@ function buildTreeFromFiles(files: File[]): FolderNode {
 /** Read a file node's bytes (and handle, when available for save-in-place). */
 export async function readNode(
   node: FolderNode,
-): Promise<{ bytes: Uint8Array; name: string; handle?: unknown }> {
+): Promise<{ file: File; name: string; handle?: unknown }> {
   if (node.handle) {
     const file = await (node.handle as any).getFile();
     return {
-      bytes: new Uint8Array(await file.arrayBuffer()),
+      file,
       name: node.name,
       handle: node.handle,
     };
   }
   if (node.file) {
     return {
-      bytes: new Uint8Array(await node.file.arrayBuffer()),
+      file: node.file,
       name: node.name,
     };
   }

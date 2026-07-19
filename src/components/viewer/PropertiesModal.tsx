@@ -4,6 +4,7 @@ import { PDFDocument } from "pdf-lib";
 import { useApp } from "../../store";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Tip } from "../ui/tooltip";
 import { formatBytes } from "../../lib/utils";
 
 interface Props {
@@ -132,9 +133,9 @@ function PropRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-4 border-b border-border/60 pb-1.5 text-xs">
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="truncate text-right" title={value}>
-        {value || "—"}
-      </span>
+      <Tip label={value || "—"}>
+        <span className="truncate text-right">{value || "—"}</span>
+      </Tip>
     </div>
   );
 }

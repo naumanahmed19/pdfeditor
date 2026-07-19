@@ -69,6 +69,7 @@ import { Button } from "../ui/button";
 import { ColorSwatch } from "../ui/color-swatch";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
+import { Tip } from "../ui/tooltip";
 
 let warnedWhiteout = false;
 function warnWhiteoutOnce() {
@@ -918,15 +919,11 @@ function NoteEditor({
             onChange={(v) => onPatch({ color: v } as Partial<Annotation>)}
             title="Marker color"
           />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            title="Delete comment"
-            onClick={onDelete}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+          <Tip label="Delete comment">
+            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label="Delete comment" onClick={onDelete}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </Tip>
         </div>
       </div>
       <Textarea
@@ -1390,18 +1387,17 @@ function AnnotationItem({
   switch (ann.kind) {
     case "note":
       body = (
-        <div
-          className="flex h-full w-full items-center justify-center"
-          title={ann.text || "Comment"}
-        >
-          <MessageSquare
-            className="h-full w-full drop-shadow-sm"
-            style={{ color: ann.color }}
-            fill="currentColor"
-            stroke="rgba(0,0,0,0.35)"
-            strokeWidth={1}
-          />
-        </div>
+        <Tip label={ann.text || "Comment"}>
+          <div className="flex h-full w-full items-center justify-center">
+            <MessageSquare
+              className="h-full w-full drop-shadow-sm"
+              style={{ color: ann.color }}
+              fill="currentColor"
+              stroke="rgba(0,0,0,0.35)"
+              strokeWidth={1}
+            />
+          </div>
+        </Tip>
       );
       break;
     case "highlight":
@@ -1694,18 +1690,18 @@ function AnnotationItem({
       // link is an invisible hotspot with just a hover tint.
       body =
         app.tool === "link" ? (
-          <div
-            className="relative h-full w-full rounded-[2px] border border-dashed border-blue-500/70"
-            style={{ background: "rgba(59,130,246,0.12)" }}
-            title={linkTitle(ann)}
-          >
-            <Link2 className="absolute right-0.5 top-0.5 h-3 w-3 text-blue-600/90" />
-          </div>
+          <Tip label={linkTitle(ann)}>
+            <div
+              className="relative h-full w-full rounded-[2px] border border-dashed border-blue-500/70"
+              style={{ background: "rgba(59,130,246,0.12)" }}
+            >
+              <Link2 className="absolute right-0.5 top-0.5 h-3 w-3 text-blue-600/90" />
+            </div>
+          </Tip>
         ) : (
-          <div
-            className="h-full w-full rounded-sm hover:bg-blue-500/10 hover:ring-1 hover:ring-blue-400/50"
-            title={linkTitle(ann)}
-          />
+          <Tip label={linkTitle(ann)}>
+            <div className="h-full w-full rounded-sm hover:bg-blue-500/10 hover:ring-1 hover:ring-blue-400/50" />
+          </Tip>
         );
       break;
     case "formfield": {
@@ -1949,7 +1945,7 @@ function AnnotationItem({
         // Corner badge marking a text box that's been turned into a link.
         <div
           className="pointer-events-none absolute -right-1 -top-1 rounded-sm bg-background/80 p-px shadow-sm"
-          title={linkTitle(ann.link)}
+          aria-label={linkTitle(ann.link)}
         >
           <Link2 className="h-3 w-3 text-blue-600/90" />
         </div>
@@ -1977,12 +1973,14 @@ function AnnotationItem({
         <>
           {/* stem + grab-knob above the top edge; rotates with the element */}
           <div className="pointer-events-none absolute -top-5 left-1/2 h-5 w-px -translate-x-1/2 bg-blue-400/80" />
-          <div
-            title="Drag to rotate (Shift snaps to 15°)"
-            className="absolute -top-6 left-1/2 h-3.5 w-3.5 -translate-x-1/2 cursor-grab rounded-full border border-white bg-blue-500 active:cursor-grabbing"
-            style={{ touchAction: "none" }}
-            onPointerDown={beginRotate}
-          />
+          <Tip label="Drag to rotate" desc="Shift snaps to 15°">
+            <div
+              aria-label="Drag to rotate"
+              className="absolute -top-6 left-1/2 h-3.5 w-3.5 -translate-x-1/2 cursor-grab rounded-full border border-white bg-blue-500 active:cursor-grabbing"
+              style={{ touchAction: "none" }}
+              onPointerDown={beginRotate}
+            />
+          </Tip>
         </>
       )}
       {ann.kind === "formfield" && !previewing && (

@@ -81,6 +81,7 @@ function Tip({
   shortcut,
   side = "bottom",
   delay = 350,
+  disabled = false,
   children,
 }: {
   label: React.ReactNode;
@@ -89,10 +90,12 @@ function Tip({
   shortcut?: string;
   side?: "top" | "bottom" | "left" | "right";
   delay?: number;
+  /** Keep the trigger mounted while suppressing the tooltip. */
+  disabled?: boolean;
   children: React.ReactElement;
 }) {
   return (
-    <Tooltip>
+    <Tooltip disabled={disabled}>
       <TooltipTrigger delay={delay} render={children} />
       <TooltipContent side={side} sideOffset={6} className="flex-col items-start py-1.5">
         <span className="flex items-center gap-2 font-medium">

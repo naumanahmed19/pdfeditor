@@ -8,6 +8,7 @@ import { objectsAtPoint, pickSmallestObjectAt } from "../../lib/objectHitTest";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Select } from "../ui/select";
+import { Tip } from "../ui/tooltip";
 
 interface ScreenObj {
   index: number;
@@ -54,23 +55,25 @@ function ColorChip({
       onPointerDown={(e) => e.stopPropagation()}
     >
       <span className="text-[10px] font-medium text-muted-foreground">{label}</span>
-      <label
-        className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded-full border border-black/15 shadow-sm dark:border-white/20"
-        style={{ backgroundColor: preview }}
-        title="Change color"
-      >
-        <input
-          ref={ref}
-          type="color"
-          defaultValue={hex}
-          disabled={disabled}
-          className="absolute -inset-2 cursor-pointer opacity-0"
-          onInput={(e) => {
-            setPreview(e.currentTarget.value);
-            onPreview(e.currentTarget.value);
-          }}
-        />
-      </label>
+      <Tip label="Change color">
+        <label
+          className="relative block h-5 w-5 cursor-pointer overflow-hidden rounded-full border border-black/15 shadow-sm dark:border-white/20"
+          style={{ backgroundColor: preview }}
+        >
+          <input
+            ref={ref}
+            type="color"
+            defaultValue={hex}
+            disabled={disabled}
+            aria-label="Change color"
+            className="absolute -inset-2 cursor-pointer opacity-0"
+            onInput={(e) => {
+              setPreview(e.currentTarget.value);
+              onPreview(e.currentTarget.value);
+            }}
+          />
+        </label>
+      </Tip>
     </div>
   );
 }
@@ -169,16 +172,11 @@ function ObjectProperties({
       <div className="h-4 w-px bg-border" />
       {obj.kind === "image" && (
         <>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-muted-foreground hover:text-foreground"
-            title="Replace image (keeps position and size)"
-            disabled={busy}
-            onClick={() => replaceRef.current?.click()}
-          >
-            <ImageUp className="h-3.5 w-3.5" />
-          </Button>
+          <Tip label="Replace image" desc="Keeps its position and size">
+            <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground" aria-label="Replace image" disabled={busy} onClick={() => replaceRef.current?.click()}>
+              <ImageUp className="h-3.5 w-3.5" />
+            </Button>
+          </Tip>
           <input
             ref={replaceRef}
             type="file"
@@ -195,16 +193,11 @@ function ObjectProperties({
           />
         </>
       )}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-        title="Delete object"
-        disabled={busy}
-        onClick={onDelete}
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </Button>
+      <Tip label="Delete object">
+        <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Delete object" disabled={busy} onClick={onDelete}>
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </Tip>
     </>
   );
 }
@@ -811,13 +804,6 @@ export function ObjectLayer({
         cursor: busy ? "wait" : hoveredObj ? "move" : "default",
         touchAction: "none",
       }}
-      title={
-        hoveredObj?.kind === "text"
-          ? "Drag to move - double-click to edit - Shift-click to add - Alt-click to select behind"
-          : hoveredObj
-            ? "Drag to move - Shift-click to add - Alt-click to select behind"
-            : undefined
-      }
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

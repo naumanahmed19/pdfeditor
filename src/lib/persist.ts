@@ -5,6 +5,8 @@ import type { AnnotationMap } from "../types";
 export interface StoredDoc {
   id: string;
   name: string;
+  /** Stable source identity used to avoid reopening the same file twice. */
+  sourceKey?: string;
   bytes: Uint8Array;
   /** Overlay annotations (incl. ones imported out of the PDF's own /Annots —
    *  for those the stored `bytes` are the stripped version, so losing this
@@ -100,6 +102,18 @@ export async function getStoredDoc(id: string): Promise<StoredDoc | undefined> {
     return await tx<StoredDoc | undefined>("readonly", (s) => s.get(id));
   } catch {
     return undefined;
+  }
+}
+
+/** Remove history records only. The original files on disk are untouched. */
+export async function removeStoredDocs(ids: readonly string[]): Promise<boolean> {
+  try {
+    for (const id of new Set(ids)) {
+      await tx("readwrite", (s) => s.delete(id));
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 

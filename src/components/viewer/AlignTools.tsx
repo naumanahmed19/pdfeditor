@@ -11,6 +11,7 @@ import {
 import { useApp } from "../../store";
 import { type AlignMode, alignRects, distributeRects } from "../../lib/snap";
 import type { Annotation } from "../../types";
+import { Tip } from "../ui/tooltip";
 
 const btn =
   "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
@@ -40,44 +41,24 @@ export function AlignmentButtons({ page }: { page: number }) {
 
   return (
     <div className="flex flex-wrap gap-0.5">
-      <button className={btn} title="Align left edges" onClick={() => align("left")}>
-        <AlignStartVertical className="h-4 w-4" />
-      </button>
-      <button
-        className={btn}
-        title="Align horizontal centers"
-        onClick={() => align("center-h")}
-      >
-        <AlignCenterVertical className="h-4 w-4" />
-      </button>
-      <button className={btn} title="Align right edges" onClick={() => align("right")}>
-        <AlignEndVertical className="h-4 w-4" />
-      </button>
-      <button className={btn} title="Align top edges" onClick={() => align("top")}>
-        <AlignStartHorizontal className="h-4 w-4" />
-      </button>
-      <button
-        className={btn}
-        title="Align vertical centers"
-        onClick={() => align("center-v")}
-      >
-        <AlignCenterHorizontal className="h-4 w-4" />
-      </button>
-      <button className={btn} title="Align bottom edges" onClick={() => align("bottom")}>
-        <AlignEndHorizontal className="h-4 w-4" />
-      </button>
+      <AlignAction label="Align left edges" onClick={() => align("left")}><AlignStartVertical className="h-4 w-4" /></AlignAction>
+      <AlignAction label="Align horizontal centers" onClick={() => align("center-h")}><AlignCenterVertical className="h-4 w-4" /></AlignAction>
+      <AlignAction label="Align right edges" onClick={() => align("right")}><AlignEndVertical className="h-4 w-4" /></AlignAction>
+      <AlignAction label="Align top edges" onClick={() => align("top")}><AlignStartHorizontal className="h-4 w-4" /></AlignAction>
+      <AlignAction label="Align vertical centers" onClick={() => align("center-v")}><AlignCenterHorizontal className="h-4 w-4" /></AlignAction>
+      <AlignAction label="Align bottom edges" onClick={() => align("bottom")}><AlignEndHorizontal className="h-4 w-4" /></AlignAction>
       {anns.length > 2 && (
         <>
-          <button className={btn} title="Distribute horizontally" onClick={() => distribute("x")}>
-            <AlignHorizontalSpaceAround className="h-4 w-4" />
-          </button>
-          <button className={btn} title="Distribute vertically" onClick={() => distribute("y")}>
-            <AlignVerticalSpaceAround className="h-4 w-4" />
-          </button>
+          <AlignAction label="Distribute horizontally" onClick={() => distribute("x")}><AlignHorizontalSpaceAround className="h-4 w-4" /></AlignAction>
+          <AlignAction label="Distribute vertically" onClick={() => distribute("y")}><AlignVerticalSpaceAround className="h-4 w-4" /></AlignAction>
         </>
       )}
     </div>
   );
+}
+
+function AlignAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return <Tip label={label}><button className={btn} aria-label={label} onClick={onClick}>{children}</button></Tip>;
 }
 
 /** Compact floating bar shown near a multi-selected (non-form) annotation. */

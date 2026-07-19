@@ -443,22 +443,22 @@ export function ColorPresets({
   return (
     <div className="flex items-center gap-1">
       {colors.map((c) => (
-        <button
-          key={c}
-          title={c}
-          aria-label={`Color ${c}`}
-          aria-pressed={value.toLowerCase() === c.toLowerCase()}
-          onClick={() => onChange(c)}
-          className={
-            "h-5 w-5 rounded-full border border-black/15 shadow-sm transition-transform hover:scale-110 dark:border-white/20 " +
-            (value.toLowerCase() === c.toLowerCase()
-              ? "ring-2 ring-ring ring-offset-1 ring-offset-background"
-              : "")
-          }
-          style={{ backgroundColor: c }}
-        />
+        <Tip key={c} label={c}>
+          <button
+            aria-label={`Color ${c}`}
+            aria-pressed={value.toLowerCase() === c.toLowerCase()}
+            onClick={() => onChange(c)}
+            className={
+              "h-5 w-5 rounded-full border border-black/15 shadow-sm transition-transform hover:scale-110 dark:border-white/20 " +
+              (value.toLowerCase() === c.toLowerCase()
+                ? "ring-2 ring-ring ring-offset-1 ring-offset-background"
+                : "")
+            }
+            style={{ backgroundColor: c }}
+          />
+        </Tip>
       ))}
-      <span className="relative inline-flex" title="Custom color">
+      <span className="relative inline-flex">
         <ColorSwatch value={value} onChange={onChange} title="Custom color" className="h-5 w-5" />
         <Plus
           className={
@@ -487,24 +487,24 @@ export function SizePresets({
   return (
     <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
       {sizes.map((s) => (
-        <button
-          key={s}
-          title={`${s}px`}
-          aria-label={`Stroke ${s}px`}
-          aria-pressed={value === s}
-          onClick={() => onChange(s)}
-          className={
-            "flex h-7 w-7 items-center justify-center rounded-sm transition-colors " +
-            (value === s
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground")
-          }
-        >
-          <span
-            className="rounded-full bg-current"
-            style={{ width: 2 + s * 1.4, height: 2 + s * 1.4 }}
-          />
-        </button>
+        <Tip key={s} label={`${s}px`}>
+          <button
+            aria-label={`Stroke ${s}px`}
+            aria-pressed={value === s}
+            onClick={() => onChange(s)}
+            className={
+              "flex h-7 w-7 items-center justify-center rounded-sm transition-colors " +
+              (value === s
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground")
+            }
+          >
+            <span
+              className="rounded-full bg-current"
+              style={{ width: 2 + s * 1.4, height: 2 + s * 1.4 }}
+            />
+          </button>
+        </Tip>
       ))}
     </div>
   );

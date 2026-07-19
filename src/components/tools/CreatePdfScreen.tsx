@@ -15,6 +15,7 @@ import { Select } from "../ui/select";
 import { cn, downloadBytes, formatBytes } from "../../lib/utils";
 import { imagesToPdf, type ImagePageSize } from "../../lib/pdftools";
 import { docxToPdf, textFileToPdf } from "../../lib/createpdf";
+import { Tip } from "../ui/tooltip";
 
 interface ImageEntry {
   name: string;
@@ -203,35 +204,35 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {formatBytes(img.bytes.length)}
                   </span>
-                  <Button
+                  <Tip label="Move up"><Button
                     variant="ghost"
                     size="icon"
-                    title="Move up"
+                    aria-label="Move up"
                     disabled={i === 0}
                     onClick={() => moveImage(i, -1)}
                     className="h-6 w-6 rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
                   >
                     <ArrowUp className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
+                  </Button></Tip>
+                  <Tip label="Move down"><Button
                     variant="ghost"
                     size="icon"
-                    title="Move down"
+                    aria-label="Move down"
                     disabled={i === images.length - 1}
                     onClick={() => moveImage(i, 1)}
                     className="h-6 w-6 rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
                   >
                     <ArrowDown className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
+                  </Button></Tip>
+                  <Tip label="Remove"><Button
                     variant="ghost"
                     size="icon"
-                    title="Remove"
+                    aria-label="Remove"
                     onClick={() => removeImage(i)}
                     className="h-6 w-6 rounded text-muted-foreground hover:text-foreground"
                   >
                     <X className="h-3.5 w-3.5" />
-                  </Button>
+                  </Button></Tip>
                 </div>
               ))}
             </div>
