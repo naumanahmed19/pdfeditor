@@ -79,7 +79,6 @@ import {
   type DocRevision,
   bumpBytesRevision,
   bumpRevision,
-  discardOverlays,
   freshRevision,
   hasUnsavedByteEdits,
   hasUnsavedChanges,
@@ -188,6 +187,13 @@ interface OpenDoc {
   measureScale?: MeasureScale | null;
   /** Pending move/rename/delete edits to existing AcroForm fields. */
   fieldOps: Record<string, ExistingFieldOp>;
+  /** Exact editable state at the last successful save/open. */
+  savedState: {
+    bytes: Uint8Array;
+    annotations: AnnotationMap;
+    formValues: Record<string, unknown>;
+    fieldOps: Record<string, ExistingFieldOp>;
+  };
   /**
    * Dirty-tracking revision state (see src/lib/revision.ts): every mutation —
    * overlay or byte-level — bumps it; a successful save records what was
@@ -616,16 +622,17 @@ interface AppStore {
   annotations: AnnotationMap;
   /** Unsaved changes of ANY kind — overlay edits or committed byte edits. */
   hasAnnotations: boolean;
-  /** Overlay edits (annotations / form values / field ops) — what Discard removes. */
+  /** Overlay edits (annotations / form values / field ops). */
   hasOverlayEdits: boolean;
   /** Byte-level edits committed since the last save (text edits, page ops,
-   *  OCR, redactions…) — cannot be discarded, only saved. */
+   *  OCR, redactions…). */
   hasByteEdits: boolean;
   addAnnotation: (page: number, ann: Annotation) => void;
   addAnnotations: (page: number, anns: Annotation[]) => void;
   updateAnnotation: (page: number, ann: Annotation) => void;
   removeAnnotation: (page: number, id: string) => void;
-  clearAnnotations: () => void;
+  /** Restore the exact state from the last successful save/open. */
+  clearAnnotations: () => Promise<void>;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -950,6 +957,7 @@ interface PendingPdfEdits {
   requiresReload: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   running: boolean;
+  cancelled: boolean;
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
@@ -1587,23 +1595,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeTabId, updateDoc],
   );
 
-  // Discard removes ONLY the overlay maps. Byte-level edits committed since
-  // the last save are baked into d.bytes and cannot be discarded (their undo
-  // history may already be gone) — discardOverlays keeps the doc marked dirty
-  // in that case instead of pretending it matches the file on disk.
-  const clearAnnotations = useCallback(() => {
+  // Restore the exact state captured at the last successful open/save. This
+  // handles both lightweight overlays and content already committed into the
+  // PDF bytes, even when an optimistic worker edit is still in flight.
+  const clearAnnotations = useCallback(async () => {
     if (!activeTabId) return;
-    updateDoc(activeTabId, (d) => ({
-      annotations: {},
-      history: [{}],
-      bytesHistory: [{ bytes: d.bytes, pdf: d.pdf }],
-      historyIndex: 0,
-      formValues: {},
-      fieldOps: {},
-      rev: discardOverlays(d.rev),
-    }));
-    setSelected(null);
-  }, [activeTabId, updateDoc]);
+    const id = activeTabId;
+    const pending = pendingPdfEdits.current.get(id);
+    if (pending) {
+      pending.cancelled = true;
+      if (pending.timer) clearTimeout(pending.timer);
+      pendingPdfEdits.current.delete(id);
+      pending.resolve();
+    }
+    const current = docsRef.current.find((doc) => doc.id === id);
+    if (!current) return;
+    try {
+      const saved = current.savedState;
+      const nextPdf = await loadPdf(saved.bytes);
+      const latest = docsRef.current.find((doc) => doc.id === id);
+      if (!latest) {
+        nextPdf.destroy().catch(() => {});
+        return;
+      }
+      destroyDocProxies(latest, nextPdf);
+      updateDocImmediately(id, (d) => ({
+        bytes: saved.bytes,
+        pdf: nextPdf,
+        annotations: saved.annotations,
+        history: [saved.annotations],
+        bytesHistory: [{ bytes: saved.bytes, pdf: nextPdf }],
+        historyIndex: 0,
+        formValues: saved.formValues,
+        fieldOps: saved.fieldOps,
+        rev: markSaved(d.rev),
+      }));
+      setSelected(null);
+      setContentRev((v) => v + 1);
+      if (
+        !protectionInfo.current.has(id) &&
+        !encryptedAtOpen.current.has(id)
+      ) {
+        void persistDoc({
+          id,
+          name: latest.name,
+          bytes: saved.bytes,
+          annotations: saved.annotations,
+          lastOpened: Date.now(),
+          open: true,
+        });
+      }
+    } catch (error) {
+      toast.error(
+        `Discard failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+      throw error;
+    }
+  }, [activeTabId, updateDocImmediately]);
 
   // Restore an aligned (annotations + base bytes) history step.
   //
@@ -1973,6 +2021,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           currentPage: 0,
           formValues: {},
           fieldOps: {},
+          savedState: {
+            bytes: realBytes,
+            annotations: overlaySeed,
+            formValues: {},
+            fieldOps: {},
+          },
           rev: freshRevision(),
         };
         if (wrapperPw) {
@@ -2661,6 +2715,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void (async () => {
         try {
           for (;;) {
+            if (state.cancelled) return;
             const operations = state.operations;
             state.operations = [];
             if (operations.length) {
@@ -2668,6 +2723,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 state.latestBytes,
                 operations,
               );
+              if (state.cancelled) return;
               continue;
             }
 
@@ -2693,6 +2749,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             }
 
             const nextPdf = await loadPdf(state.latestBytes);
+            if (state.cancelled) {
+              nextPdf.destroy().catch(() => {});
+              return;
+            }
             // An edit may have landed while the fresh proxy was loading. Keep
             // the optimistic proxy visible and continue the same journal.
             if (state.operations.length) {
@@ -2716,6 +2776,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             return;
           }
         } catch (cause) {
+          if (state.cancelled) return;
           pendingPdfEdits.current.delete(id);
           const error = cause instanceof Error ? cause : new Error(String(cause));
           const current = docsRef.current.find((doc) => doc.id === id);
@@ -2763,6 +2824,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           requiresReload: false,
           timer: null,
           running: false,
+          cancelled: false,
           promise,
           resolve,
           reject,
@@ -3190,6 +3252,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           historyIndex: 0,
           formValues: {},
           fieldOps: {},
+          savedState: {
+            bytes: baked,
+            annotations: {},
+            formValues: {},
+            fieldOps: {},
+          },
           rev: markSaved(d.rev, savedAt),
         }));
         setDocVersion((v) => v + 1);
@@ -3329,6 +3397,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
             historyIndex: 0,
             formValues: {},
             fieldOps: {},
+            savedState: {
+              bytes: baked,
+              annotations: {},
+              formValues: {},
+              fieldOps: {},
+            },
             // The protected file on disk holds this same content — a save.
             rev: markSaved(d.rev, savedAt),
           }));
