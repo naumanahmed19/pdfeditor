@@ -381,6 +381,7 @@ interface AppStore {
   activeTabId: string | null;
   switchTab: (id: string) => void;
   closeTab: (id: string) => void;
+  closeAllTabs: () => void;
 
   /** Editor panes for split view. Empty = single view (uses activeTabId). */
   panes: Array<{ id: string; docId: string }>;
@@ -1911,7 +1912,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       const liveIds = new Set(live.map((item) => item.id));
       const candidates = [
-        ...live.sort((a, b) => b.lastOpened - a.lastOpened),
+        ...live,
         ...stored
           .filter((item) => !liveIds.has(item.id))
           .map((item) => ({
@@ -1923,12 +1924,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
           })),
       ];
       const seen = new Set<string>();
-      return candidates.filter((item) => {
+      const deduplicated = candidates.filter((item) => {
         const identity = item.sourceKey ?? `record:${item.id}`;
         if (seen.has(identity)) return false;
         seen.add(identity);
         return true;
       });
+      // Activity changes timestamps, not layout. Preserve every existing row's
+      // visual position and add genuinely new records ahead of that stable
+      // order. Active styling is driven separately by `activeTabId`.
+      const byId = new Map(deduplicated.map((item) => [item.id, item]));
+      const previousIds = new Set(previous.map((item) => item.id));
+      return [
+        ...deduplicated.filter((item) => !previousIds.has(item.id)),
+        ...previous.flatMap((item) => {
+          const refreshed = byId.get(item.id);
+          return refreshed ? [refreshed] : [];
+        }),
+      ];
     });
   }, []);
 
@@ -1970,13 +1983,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ),
       );
       setRecentFiles((prev) =>
-        prev
-          .map((item) =>
-            item.id === id
-              ? { ...item, lastOpened: accessedAt, open: true }
-              : item,
-          )
-          .sort((a, b) => b.lastOpened - a.lastOpened),
+        prev.map((item) =>
+          item.id === id
+            ? { ...item, lastOpened: accessedAt, open: true }
+            : item,
+        ),
       );
       void touchStoredDoc(id, accessedAt);
       if (panes.length > 0) {
@@ -2631,6 +2642,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     [docs, activeTabId, resetTransient, refreshRecent, markProtected, requestConfirm],
   );
+
+  const closeAllTabs = useCallback(async () => {
+    const openIds = new Set([
+      ...recentFiles.filter((recent) => recent.open).map((recent) => recent.id),
+      ...docs.map((doc) => doc.id),
+    ]);
+    if (openIds.size === 0) return;
+
+    const editedDocs = docs.filter(docHasEdits);
+    if (editedDocs.length > 0) {
+      const label = editedDocs.length === 1 ? "document has" : "documents have";
+      const ok = await requestConfirm({
+        title: "Unsaved edits",
+        message: `${editedDocs.length} ${label} unsaved edits. Close all documents anyway?`,
+        confirmLabel: "Close all",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+
+    for (const id of openIds) {
+      const pending = pendingPdfEdits.current.get(id);
+      if (pending && !pending.running) {
+        if (pending.timer) clearTimeout(pending.timer);
+        pendingPdfEdits.current.delete(id);
+        pending.resolve();
+      }
+      docHandles.current.delete(id);
+      protectionInfo.current.delete(id);
+      encryptedAtOpen.current.delete(id);
+      markProtected(id, false);
+    }
+    for (const doc of docs) doc.pdf.destroy().catch(() => {});
+
+    setDocs([]);
+    setActiveTabId(null);
+    setPanes([]);
+    setActivePaneId(null);
+    setRecentFiles((prev) =>
+      prev.map((recent) =>
+        openIds.has(recent.id) ? { ...recent, open: false } : recent,
+      ),
+    );
+    setDocVersion((version) => version + 1);
+    resetTransient();
+
+    await Promise.all([...openIds].map((id) => markDocClosed(id)));
+    await refreshRecent();
+  }, [docs, recentFiles, markProtected, requestConfirm, resetTransient, refreshRecent]);
 
   const closeDocument = useCallback(() => {
     if (activeTabId) closeTab(activeTabId);
@@ -4358,6 +4418,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeTabId,
     switchTab,
     closeTab,
+    closeAllTabs,
     panes,
     activePaneId,
     paneSizes,

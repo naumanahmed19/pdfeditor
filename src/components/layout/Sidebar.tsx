@@ -236,7 +236,7 @@ function collectFileNames(
 
 function RecentList() {
   const app = useAppSelector(
-    (s) => ({ folderRoot: s.folderRoot, recentFiles: s.recentFiles, requestOpen: s.requestOpen, openFolder: s.openFolder, folderBusy: s.folderBusy, recentLoading: s.recentLoading, clearRecent: s.clearRecent }),
+    (s) => ({ folderRoot: s.folderRoot, recentFiles: s.recentFiles, requestOpen: s.requestOpen, openFolder: s.openFolder, folderBusy: s.folderBusy, recentLoading: s.recentLoading, clearRecent: s.clearRecent, closeAllTabs: s.closeAllTabs }),
     shallowEqual,
   );
   // Files that live in the opened folder tree are shown there, not in the
@@ -248,11 +248,20 @@ function RecentList() {
   const closedDocs = app.recentFiles.filter(
     (r) => !r.open && !folderNames.has(r.name),
   );
+  const [openExpanded, setOpenExpanded] = useState(true);
+  const [closedExpanded, setClosedExpanded] = useState(true);
+  const hasOpenDocs = app.recentFiles.some((r) => r.open);
 
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
       <div className="flex items-center justify-between pb-0.5 pr-0.5">
-        <SectionLabel>Open</SectionLabel>
+        <SectionToggle
+          expanded={openExpanded}
+          count={app.recentFiles.filter((r) => r.open).length}
+          onToggle={() => setOpenExpanded((expanded) => !expanded)}
+        >
+          Open
+        </SectionToggle>
         <div className="flex items-center gap-0.5">
           <Tip label="Open a PDF">
             <button
@@ -277,53 +286,82 @@ function RecentList() {
               )}
             </button>
           </Tip>
+          {hasOpenDocs && (
+            <Menu>
+              <Tip label="More open document actions">
+                <MenuTrigger
+                  aria-label="More open document actions"
+                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                >
+                  <MoreVertical className="h-3.5 w-3.5" />
+                </MenuTrigger>
+              </Tip>
+              <MenuContent align="end" className="min-w-40">
+                <MenuItem onClick={() => app.closeAllTabs()}>
+                  <X className="h-4 w-4" />
+                  Close all
+                </MenuItem>
+              </MenuContent>
+            </Menu>
+          )}
         </div>
       </div>
 
-      {app.folderRoot && <FolderSection root={app.folderRoot} />}
-
-      {app.recentLoading ? (
-        <RecentListSkeleton />
-      ) : (
+      {openExpanded && (
         <>
-          {openDocs.length > 0 && (
-            <div className="flex flex-col gap-0.5 pb-1">
-              {openDocs.map((r) => (
+          {app.folderRoot && <FolderSection root={app.folderRoot} />}
+          {app.recentLoading ? (
+            <RecentListSkeleton />
+          ) : (
+            <>
+              {openDocs.length > 0 && (
+                <div className="flex flex-col gap-0.5 pb-1">
+                  {openDocs.map((r) => (
+                    <RecentRow key={r.id} r={r} />
+                  ))}
+                </div>
+              )}
+
+              {!openDocs.length && !app.folderRoot && (
+                <p className="px-2 pb-2 text-[11px] text-muted-foreground">
+                  No document open. Use + to open a file or the folder icon to browse
+                  a folder.
+                </p>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {!app.recentLoading && closedDocs.length > 0 && (
+        <div className="pt-2">
+          <div className="flex items-center justify-between pr-1">
+            <SectionToggle
+              expanded={closedExpanded}
+              count={closedDocs.length}
+              onToggle={() => setClosedExpanded((expanded) => !expanded)}
+            >
+              Recently closed
+            </SectionToggle>
+            <Tip label="Clear all" side="top">
+              <button
+                type="button"
+                aria-label="Clear all recently closed items"
+                onClick={() => void app.clearRecent()}
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </Tip>
+          </div>
+          {closedExpanded && (
+            <div className="flex flex-col gap-0.5">
+              {closedDocs.map((r) => (
                 <RecentRow key={r.id} r={r} />
               ))}
             </div>
           )}
-
-          {!openDocs.length && !app.folderRoot && (
-            <p className="px-2 pb-2 text-[11px] text-muted-foreground">
-              No document open. Use + to open a file or the folder icon to browse
-              a folder.
-            </p>
-          )}
-
-          {closedDocs.length > 0 && (
-            <div className="pt-2">
-              <div className="flex items-center justify-between pr-1">
-                <SectionLabel>Recently closed</SectionLabel>
-                <Tip label="Clear all" side="top">
-                  <button
-                    type="button"
-                    aria-label="Clear all recently closed items"
-                    onClick={() => void app.clearRecent()}
-                    className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </Tip>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {closedDocs.map((r) => (
-                  <RecentRow key={r.id} r={r} />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
+        </div>
       )}
     </div>
   );
@@ -390,14 +428,6 @@ function FolderSection({ root }: { root: FolderNode }) {
           <FolderTreeNode key={n.path} node={n} depth={1} />
         ))}
     </div>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-      {children}
-    </p>
   );
 }
 
@@ -629,6 +659,35 @@ function TabButton({
     </button>
   );
   return iconOnly ? <Tip label={label}>{button}</Tip> : button;
+}
+
+function SectionToggle({
+  children,
+  expanded,
+  count,
+  onToggle,
+}: {
+  children: React.ReactNode;
+  expanded: boolean;
+  count: number;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      onClick={onToggle}
+      className="flex min-w-0 items-center gap-1 rounded px-1 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+    >
+      {expanded ? (
+        <ChevronDown className="h-3 w-3 shrink-0" />
+      ) : (
+        <ChevronRight className="h-3 w-3 shrink-0" />
+      )}
+      <span className="truncate">{children}</span>
+      <span className="font-normal tabular-nums opacity-70">{count}</span>
+    </button>
+  );
 }
 
 function ThumbnailList() {
