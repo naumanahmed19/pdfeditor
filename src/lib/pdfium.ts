@@ -1127,7 +1127,60 @@ export async function styleTextRuns(
 
       const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
       const fs = rt.wasmExports.malloc(4);
+      const bounds = rt.wasmExports.malloc(16);
       try {
+        // Capture collision limits before inserting/removing anything. Other
+        // runs in this same edit are ignored because merged/removed siblings
+        // make their horizontal room available to the replacement.
+        const edited = new Set(objs);
+        const objectCount = mod.FPDFPage_CountObjects(page);
+        const fitWidths = objs.map((obj) => {
+          if (!mod.FPDFPageObj_GetBounds(
+            obj,
+            bounds,
+            bounds + 4,
+            bounds + 8,
+            bounds + 12,
+          )) return undefined;
+          const left = rt.getValue(bounds, "float");
+          const bottom = rt.getValue(bounds + 4, "float");
+          const top = rt.getValue(bounds + 12, "float");
+          const height = Math.max(0.01, top - bottom);
+          let nextLeft = Number.POSITIVE_INFINITY;
+
+          for (let j = 0; j < objectCount; j++) {
+            const candidate = mod.FPDFPage_GetObject(page, j);
+            if (
+              !candidate ||
+              edited.has(candidate) ||
+              mod.FPDFPageObj_GetType(candidate) !== FPDF_PAGEOBJ_TEXT ||
+              !mod.FPDFPageObj_GetBounds(
+                candidate,
+                bounds,
+                bounds + 4,
+                bounds + 8,
+                bounds + 12,
+              )
+            ) continue;
+            const candidateLeft = rt.getValue(bounds, "float");
+            const candidateBottom = rt.getValue(bounds + 4, "float");
+            const candidateTop = rt.getValue(bounds + 12, "float");
+            const overlap = Math.min(top, candidateTop) - Math.max(bottom, candidateBottom);
+            const candidateHeight = Math.max(0.01, candidateTop - candidateBottom);
+            if (
+              // Also recognize a neighbor already overlapped by an earlier
+              // bad substitution; the next edit should heal that collision.
+              candidateLeft > left + 0.25 &&
+              overlap > 0.35 * Math.min(height, candidateHeight)
+            ) {
+              nextLeft = Math.min(nextLeft, candidateLeft);
+            }
+          }
+          if (!Number.isFinite(nextLeft)) return undefined;
+          const gap = Math.max(0.5, Math.min(2, height * 0.04));
+          return Math.max(0.5, nextLeft - left - gap);
+        });
+
         runs.forEach((r, i) => {
           if (r.text == null) {
             throw new Error("styleTextRuns: font replacement needs explicit text per run");
@@ -1151,7 +1204,7 @@ export async function styleTextRuns(
           const sp = allocUtf16(mod, r.text);
           mod.FPDFText_SetText(next, sp);
           rt.wasmExports.free(sp);
-          mod.FPDFPageObj_SetMatrix(next, mPtr);
+          setFittedTextMatrix(mod, next, mPtr, bounds, matrix, fitWidths[i]);
           mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
           mod.FPDFPage_InsertObject(page, next);
           removeObj(obj);
@@ -1159,6 +1212,7 @@ export async function styleTextRuns(
       } finally {
         rt.wasmExports.free(mPtr);
         rt.wasmExports.free(fs);
+        rt.wasmExports.free(bounds);
       }
       return;
     }
@@ -1263,6 +1317,8 @@ export interface ReflowSpec {
   font?: TextFont;
   /** Absolute size (pt) for the font-replacement path. */
   fontSize?: number;
+  /** Paragraph column width used to contain wider replacement fonts. */
+  maxWidth?: number;
 }
 
 /**
@@ -1302,6 +1358,7 @@ export async function reflowTextLines(
 
     const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
     const fs = rt.wasmExports.malloc(4);
+    const bounds = rt.wasmExports.malloc(16);
     let loadedFont = 0;
     try {
       // Template properties FIRST — extras are created before any removal so
@@ -1336,15 +1393,13 @@ export async function reflowTextLines(
       const extraFont = spec.font ? loadedFont : mod.FPDFTextObj_GetFont(template);
       if (!extraFont) throw new Error("PDFium: template has no font");
 
-      const writeMatrix = (m: number[]) => {
-        for (let i = 0; i < 6; i++) rt.setValue(mPtr + i * 4, m[i], "float");
-      };
       const createLine = (
         text: string,
         font: number,
         size: number,
         matrix: number[],
         fill: [number, number, number, number],
+        maxWidth?: number,
       ) => {
         const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
         if (!next) throw new Error("PDFium: could not create text object");
@@ -1352,8 +1407,7 @@ export async function reflowTextLines(
         const ok = mod.FPDFText_SetText(next, sp);
         rt.wasmExports.free(sp);
         if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
-        writeMatrix(matrix);
-        mod.FPDFPageObj_SetMatrix(next, mPtr);
+        setFittedTextMatrix(mod, next, mPtr, bounds, matrix, maxWidth);
         mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
         mod.FPDFPage_InsertObject(page, next);
       };
@@ -1369,6 +1423,7 @@ export async function reflowTextLines(
           rawSizeForVisualTarget(tSize, tMatrix, spec.fontSize),
           m,
           tFill,
+          spec.maxWidth,
         );
       }
 
@@ -1396,7 +1451,7 @@ export async function reflowTextLines(
           const rawSize = rt.getValue(fs, "float");
           const size = rawSizeForVisualTarget(rawSize, m, spec.fontSize);
           const fill = spec.fill ?? readFillColor(mod, first);
-          createLine(line.text, loadedFont, size, m, fill);
+          createLine(line.text, loadedFont, size, m, fill, spec.maxWidth);
           objs.forEach(removeObj);
           return;
         }
@@ -1410,6 +1465,7 @@ export async function reflowTextLines(
     } finally {
       rt.wasmExports.free(mPtr);
       rt.wasmExports.free(fs);
+      rt.wasmExports.free(bounds);
     }
   });
 }
@@ -1594,6 +1650,47 @@ export async function editPageObjects(
     for (const page of pages.values()) mod.FPDF_ClosePage(page);
     mod.FPDF_CloseDocument(doc);
     rt.wasmExports.free(filePtr);
+  }
+}
+
+/** Apply a text matrix, condensing only its baseline vector when a wider
+ * replacement face would overflow the available horizontal space. */
+function setFittedTextMatrix(
+  mod: WrappedPdfiumModule,
+  object: number,
+  matrixPtr: number,
+  boundsPtr: number,
+  matrix: number[],
+  maxWidth: number | undefined,
+): void {
+  const rt = rtx(mod);
+  const apply = () => {
+    for (let i = 0; i < 6; i++) {
+      rt.setValue(matrixPtr + i * 4, matrix[i], "float");
+    }
+    mod.FPDFPageObj_SetMatrix(object, matrixPtr);
+  };
+  apply();
+  if (!(maxWidth && maxWidth > 0.5)) return;
+
+  // Two passes also cover mildly skewed matrices, where page-space width is
+  // not perfectly linear with the local horizontal scale.
+  for (let pass = 0; pass < 2; pass++) {
+    if (!mod.FPDFPageObj_GetBounds(
+      object,
+      boundsPtr,
+      boundsPtr + 4,
+      boundsPtr + 8,
+      boundsPtr + 12,
+    )) return;
+    const width = Math.abs(
+      rt.getValue(boundsPtr + 8, "float") - rt.getValue(boundsPtr, "float"),
+    );
+    if (width <= maxWidth + 0.05 || width < 0.01) return;
+    const factor = Math.max(0.05, Math.min(1, maxWidth / width));
+    matrix[0] *= factor;
+    matrix[1] *= factor;
+    apply();
   }
 }
 

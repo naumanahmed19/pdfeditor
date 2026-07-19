@@ -846,18 +846,15 @@ export function PageView({
             if (sys) {
               font = { bytes: sys };
             } else {
-              const chars = [...new Set(bad)].map((c) => `"${c}"`).join(" ");
-              const ok = await app.requestConfirm({
-                title: "Substitute font?",
-                message: `The embedded font "${face.replace(/^[A-Z]{6}\+/, "")}" doesn't include ${chars}, so the reflowed paragraph would be set in a close matching font.`,
-                confirmLabel: "Use substitute",
-              });
-              if (!ok) return false;
               // Same typeface elsewhere in the document beats a bundled family.
               const borrowed = await sameTypefaceCovering(edit, face, allChars, bold, italic);
               font = borrowed
                 ? { bytes: borrowed }
                 : await resolveTextFont(edit.fallbackFamily, bold, italic);
+              const chars = [...new Set(bad)].map((c) => `"${c}"`).join(" ");
+              toast.info(
+                `Used a close matching font because "${face.replace(/^[A-Z]{6}\+/, "")}" doesn't contain ${chars}.`,
+              );
             }
             // Face replacement recreates every line — explicit text throughout.
             lines.forEach((l, i) => {
@@ -872,6 +869,9 @@ export function PageView({
           templateIndex,
           fill: newFill,
           font,
+          // A fallback may be much wider than a condensed embedded subset.
+          // Keep recreated lines inside the original paragraph column.
+          maxWidth: font ? meta.width : undefined,
         });
         if (!result.previewed) {
           holdCommittedPreview(
@@ -997,15 +997,9 @@ export function PageView({
           setInlineEdit(null);
           return true;
         }
-        // A visible substitution — ask before committing, and keep the editor
-        // open (text preserved) when the user declines.
+        // A visible substitution is automatic and non-blocking; Undo/Discard
+        // remain available like they are for every other edit.
         const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
-        const ok = await app.requestConfirm({
-          title: "Substitute font?",
-          message: `The embedded font "${badFace}" doesn't include ${chars}, so the edited text would be set in a close matching font.`,
-          confirmLabel: "Use substitute",
-        });
-        if (!ok) return false;
         // Recreate only the edited runs — same-typeface faces from the page
         // first, then the closest bundled/standard family; the untouched
         // neighbors keep their original embedded fonts.
@@ -1018,6 +1012,9 @@ export function PageView({
           bold,
           italic,
           true,
+        );
+        toast.info(
+          `Used a close matching font because "${badFace}" doesn't contain ${chars}.`,
         );
         if (!result.previewed) {
           holdCommittedPreview(
