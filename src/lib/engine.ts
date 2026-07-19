@@ -343,9 +343,12 @@ export class PdfPage {
         if (type === FPDF_PAGEOBJ_TEXT) {
           const need = m.FPDFTextObj_GetText(obj, tp, 0, 0);
           if (need > 0) {
-            const b = r.wasmExports.malloc(need * 2);
+            // FPDFTextObj_GetText reports a UTF-16LE BYTE count (including
+            // the terminator), not a character count. Doubling it exposes
+            // unrelated heap contents after the NUL in the inline editor.
+            const b = r.wasmExports.malloc(need);
             m.FPDFTextObj_GetText(obj, tp, b, need);
-            text = readUtf16(m, b, need * 2);
+            text = readUtf16(m, b, need);
             r.wasmExports.free(b);
           }
           m.FPDFTextObj_GetFontSize(obj, fs);
@@ -440,9 +443,9 @@ export class PdfPage {
         const needed = m.FPDFTextObj_GetText(object, textPage, 0, 0);
         let text = "";
         if (needed > 0) {
-          const textPtr = r.wasmExports.malloc(needed * 2);
+          const textPtr = r.wasmExports.malloc(needed);
           m.FPDFTextObj_GetText(object, textPage, textPtr, needed);
-          text = readUtf16(m, textPtr, needed * 2);
+          text = readUtf16(m, textPtr, needed);
           r.wasmExports.free(textPtr);
         }
 

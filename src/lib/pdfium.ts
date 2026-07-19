@@ -707,9 +707,10 @@ export async function getTextObjects(
         const need = mod.FPDFTextObj_GetText(obj, textPage, 0, 0);
         let text = "";
         if (need > 0) {
-          const buf = rt.wasmExports.malloc(need * 2);
+          // The returned size is already bytes (UTF-16LE + terminator).
+          const buf = rt.wasmExports.malloc(need);
           mod.FPDFTextObj_GetText(obj, textPage, buf, need);
-          text = readUtf16(mod, buf, need * 2);
+          text = readUtf16(mod, buf, need);
           rt.wasmExports.free(buf);
         }
 
@@ -913,9 +914,9 @@ export async function getPageObjects(
         if (type === FPDF_PAGEOBJ_TEXT) {
           const need = mod.FPDFTextObj_GetText(obj, textPage, 0, 0);
           if (need > 0) {
-            const b = rt.wasmExports.malloc(need * 2);
+            const b = rt.wasmExports.malloc(need);
             mod.FPDFTextObj_GetText(obj, textPage, b, need);
-            text = readUtf16(mod, b, need * 2);
+            text = readUtf16(mod, b, need);
             rt.wasmExports.free(b);
           }
           mod.FPDFTextObj_GetFontSize(obj, fs);
