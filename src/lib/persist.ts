@@ -39,7 +39,7 @@ export const MAX_PERSIST_BYTES = 80 * 1024 * 1024;
 const DB_NAME = "pickpdf";
 const STORE = "docs";
 const MAX_WEB_CLOSED_RECENTS = 10;
-const MAX_DESKTOP_CLOSED_RECENTS = 50;
+const MAX_DESKTOP_CLOSED_RECENTS = 20;
 const DESKTOP_CACHE_BUDGET = 2 * 1024 * 1024 * 1024;
 const SNAPSHOT_DIR = "pickpdf/documents";
 
