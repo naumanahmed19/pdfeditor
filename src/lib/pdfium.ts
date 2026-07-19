@@ -1504,6 +1504,82 @@ async function editPage(
   }
 }
 
+/** Object-only mutation accepted by the batched worker path. */
+export type PageObjectMutation =
+  | {
+      type: "transformObject";
+      pageIndex: number;
+      objectIndex: number;
+      matrix: Matrix;
+    }
+  | {
+      type: "removeObject";
+      pageIndex: number;
+      objectIndex: number;
+    }
+  | {
+      type: "setObjectStyle";
+      pageIndex: number;
+      objectIndex: number;
+      style: ObjectStyle;
+    };
+
+/** Apply several object mutations in one open document and regenerate each
+ * touched page once. This turns a burst of moves into one expensive rewrite. */
+export async function editPageObjects(
+  bytes: Uint8Array,
+  operations: readonly PageObjectMutation[],
+): Promise<Uint8Array> {
+  if (!operations.length) return bytes;
+  const mod = await getPdfium();
+  const rt = rtx(mod);
+  const filePtr = toHeap(mod, bytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, "");
+  if (!doc) {
+    rt.wasmExports.free(filePtr);
+    throw new Error(`PDFium: could not open document (err ${mod.FPDF_GetLastError()})`);
+  }
+  const pages = new Map<number, number>();
+  try {
+    const pageAt = (pageIndex: number) => {
+      const cached = pages.get(pageIndex);
+      if (cached) return cached;
+      const page = mod.FPDF_LoadPage(doc, pageIndex);
+      if (!page) throw new Error(`PDFium: could not load page ${pageIndex}`);
+      pages.set(pageIndex, page);
+      return page;
+    };
+    for (const operation of operations) {
+      const page = pageAt(operation.pageIndex);
+      const obj = mod.FPDFPage_GetObject(page, operation.objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${operation.objectIndex} not found`);
+      if (operation.type === "transformObject") {
+        const m = operation.matrix;
+        mod.FPDFPageObj_Transform(obj, m.a, m.b, m.c, m.d, m.e, m.f);
+      } else if (operation.type === "removeObject") {
+        if (mod.FPDFPage_RemoveObject(page, obj)) mod.FPDFPageObj_Destroy(obj);
+      } else {
+        const style = operation.style;
+        if (style.fill) mod.FPDFPageObj_SetFillColor(obj, ...style.fill);
+        if (style.stroke) mod.FPDFPageObj_SetStrokeColor(obj, ...style.stroke);
+        if (style.strokeWidth != null) {
+          mod.FPDFPageObj_SetStrokeWidth(obj, style.strokeWidth);
+        }
+      }
+    }
+    for (const [pageIndex, page] of pages) {
+      if (!mod.FPDFPage_GenerateContent(page)) {
+        throw new Error(`PDFium: could not regenerate page ${pageIndex + 1}`);
+      }
+    }
+    return saveAsCopy(mod, doc);
+  } finally {
+    for (const page of pages.values()) mod.FPDF_ClosePage(page);
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+}
+
 /**
  * Apply an affine transform to the page object at `objectIndex` (in page
  * space) — used to move (translate) or resize (scale) an existing text run or

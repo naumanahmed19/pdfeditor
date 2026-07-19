@@ -93,6 +93,16 @@ function toHeap(mod: WrappedPdfiumModule, bytes: Uint8Array): number {
   return ptr;
 }
 
+/** Allocate a NUL-terminated UTF-16 string for PDFium editing APIs. */
+function allocUtf16(mod: WrappedPdfiumModule, value: string): number {
+  const r = rt(mod);
+  const ptr = r.wasmExports.malloc((value.length + 1) * 2);
+  const view = new Uint16Array(r.HEAPU8.buffer, ptr, value.length + 1);
+  for (let i = 0; i < value.length; i++) view[i] = value.charCodeAt(i);
+  view[value.length] = 0;
+  return ptr;
+}
+
 /** Read a UTF-16LE string a PDFium `Get…Text`-style API wrote to the heap. */
 function readUtf16(mod: WrappedPdfiumModule, ptr: number, bytes: number): string {
   const r = rt(mod);
@@ -376,6 +386,60 @@ export class PdfPage {
     fn(this.mod, this.handle);
     this.mod.FPDFPage_GenerateContent(this.handle);
     this.resetText();
+  }
+
+  /** Mutate the live page without regenerating its content stream. PDFium can
+   * render the changed objects immediately while a worker persists them. */
+  private preview(fn: (m: WrappedPdfiumModule, page: number) => void): void {
+    fn(this.mod, this.handle);
+    this.resetText();
+  }
+
+  /** Move/scale immediately in the live renderer, without content generation. */
+  previewTransformObject(objectIndex: number, mtx: Matrix): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      m.FPDFPageObj_Transform(obj, mtx.a, mtx.b, mtx.c, mtx.d, mtx.e, mtx.f);
+    });
+  }
+
+  /** Delete immediately in the live renderer, without content generation. */
+  previewRemoveObject(objectIndex: number): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      if (m.FPDFPage_RemoveObject(page, obj)) m.FPDFPageObj_Destroy(obj);
+    });
+  }
+
+  /** Restyle immediately in the live renderer, without content generation. */
+  previewSetObjectStyle(objectIndex: number, style: ObjectStyle): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      if (style.fill) m.FPDFPageObj_SetFillColor(obj, ...style.fill);
+      if (style.stroke) m.FPDFPageObj_SetStrokeColor(obj, ...style.stroke);
+      if (style.strokeWidth != null) m.FPDFPageObj_SetStrokeWidth(obj, style.strokeWidth);
+    });
+  }
+
+  /** Replace text immediately using the object's existing embedded face. */
+  previewSetText(objectIndex: number, value: string): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj || m.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        throw new Error(`PDFium: object ${objectIndex} is not a text object`);
+      }
+      const ptr = allocUtf16(m, value);
+      try {
+        if (!m.FPDFText_SetText(obj, ptr)) {
+          throw new Error("PDFium: FPDFText_SetText failed");
+        }
+      } finally {
+        rt(m).wasmExports.free(ptr);
+      }
+    });
   }
 
   /** Move/scale the object at `objectIndex` by an affine matrix (page space). */
@@ -1005,6 +1069,26 @@ export class PdfDoc {
   /** In-place move/scale of an existing object. Renders on next repaint. */
   transformObject(pageIndex: number, objectIndex: number, m: Matrix): void {
     this.page(pageIndex).transformObject(objectIndex, m);
+  }
+
+  /** Optimistic move/scale; the worker persists it later. */
+  previewTransformObject(pageIndex: number, objectIndex: number, m: Matrix): void {
+    this.page(pageIndex).previewTransformObject(objectIndex, m);
+  }
+
+  /** Optimistic delete; the worker persists it later. */
+  previewRemoveObject(pageIndex: number, objectIndex: number): void {
+    this.page(pageIndex).previewRemoveObject(objectIndex);
+  }
+
+  /** Optimistic recolor/restroke; the worker persists it later. */
+  previewSetObjectStyle(pageIndex: number, objectIndex: number, style: ObjectStyle): void {
+    this.page(pageIndex).previewSetObjectStyle(objectIndex, style);
+  }
+
+  /** Optimistic text replacement with the object's existing face. */
+  previewSetText(pageIndex: number, objectIndex: number, value: string): void {
+    this.page(pageIndex).previewSetText(objectIndex, value);
   }
 
   /** In-place delete of an existing object. */

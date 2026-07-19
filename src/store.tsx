@@ -1,5 +1,6 @@
 import {
   createContext,
+  startTransition,
   useCallback,
   useContext,
   useEffect,
@@ -71,6 +72,9 @@ import {
   type PersistResult,
 } from "./lib/persist";
 import { applyAccent, type AccentId } from "./lib/accents";
+import { editPdfsInBackground } from "./lib/pdfEditWorker";
+import { appendPdfEdit } from "./lib/pdfEditJournal";
+import type { PdfEditOperation } from "./lib/pdfEditTypes";
 import {
   type DocRevision,
   bumpBytesRevision,
@@ -938,23 +942,39 @@ function pushHistory(
   };
 }
 
-/**
- * Append an undo step for an IN-PLACE content edit (move/resize/delete/recolor
- * of an existing page object). The live `d.pdf` was already mutated in place,
- * so the step records only the new bytes — no per-step proxy. Annotations are
- * untouched by an object edit, so they carry forward. doc.pdf is left as-is.
- */
-function pushContentEdit(d: OpenDoc, nextBytes: Uint8Array): Partial<OpenDoc> {
+interface PendingPdfEdits {
+  operations: PdfEditOperation[];
+  latestBytes: Uint8Array;
+  /** True when the optimistic live proxy cannot exactly represent the worker
+   * result (font recreation or paragraph reflow), so it must be replaced. */
+  requiresReload: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+/** Append a background PDF edit without retaining another live PDFium proxy in
+ * every history slot. Undo can reload the stored bytes; the new proxy is only
+ * the document's current renderer. */
+function pushBackgroundContentEdit(
+  d: OpenDoc,
+  nextBytes: Uint8Array,
+  nextPdf: PdfDoc,
+  bumpRevision = true,
+): Partial<OpenDoc> {
   const trimHist = d.history.slice(0, d.historyIndex + 1);
   const trimBase = d.bytesHistory.slice(0, d.historyIndex + 1);
   const history = [...trimHist, d.annotations].slice(-HISTORY_CAP);
   const bytesHistory = [...trimBase, { bytes: nextBytes }].slice(-HISTORY_CAP);
   return {
     bytes: nextBytes,
+    pdf: nextPdf,
     history,
     bytesHistory,
     historyIndex: history.length - 1,
-    rev: bumpBytesRevision(d.rev),
+    rev: bumpRevision ? bumpBytesRevision(d.rev) : d.rev,
   };
 }
 
@@ -989,16 +1009,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [screen, setScreen] = useState<Screen>("viewer");
   const [docs, setDocs] = useState<OpenDoc[]>([]);
+  const docsRef = useRef(docs);
+  docsRef.current = docs;
+  // Optimistic content edits collect here. The live PdfDoc previews them
+  // immediately; one worker rewrite begins after a short idle window.
+  const pendingPdfEdits = useRef(new Map<string, PendingPdfEdits>());
+  const flushPdfEditsRef = useRef<(id: string) => Promise<void>>(async () => {});
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [panes, setPanes] = useState<Array<{ id: string; docId: string }>>([]);
   const [activePaneId, setActivePaneId] = useState<string | null>(null);
   const [paneSizes, setPaneSizes] = useState<number[]>([]);
   const MAX_PANES = 4;
   const [docVersion, setDocVersion] = useState(0);
-  // Bumped when the live document is edited IN PLACE (existing-object move /
-  // resize / delete / recolor). Unlike docVersion it is NOT used as a React
-  // key, so pages repaint from the same live `pdf` handle without remounting
-  // (no flash, no scroll jump) — the render effects just re-read it.
+  // Bumped when undo/redo or another operation needs pages to repaint without
+  // changing the viewer React key (and therefore without a scroll jump).
   const [contentRev, setContentRev] = useState(0);
 
   const active = docs.find((d) => d.id === activeTabId) ?? null;
@@ -1012,6 +1036,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : d,
         ),
       );
+    },
+    [],
+  );
+
+  /** Async flush continuations sometimes need the committed bytes before the
+   * next React render. Keep the ref mirror in sync for those boundaries only. */
+  const updateDocImmediately = useCallback(
+    (id: string, patch: Partial<OpenDoc> | ((d: OpenDoc) => Partial<OpenDoc>)) => {
+      const next = docsRef.current.map((d) =>
+        d.id === id
+          ? { ...d, ...(typeof patch === "function" ? patch(d) : patch) }
+          : d,
+      );
+      docsRef.current = next;
+      setDocs(next);
     },
     [],
   );
@@ -1568,8 +1607,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Restore an aligned (annotations + base bytes) history step.
   //
-  // The single live `pdf` is mutated in place by object edits, so a step's
-  // retained proxy can't be trusted for a content boundary — instead:
+  // Older history entries may come from the former live-mutation path, so a
+  // retained proxy cannot always be trusted for a content boundary:
   //  • same base bytes as now  → only annotations changed, keep the live pdf;
   //  • a distinct retained proxy → legacy reset step, swap it in;
   //  • otherwise               → reload the one live pdf from the step's bytes.
@@ -1623,12 +1662,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const undo = useCallback(() => {
     if (!active) return;
-    void restoreStep(active, Math.max(0, active.historyIndex - 1));
+    const id = active.id;
+    void flushPdfEditsRef.current(id).then(() => {
+      const current = docsRef.current.find((doc) => doc.id === id);
+      if (current) {
+        return restoreStep(current, Math.max(0, current.historyIndex - 1));
+      }
+    });
   }, [active, restoreStep]);
 
   const redo = useCallback(() => {
     if (!active) return;
-    void restoreStep(active, Math.min(active.history.length - 1, active.historyIndex + 1));
+    const id = active.id;
+    void flushPdfEditsRef.current(id).then(() => {
+      const current = docsRef.current.find((doc) => doc.id === id);
+      if (current) {
+        return restoreStep(
+          current,
+          Math.min(current.history.length - 1, current.historyIndex + 1),
+        );
+      }
+    });
   }, [active, restoreStep]);
 
   const hasAnnotations = useMemo(
@@ -2270,6 +2324,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         if (!ok) return;
       }
+      const pending = pendingPdfEdits.current.get(id);
+      if (pending && !pending.running) {
+        if (pending.timer) clearTimeout(pending.timer);
+        pendingPdfEdits.current.delete(id);
+        pending.resolve();
+      }
       doc.pdf.destroy().catch(() => {});
       setDocs((prev) => {
         const idx = prev.findIndex((d) => d.id === id);
@@ -2495,14 +2555,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const bakeToBytes = useCallback(async (): Promise<Uint8Array | null> => {
     if (!active) return null;
+    await flushPdfEditsRef.current(active.id);
+    const current = docsRef.current.find((doc) => doc.id === active.id);
+    if (!current) return null;
     // Byte-level edits are already committed to active.bytes — only overlay
     // edits still need baking. Read-only: never bumps the revision.
-    if (!docHasOverlayEdits(active)) return active.bytes;
+    if (!docHasOverlayEdits(current)) return current.bytes;
     return bakeAnnotations(
-      active.bytes,
-      active.annotations,
-      active.formValues,
-      active.fieldOps,
+      current.bytes,
+      current.annotations,
+      current.formValues,
+      current.fieldOps,
     );
   }, [active]);
 
@@ -2520,19 +2583,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       try {
-        let base = active.bytes;
-        if (docHasOverlayEdits(active)) {
+        await flushPdfEditsRef.current(id);
+        const current = docsRef.current.find((doc) => doc.id === id);
+        if (!current) return;
+        let base = current.bytes;
+        if (docHasOverlayEdits(current)) {
           base = await bakeAnnotations(
-            active.bytes,
-            active.annotations,
-            active.formValues,
-            active.fieldOps,
+            current.bytes,
+            current.annotations,
+            current.formValues,
+            current.fieldOps,
           );
           toast.info("Pending edits were saved into the document first.");
         }
         const nextBytes = await op(base);
         const nextPdf = await loadPdf(nextBytes);
-        destroyDocProxies(active, nextPdf);
+        destroyDocProxies(current, nextPdf);
         updateDoc(id, (d) => ({
           bytes: nextBytes,
           pdf: nextPdf,
@@ -2548,7 +2614,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }));
         setDocVersion((v) => v + 1);
         setSelected(null);
-        persistWorking(id, active.name, nextBytes);
+        persistWorking(id, current.name, nextBytes);
         toast.success(label);
       } catch (err) {
         toast.error(
@@ -2579,48 +2645,158 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [active],
   );
 
-  /**
-   * Commit an in-place PDFium byte edit: swap the base bytes/pdf onto the undo
-   * timeline while KEEPING the current annotations (they still bake on save).
-   * No docVersion bump — the page re-renders in place from the new `pdf` prop,
-   * so there's no remount flash or scroll jump.
-   */
-  const commitInPlace = useCallback(
-    async (make: (bytes: Uint8Array) => Promise<Uint8Array>) => {
-      if (!active) return;
-      const id = active.id;
-      const nextBytes = await make(active.bytes);
-      const nextPdf = await loadPdf(nextBytes);
-      updateDoc(id, (d) =>
-        pushHistory(d, d.annotations, { bytes: nextBytes, pdf: nextPdf }),
-      );
-      setSelected(null);
-      persistWorking(id, active.name, nextBytes);
-    },
-    [active, updateDoc, persistWorking],
-  );
+  /** Flush one document's optimistic journal. New operations arriving while a
+   * worker is busy join the same drain and the live preview remains untouched
+   * until the final byte snapshot is ready. */
+  const flushPendingPdfEdits = useCallback(
+    (id: string): Promise<void> => {
+      const state = pendingPdfEdits.current.get(id);
+      if (!state) return Promise.resolve();
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      if (state.running) return state.promise;
+      state.running = true;
+      void (async () => {
+        try {
+          for (;;) {
+            const operations = state.operations;
+            state.operations = [];
+            if (operations.length) {
+              state.latestBytes = await editPdfsInBackground(
+                state.latestBytes,
+                operations,
+              );
+              continue;
+            }
 
-  /**
-   * Fast path for editing an EXISTING page object (move / resize / delete /
-   * recolor). Mutates the live rendering document directly and repaints just
-   * that page via contentRev — no editing-engine round trip and no whole-doc
-   * reparse. The only whole-doc work is serializing for undo/persist, and it
-   * reuses the already-open handle (no reload). This is what makes dragging
-   * existing text/images feel instant instead of freezing on every drop.
-   */
-  const commitObjectEdit = useCallback(
-    (mutate: (pdf: PdfDoc) => void) => {
-      if (!active) return;
-      const id = active.id;
-      const pdf = active.pdf;
-      mutate(pdf); // in-place edit on the live doc (synchronous)
-      const nextBytes = pdf.serialize(); // reflects the edit; no reparse
-      updateDoc(id, (d) => pushContentEdit(d, nextBytes));
-      setSelected(null);
-      setContentRev((v) => v + 1); // repaint the live page(s) in place
-      persistWorking(id, active.name, nextBytes);
+            const current = docsRef.current.find((doc) => doc.id === id);
+            if (!current) {
+              pendingPdfEdits.current.delete(id);
+              state.resolve();
+              return;
+            }
+            // Object moves/styles/deletes and basic text replacement already
+            // exist exactly in the live proxy. Commit only the bytes: swapping
+            // and repainting that proxy would add a visible post-edit hitch.
+            if (!state.requiresReload) {
+              startTransition(() => {
+                updateDocImmediately(id, (d) =>
+                  pushBackgroundContentEdit(d, state.latestBytes, d.pdf, false),
+                );
+              });
+              pendingPdfEdits.current.delete(id);
+              persistWorking(id, current.name, state.latestBytes);
+              state.resolve();
+              return;
+            }
+
+            const nextPdf = await loadPdf(state.latestBytes);
+            // An edit may have landed while the fresh proxy was loading. Keep
+            // the optimistic proxy visible and continue the same journal.
+            if (state.operations.length) {
+              nextPdf.destroy().catch(() => {});
+              continue;
+            }
+            const previousPdf = current.pdf;
+            updateDocImmediately(id, (d) =>
+              pushBackgroundContentEdit(d, state.latestBytes, nextPdf, false),
+            );
+            if (
+              previousPdf !== nextPdf &&
+              !current.bytesHistory.some((baseState) => baseState.pdf === previousPdf)
+            ) {
+              previousPdf.destroy().catch(() => {});
+            }
+            pendingPdfEdits.current.delete(id);
+            setContentRev((v) => v + 1);
+            persistWorking(id, current.name, state.latestBytes);
+            state.resolve();
+            return;
+          }
+        } catch (cause) {
+          pendingPdfEdits.current.delete(id);
+          const error = cause instanceof Error ? cause : new Error(String(cause));
+          const current = docsRef.current.find((doc) => doc.id === id);
+          if (current) {
+            try {
+              const restoredPdf = await loadPdf(current.bytes);
+              const previewPdf = current.pdf;
+              updateDoc(id, { pdf: restoredPdf });
+              previewPdf.destroy().catch(() => {});
+              setContentRev((v) => v + 1);
+            } catch {
+              // Keep the original error: it is the actionable failure.
+            }
+          }
+          state.reject(error);
+          toast.error(`Couldn't finish the PDF edit: ${error.message}`);
+        }
+      })();
+      return state.promise;
     },
-    [active, updateDoc, persistWorking],
+    [persistWorking, updateDoc, updateDocImmediately],
+  );
+  flushPdfEditsRef.current = flushPendingPdfEdits;
+
+  /** Record a logical edit now and regenerate the PDF after a short idle. The
+   * returned promise resolves immediately: UI controls never wait on PDFium. */
+  const queuePdfEdit = useCallback(
+    (operation: PdfEditOperation): Promise<void> => {
+      if (!active) return Promise.resolve();
+      const id = active.id;
+      let state = pendingPdfEdits.current.get(id);
+      if (!state) {
+        let resolve!: () => void;
+        let reject!: (error: Error) => void;
+        const promise = new Promise<void>((ok, fail) => {
+          resolve = ok;
+          reject = fail;
+        });
+        // Flush failures are reported by the store; prevent an unobserved idle
+        // flush from becoming an unhandled rejection.
+        void promise.catch(() => {});
+        state = {
+          operations: [],
+          latestBytes: active.bytes,
+          requiresReload: false,
+          timer: null,
+          running: false,
+          promise,
+          resolve,
+          reject,
+        };
+        pendingPdfEdits.current.set(id, state);
+      }
+      state.operations = appendPdfEdit(state.operations, operation);
+      state.requiresReload ||=
+        operation.type === "reflowTextLines" ||
+        (operation.type === "styleTextRuns" &&
+          (!!operation.style.font ||
+            !!operation.style.fontScale ||
+            !!operation.style.synthBold ||
+            !!operation.style.synthItalic ||
+            operation.runs.some((run) => run.text === "")));
+      if (state.timer) clearTimeout(state.timer);
+      if (!state.running) {
+        state.timer = setTimeout(() => {
+          state!.timer = null;
+          void flushPendingPdfEdits(id);
+        }, 450);
+      }
+      // Dirty state and undo-boundary ownership begin at interaction time. Any
+      // retained proxy for current history bytes must be detached before the
+      // live proxy is optimistically mutated further.
+      updateDoc(id, (d) => ({
+        bytesHistory: d.bytesHistory.map((base) =>
+          base.pdf === d.pdf ? { bytes: base.bytes } : base,
+        ),
+        rev: bumpBytesRevision(d.rev),
+      }));
+      return Promise.resolve();
+    },
+    [active, flushPendingPdfEdits, updateDoc],
   );
 
   const redactCount = active
@@ -2691,10 +2867,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
    */
   const applyTextEdit = useCallback(
     async (pageIndex: number, objectIndex: number, newText: string) => {
-      const { editTextObject } = await import("./lib/pdfium");
-      await commitInPlace((b) => editTextObject(b, pageIndex, objectIndex, newText));
+      if (!active) return;
+      await queuePdfEdit({
+        type: "editTextObject",
+        pageIndex,
+        objectIndex,
+        newText,
+      });
+      active.pdf.previewSetText(pageIndex, objectIndex, newText);
+      setContentRev((v) => v + 1);
     },
-    [commitInPlace],
+    [active, queuePdfEdit],
   );
 
   /**
@@ -2703,10 +2886,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
    */
   const applyTextRuns = useCallback(
     async (pageIndex: number, runs: TextRunEdit[], style: PdfiumLineStyle) => {
-      const { styleTextRuns } = await import("./lib/pdfium");
-      await commitInPlace((b) => styleTextRuns(b, pageIndex, runs, style));
+      if (!active) return;
+      await queuePdfEdit({ type: "styleTextRuns", pageIndex, runs, style });
+      // Common in-place text and color changes can be previewed directly. Font
+      // replacement/reflow still finishes in the worker, without blocking UI.
+      if (!style.font) {
+        for (const run of runs) {
+          if (run.text != null) {
+            active.pdf.previewSetText(pageIndex, run.objectIndex, run.text);
+          }
+          if (style.fill) {
+            active.pdf.previewSetObjectStyle(pageIndex, run.objectIndex, {
+              fill: style.fill,
+            });
+          }
+        }
+        setContentRev((v) => v + 1);
+      }
     },
-    [commitInPlace],
+    [active, queuePdfEdit],
   );
 
   /**
@@ -2715,10 +2913,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
    */
   const applyTextReflow = useCallback(
     async (pageIndex: number, spec: ReflowSpec) => {
-      const { reflowTextLines } = await import("./lib/pdfium");
-      await commitInPlace((b) => reflowTextLines(b, pageIndex, spec));
+      await queuePdfEdit({ type: "reflowTextLines", pageIndex, spec });
     },
-    [commitInPlace],
+    [queuePdfEdit],
   );
 
   /** The base name + decoded program of the font behind a text run. */
@@ -2734,25 +2931,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /** Move/resize an existing object (text or image) via an affine transform. */
   const applyObjectTransform = useCallback(
     async (pageIndex: number, objectIndex: number, m: PdfiumMatrix) => {
-      commitObjectEdit((pdf) => pdf.transformObject(pageIndex, objectIndex, m));
+      if (!active) return;
+      await queuePdfEdit({
+        type: "transformObject",
+        pageIndex,
+        objectIndex,
+        matrix: m,
+      });
+      active.pdf.previewTransformObject(pageIndex, objectIndex, m);
+      setContentRev((v) => v + 1);
     },
-    [commitObjectEdit],
+    [active, queuePdfEdit],
   );
 
   /** Delete an existing object (text, image or path) from the page. */
   const removeObjectAt = useCallback(
     async (pageIndex: number, objectIndex: number) => {
-      commitObjectEdit((pdf) => pdf.removeObject(pageIndex, objectIndex));
+      if (!active) return;
+      await queuePdfEdit({ type: "removeObject", pageIndex, objectIndex });
+      active.pdf.previewRemoveObject(pageIndex, objectIndex);
+      setContentRev((v) => v + 1);
     },
-    [commitObjectEdit],
+    [active, queuePdfEdit],
   );
 
   /** Restyle an existing object's fill/stroke color and/or stroke width. */
   const applyObjectStyle = useCallback(
     async (pageIndex: number, objectIndex: number, style: PdfiumObjectStyle) => {
-      commitObjectEdit((pdf) => pdf.setObjectStyle(pageIndex, objectIndex, style));
+      if (!active) return;
+      await queuePdfEdit({ type: "setObjectStyle", pageIndex, objectIndex, style });
+      active.pdf.previewSetObjectStyle(pageIndex, objectIndex, style);
+      setContentRev((v) => v + 1);
     },
-    [commitObjectEdit],
+    [active, queuePdfEdit],
   );
 
   /**
@@ -2816,15 +3027,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const downloadCurrent = useCallback(async () => {
     const bytes = await bakeToBytes();
     if (!bytes || !active) return;
-    const base = active.name.replace(/\.pdf$/i, "");
+    const current = docsRef.current.find((doc) => doc.id === active.id);
+    if (!current) return;
+    const base = current.name.replace(/\.pdf$/i, "");
     // Unedited bytes of a still-encrypted document ARE the protected original
     // — write them as-is (re-encrypting already-encrypted bytes would fail).
-    const stillEncrypted = bytes === active.bytes && active.pdf.isEncrypted();
+    const stillEncrypted = bytes === current.bytes && current.pdf.isEncrypted();
     let out: Uint8Array;
     try {
       out = stillEncrypted
         ? bytes
-        : await protectForDisk(active.id, bytes, active.name);
+        : await protectForDisk(current.id, bytes, current.name);
     } catch (err) {
       if (err instanceof ProtectionDeclinedError) {
         toast.info("Download cancelled — no file was written.");
@@ -2896,15 +3109,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const baked = await bakeToBytes();
       if (!baked) return;
+      const current = docsRef.current.find((doc) => doc.id === active.id);
+      if (!current) return;
       // Protected docs go to disk re-protected; the in-app copy commits to the
       // plain baked bytes below (it stays editable, exactly like the protect
       // flow). This is why saving never strips a document's protection.
       // Unedited bytes of a still-encrypted document ARE the protected
       // original — write them as-is (re-encrypting encrypted bytes fails).
-      const stillEncrypted = baked === active.bytes && active.pdf.isEncrypted();
+      const stillEncrypted = baked === current.bytes && current.pdf.isEncrypted();
       const out = stillEncrypted
         ? baked
-        : await protectForDisk(active.id, baked, active.name);
+        : await protectForDisk(current.id, baked, current.name);
       const locked = out !== baked || stillEncrypted ? " (protected)" : "";
       if (handle) {
         if (handle.requestPermission) {
@@ -2914,7 +3129,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const writable = await handle.createWritable();
         await writable.write(out as unknown as BufferSource);
         await writable.close();
-        toast.success(`Saved to ${active.name}${locked}`);
+        toast.success(`Saved to ${current.name}${locked}`);
       } else {
         // No handle yet — prefer acquiring one via the save-file picker so the
         // write can be AWAITED before the doc is marked saved (and so future
@@ -2928,7 +3143,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (picker) {
           try {
             newHandle = await picker.call(window, {
-              suggestedName: active.name,
+              suggestedName: current.name,
               types: [
                 {
                   description: "PDF document",
@@ -2948,13 +3163,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           await writable.write(out as unknown as BufferSource);
           await writable.close();
           docHandles.current.set(active.id, newHandle);
-          toast.success(`Saved to ${newHandle.name || active.name}${locked}`);
+          toast.success(`Saved to ${newHandle.name || current.name}${locked}`);
         } else {
           // Anchor-download fallback (no File System Access API): the browser
           // gives NO completion signal for an <a download> click, so there is
           // no successful write result. The downloaded copy is useful, but
           // the open document must remain dirty.
-          downloadBytes(out, `${active.name.replace(/\.pdf$/i, "")}-edited.pdf`);
+          downloadBytes(out, `${current.name.replace(/\.pdf$/i, "")}-edited.pdf`);
           toast.info(`PDF copy downloaded${locked}`, {
             description:
               "The browser cannot confirm that the file was written, so this document remains unsaved.",
@@ -2963,10 +3178,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       // Commit in-app state to the saved bytes.
-      if (docHasEdits(active)) {
+      if (docHasEdits(current)) {
         const nextPdf = await loadPdf(baked);
-        destroyDocProxies(active, nextPdf);
-        updateDoc(active.id, (d) => ({
+        destroyDocProxies(current, nextPdf);
+        updateDoc(current.id, (d) => ({
           bytes: baked,
           pdf: nextPdf,
           annotations: {},
@@ -2981,14 +3196,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSelected(null);
       }
       void persistDoc({
-        id: active.id,
-        name: active.name,
+        id: current.id,
+        name: current.name,
         // Persist what's on disk — wrapped for locked docs, so a session
         // restore prompts for the password again instead of bypassing it.
         bytes: out,
         lastOpened: Date.now(),
         open: true,
-      }).then((result) => noteAutosaveSkipped(active.id, result));
+      }).then((result) => noteAutosaveSkipped(current.id, result));
       // Saving ends the editing session — no separate "Done" needed.
       setEditModeState(false);
     } catch (err) {
@@ -3050,6 +3265,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         const baked = await bakeToBytes();
         if (!baked) return;
+        const current = docsRef.current.find((doc) => doc.id === id);
+        if (!current) return;
         // Build the recipe + protected bytes. PickPDF-lock is its OWN
         // protection: the wrapper already makes the content unreadable outside
         // PickPDF, so we don't ALSO permission-encrypt the inner document —
@@ -3060,7 +3277,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (opts.pickpdfOnly) {
           recipe = { kind: "wrapper", password: opts.userPassword };
           const { wrapProtected } = await import("./lib/protected");
-          protectedBytes = await wrapProtected(baked, opts.userPassword, active.name);
+          protectedBytes = await wrapProtected(baked, opts.userPassword, current.name);
         } else {
           recipe = {
             kind: "encrypt",
@@ -3100,9 +3317,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         // Commit the in-app document to the (unencrypted) baked bytes, exactly
         // like a normal save — the protected file holds the same content.
-        if (docHasEdits(active)) {
+        if (docHasEdits(current)) {
           const nextPdf = await loadPdf(baked);
-          destroyDocProxies(active, nextPdf);
+          destroyDocProxies(current, nextPdf);
           updateDoc(id, (d) => ({
             bytes: baked,
             pdf: nextPdf,
@@ -3121,7 +3338,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Persist the on-disk protected bytes so a session restore re-prompts.
         void persistDoc({
           id,
-          name: active.name,
+          name: current.name,
           bytes: protectedBytes,
           lastOpened: Date.now(),
           open: true,
@@ -3167,7 +3384,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       for (let attempt = 0; ; attempt++) {
         try {
-          await commitInPlace((b) => decryptPdf(b, password));
+          await flushPdfEditsRef.current(id);
+          const current = docsRef.current.find((doc) => doc.id === id);
+          if (!current) return;
+          const nextBytes = await decryptPdf(current.bytes, password);
+          const nextPdf = await loadPdf(nextBytes);
+          updateDoc(id, (d) => pushBackgroundContentEdit(d, nextBytes, nextPdf));
+          persistWorking(id, current.name, nextBytes);
           break;
         } catch (err) {
           const needsOwner = err instanceof OwnerPasswordError;
@@ -3193,7 +3416,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         `Remove protection failed: ${err instanceof Error ? err.message : "unknown error"}`,
       );
     }
-  }, [active, commitInPlace, markProtected, requestPassword]);
+  }, [active, markProtected, persistWorking, requestPassword, updateDoc]);
 
   // --- Permission enforcement (honored like every compliant viewer) --------
 
@@ -3463,15 +3686,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const baked = await bakeToBytes();
       if (!baked) return;
+      const current = active
+        ? docsRef.current.find((doc) => doc.id === active.id)
+        : null;
+      if (!current) return;
       let bytes = baked;
       const needsSubset =
         pageIndexes != null &&
-        (pageIndexes.length !== active!.pdf.numPages ||
+        (pageIndexes.length !== current.pdf.numPages ||
           pageIndexes.some((p, i) => p !== i));
       if (needsSubset || scale !== 1) {
         const { buildPrintDoc } = await import("./lib/pdftools");
         const idx =
-          pageIndexes ?? Array.from({ length: active!.pdf.numPages }, (_, i) => i);
+          pageIndexes ?? Array.from({ length: current.pdf.numPages }, (_, i) => i);
         bytes = await buildPrintDoc(baked, idx, scale);
       }
       setPrintModalOpen(false);
