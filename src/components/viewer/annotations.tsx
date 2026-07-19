@@ -1240,12 +1240,13 @@ function AnnotationItem({
       }
       setLive(finalBox);
     };
-    const onUp = () => {
+    const finish = (commit: boolean) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
       // Commit outside the state updater — updating the store from within
       // one triggers React's setState-during-render warning.
-      if (finalBox) {
+      if (commit && finalBox) {
         if (groupIds) {
           // The whole selection moves in one undo step.
           app.translateAnnotations(
@@ -1281,8 +1282,11 @@ function AnnotationItem({
       setLive(null);
       dragRef.current = null;
     };
+    const onUp = () => finish(true);
+    const onCancel = () => finish(false);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   };
 
   // Drag the rotate handle: angle from the box center to the pointer, with
@@ -1307,12 +1311,13 @@ function AnnotationItem({
       current = ((a % 360) + 360) % 360;
       setLiveRot(current);
     };
-    const onUp = () => {
+    const finish = (commit: boolean) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
       // Commit outside the state updater — updating the store from within
       // one triggers React's setState-during-render warning.
-      if (current !== null) {
+      if (commit && current !== null) {
         app.updateAnnotation(pageIndex, {
           ...ann,
           rotation: current === 0 ? undefined : current,
@@ -1320,8 +1325,11 @@ function AnnotationItem({
       }
       setLiveRot(null);
     };
+    const onUp = () => finish(true);
+    const onCancel = () => finish(false);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   };
 
   // Comment markers stay clickable while reading (comments are for readers

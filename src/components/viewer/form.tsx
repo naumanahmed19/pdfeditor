@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Pencil, PenLine } from "lucide-react";
+import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
@@ -42,6 +43,33 @@ interface FormFieldSpec {
   multiSelect?: boolean;
   /** Text field format preset (from /AA AF actions). */
   format?: FieldFormat;
+}
+
+let existingFieldClipboard: {
+  name: string;
+  rect: { x: number; y: number; w: number; h: number };
+  spec: ExistingFieldSpec;
+} | null = null;
+
+function existingFieldSpec(field: FormFieldSpec): ExistingFieldSpec {
+  return {
+    fieldType:
+      field.kind === "checkbox" || field.kind === "button"
+        ? "Btn"
+        : field.kind === "dropdown" || field.kind === "listbox"
+          ? "Ch"
+          : "Tx",
+    checkBox: field.kind === "checkbox",
+    radioButton: field.kind === "radio",
+    combo: field.kind === "dropdown",
+    multiSelect: !!field.multiSelect,
+    comb: !!field.comb,
+    multiLine: field.kind === "multiline",
+    maxLen: field.maxLen,
+    readOnly: field.readOnly,
+    fieldValue: field.initial,
+    options: (field.options ?? []).map((option) => option.value),
+  };
 }
 
 /** Renders the PDF's AcroForm fields as fillable inputs. */
@@ -601,6 +629,10 @@ function FieldDesigner({
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
+  const rectRef = useRef(rect);
+  const displayNameRef = useRef(displayName);
+  rectRef.current = rect;
+  displayNameRef.current = displayName;
   // Read mode fills fields; Move/select edits their geometry. Existing fields
   // take pointer priority over native page objects, so selecting a widget can
   // never accidentally grab the text or border painted underneath it. A
@@ -610,6 +642,42 @@ function FieldDesigner({
     app.docPermissions,
     field.readOnly,
   );
+
+  const addFieldCopy = (
+    source: NonNullable<typeof existingFieldClipboard>,
+    targetPage = pageIndex,
+  ) => {
+    if (source.spec.radioButton) {
+      toast.info("Radio-group duplication is not supported yet.");
+      return false;
+    }
+    const copy = existingFieldToFormField(
+      app.annotations,
+      source.name,
+      {
+        ...source.rect,
+        x: source.rect.x + 10,
+        y: source.rect.y + 10,
+      },
+      source.spec,
+    );
+    if (!copy) return false;
+    const used = new Set(
+      Object.values(app.annotations)
+        .flat()
+        .filter((annotation): annotation is FormFieldAnnotation => annotation.kind === "formfield")
+        .map((annotation) => annotation.fieldName),
+    );
+    const baseName = `${source.name}_copy`;
+    let fieldName = baseName;
+    let suffix = 2;
+    while (used.has(fieldName)) fieldName = `${baseName}_${suffix++}`;
+    copy.fieldName = fieldName;
+    app.addAnnotation(targetPage, copy);
+    app.setSelectedField(null);
+    app.setSelected({ page: targetPage, id: copy.id });
+    return true;
+  };
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
     if (!canEdit) return;
@@ -649,14 +717,20 @@ function FieldDesigner({
             };
       setLive(finalRect);
     };
-    const onUp = () => {
+    const finish = () => {
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
       if (finalRect) app.upsertFieldOp(base, { newRect: finalRect });
       setLive(null);
     };
+    const cancel = () => {
+      finalRect = null;
+      finish();
+    };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
   };
 
   // Delete key removes the selected existing field.
@@ -681,14 +755,15 @@ function FieldDesigner({
         e.preventDefault();
         e.stopImmediatePropagation();
         const step = e.shiftKey ? 10 : 1;
+        const currentRect = rectRef.current;
         app.upsertFieldOp(base, {
           newRect: {
-            ...rect,
+            ...currentRect,
             x:
-              rect.x +
+              currentRect.x +
               (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
             y:
-              rect.y +
+              currentRect.y +
               (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0),
           },
         });
@@ -698,6 +773,35 @@ function FieldDesigner({
         e.preventDefault();
         e.stopImmediatePropagation();
         app.setFormBuilder(true);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        existingFieldClipboard = {
+          name: displayNameRef.current,
+          rect: rectRef.current,
+          spec: existingFieldSpec(field),
+        };
+        toast.success("Form field copied - Ctrl+V to paste");
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        if (!existingFieldClipboard) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (addFieldCopy(existingFieldClipboard)) toast.success("Form field pasted");
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const source = {
+          name: displayNameRef.current,
+          rect: rectRef.current,
+          spec: existingFieldSpec(field),
+        };
+        if (addFieldCopy(source)) toast.success("Form field duplicated");
         return;
       }
       if (e.key === "Escape") {
@@ -715,24 +819,7 @@ function FieldDesigner({
   // sidebar's Edit action): promote to a placeholder, delete the original.
   const canPromote = app.formBuilder && field.kind !== "radio";
   const promote = () => {
-    const spec: ExistingFieldSpec = {
-      fieldType:
-        field.kind === "checkbox" || field.kind === "button"
-          ? "Btn"
-          : field.kind === "dropdown" || field.kind === "listbox"
-            ? "Ch"
-            : "Tx",
-      checkBox: field.kind === "checkbox",
-      radioButton: false,
-      combo: field.kind === "dropdown",
-      multiSelect: !!field.multiSelect,
-      comb: !!field.comb,
-      multiLine: field.kind === "multiline",
-      maxLen: field.maxLen,
-      readOnly: field.readOnly,
-      fieldValue: field.initial,
-      options: (field.options ?? []).map((o) => o.value),
-    };
+    const spec = existingFieldSpec(field);
     const ann = existingFieldToFormField(app.annotations, field.name, rect, spec);
     if (!ann) return;
     app.upsertFieldOp(base, { deleted: true });

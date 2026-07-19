@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ImageUp, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
-import { pickSmallestObjectAt } from "../../lib/objectHitTest";
+import { objectsAtPoint, pickSmallestObjectAt } from "../../lib/objectHitTest";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Select } from "../ui/select";
@@ -239,9 +239,11 @@ export function ObjectLayer({
   const viewportRef = useRef<any>(null);
   const [objects, setObjects] = useState<ScreenObj[]>([]);
   const [sel, setSel] = useState<number | null>(null);
+  const [selectedIndexes, setSelectedIndexes] = useState<number[]>([]);
   const [hovered, setHovered] = useState<number | null>(null);
   const [pressing, setPressing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [lasso, setLasso] = useState<ScreenObj["rect"] | null>(null);
   // Live color while the picker is open (overlay only — the real recolor is
   // committed once on picker close to avoid a PDFium reload per input event).
   const [previewHex, setPreviewHex] = useState<string | null>(null);
@@ -250,6 +252,7 @@ export function ObjectLayer({
     orig: ScreenObj["rect"];
     box: ScreenObj["rect"];
     ghost?: string;
+    group?: boolean;
   }>(null);
   const dragRef = useRef<null | {
     mode: "move" | "resize";
@@ -257,9 +260,24 @@ export function ObjectLayer({
     startX: number;
     startY: number;
     obj: ScreenObj;
+    members: ScreenObj[];
     box: ScreenObj["rect"];
     started: boolean;
   }>(null);
+  const cycleRef = useRef<{
+    x: number;
+    y: number;
+    indexes: number[];
+    position: number;
+  } | null>(null);
+  const lassoRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    additive: boolean;
+    box?: ScreenObj["rect"];
+  } | null>(null);
 
   // (Re)load object rects whenever the page bytes change (pdf proxy swaps).
   useEffect(() => {
@@ -305,7 +323,20 @@ export function ObjectLayer({
   }, [pdf, pageIndex, scale, app.contentRev]);
 
   const selObj = objects.find((o) => o.index === sel) ?? null;
+  const selectedIndexSet = useMemo(
+    () => new Set(selectedIndexes),
+    [selectedIndexes],
+  );
+  const selectedObjects = useMemo(
+    () => objects.filter((o) => selectedIndexSet.has(o.index)),
+    [objects, selectedIndexSet],
+  );
   const hoveredObj = objects.find((o) => o.index === hovered) ?? null;
+
+  const clearSelection = () => {
+    setSel(null);
+    setSelectedIndexes([]);
+  };
 
   // Only one native object, annotation, or form field may own the selection.
   // Object layers exist per page, so a lightweight event clears selections on
@@ -315,14 +346,14 @@ export function ObjectLayer({
       const detail = (
         event as CustomEvent<{ pageIndex: number; objectIndex: number } | null>
       ).detail;
-      if (!detail || detail.pageIndex !== pageIndex) setSel(null);
+      if (!detail || detail.pageIndex !== pageIndex) clearSelection();
     };
     window.addEventListener("pdfwb:object-selection", onObjectSelection);
     return () =>
       window.removeEventListener("pdfwb:object-selection", onObjectSelection);
   }, [pageIndex]);
   useEffect(() => {
-    if (app.selected || app.selectedField) setSel(null);
+    if (app.selected || app.selectedField) clearSelection();
   }, [app.selected, app.selectedField]);
 
   // Keyboard parity with annotations: delete, dismiss, nudge, or edit text.
@@ -331,22 +362,25 @@ export function ObjectLayer({
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)
         return;
-      if ((e.key === "Delete" || e.key === "Backspace") && sel != null && !busy) {
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedIndexes.length &&
+        !busy
+      ) {
         e.preventDefault();
         e.stopImmediatePropagation();
         setBusy(true);
-        const idx = sel;
-        setSel(null);
-        app
-          .removeObjectAt(pageIndex, idx)
+        const indexes = [...selectedIndexes].sort((a, b) => b - a);
+        clearSelection();
+        Promise.all(indexes.map((idx) => app.removeObjectAt(pageIndex, idx)))
           .catch(() => toast.error("Couldn't delete that object."))
           .finally(() => setBusy(false));
         return;
       }
-      if (e.key === "Escape" && sel != null) {
+      if (e.key === "Escape" && selectedIndexes.length) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        setSel(null);
+        clearSelection();
         return;
       }
       if (
@@ -365,7 +399,7 @@ export function ObjectLayer({
         return;
       }
       if (
-        selObj &&
+        selectedObjects.length &&
         !busy &&
         ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)
       ) {
@@ -379,22 +413,25 @@ export function ObjectLayer({
         const [ax, ay] = vp.convertToPdfPoint(0, 0);
         const [bx, by] = vp.convertToPdfPoint(dx, dy);
         setBusy(true);
-        app
-          .applyObjectTransform(pageIndex, selObj.index, {
-            a: 1,
-            b: 0,
-            c: 0,
-            d: 1,
-            e: bx - ax,
-            f: by - ay,
-          })
+        Promise.all(
+          selectedObjects.map((object) =>
+            app.applyObjectTransform(pageIndex, object.index, {
+              a: 1,
+              b: 0,
+              c: 0,
+              d: 1,
+              e: bx - ax,
+              f: by - ay,
+            }),
+          ),
+        )
           .catch(() => toast.error("Couldn't move that object."))
           .finally(() => setBusy(false));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sel, selObj, busy, app, pageIndex, onEditText]);
+  }, [selectedIndexes, selectedObjects, selObj, busy, app, pageIndex, onEditText]);
 
   const cornerAt = (o: ScreenObj, px: number, py: number): Corner | null => {
     const { left, top, width, height } = o.rect;
@@ -440,6 +477,14 @@ export function ObjectLayer({
   const objectAt = (px: number, py: number) =>
     pickSmallestObjectAt(objects, px, py);
 
+  const groupBounds = (members: readonly ScreenObj[]) => {
+    const left = Math.min(...members.map((object) => object.rect.left));
+    const top = Math.min(...members.map((object) => object.rect.top));
+    const right = Math.max(...members.map((object) => object.rect.left + object.rect.width));
+    const bottom = Math.max(...members.map((object) => object.rect.top + object.rect.height));
+    return { left, top, width: right - left, height: bottom - top };
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (busy) return;
     const lr = layerRef.current!.getBoundingClientRect();
@@ -447,7 +492,11 @@ export function ObjectLayer({
     const py = e.clientY - lr.top;
 
     // Resize handle of the current selection (images and shapes)?
-    if (selObj && (selObj.kind === "image" || selObj.kind === "path")) {
+    if (
+      selectedIndexes.length === 1 &&
+      selObj &&
+      (selObj.kind === "image" || selObj.kind === "path")
+    ) {
       const c = cornerAt(selObj, px, py);
       if (c) {
         e.stopPropagation();
@@ -463,6 +512,7 @@ export function ObjectLayer({
           startX: e.clientX,
           startY: e.clientY,
           obj: selObj,
+          members: [selObj],
           box: selObj.rect,
           started: false,
         };
@@ -472,10 +522,39 @@ export function ObjectLayer({
     }
 
     // Otherwise pick the smallest object under the point → select + move.
-    const hit = objectAt(px, py);
+    const candidates = objectsAtPoint(objects, px, py);
+    let hit = candidates[0];
+    if (e.altKey && candidates.length > 1) {
+      const indexes = candidates.map((object) => object.index);
+      const previous = cycleRef.current;
+      const samePoint =
+        previous &&
+        Math.hypot(previous.x - px, previous.y - py) <= 5 &&
+        previous.indexes.join(",") === indexes.join(",");
+      const position = samePoint ? (previous.position + 1) % candidates.length : 0;
+      cycleRef.current = { x: px, y: py, indexes, position };
+      hit = candidates[position];
+    } else {
+      cycleRef.current = null;
+    }
     if (!hit) {
+      if (e.button === 0) {
+        e.preventDefault();
+        try {
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          /* pointer capture is best-effort */
+        }
+        if (!e.shiftKey) clearSelection();
+        lassoRef.current = {
+          startX: e.clientX,
+          startY: e.clientY,
+          originX: px,
+          originY: py,
+          additive: e.shiftKey,
+        };
+      }
       setPressing(false);
-      setSel(null);
       return;
     }
     e.stopPropagation();
@@ -492,13 +571,28 @@ export function ObjectLayer({
         detail: { pageIndex, objectIndex: hit.index },
       }),
     );
+    if (e.shiftKey) {
+      const next = selectedIndexSet.has(hit.index)
+        ? selectedIndexes.filter((index) => index !== hit.index)
+        : [...selectedIndexes, hit.index];
+      setSelectedIndexes(next);
+      setSel(next.includes(hit.index) ? hit.index : (next[next.length - 1] ?? null));
+      setPressing(false);
+      return;
+    }
+    const members = selectedIndexSet.has(hit.index)
+      ? selectedObjects
+      : [hit];
+    setSelectedIndexes(members.map((object) => object.index));
     setSel(hit.index);
+    const dragRect = members.length > 1 ? groupBounds(members) : hit.rect;
     dragRef.current = {
       mode: "move",
       startX: e.clientX,
       startY: e.clientY,
       obj: hit,
-      box: hit.rect,
+      members,
+      box: dragRect,
       started: false,
     };
     setPressing(true);
@@ -518,6 +612,21 @@ export function ObjectLayer({
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    const l = lassoRef.current;
+    if (l) {
+      const dx = e.clientX - l.startX;
+      const dy = e.clientY - l.startY;
+      if (!lasso && Math.hypot(dx, dy) < DRAG_START_PX) return;
+      const box = {
+        left: Math.min(l.originX, l.originX + dx),
+        top: Math.min(l.originY, l.originY + dy),
+        width: Math.abs(dx),
+        height: Math.abs(dy),
+      };
+      l.box = box;
+      setLasso(box);
+      return;
+    }
     const d = dragRef.current;
     if (!d) {
       if (!layerRef.current) return;
@@ -534,10 +643,17 @@ export function ObjectLayer({
     d.started = true;
     setHovered(null);
     if (d.mode === "move") {
-      const box = { ...d.obj.rect, left: d.obj.rect.left + dx, top: d.obj.rect.top + dy };
+      const origin = d.members.length > 1 ? groupBounds(d.members) : d.obj.rect;
+      const box = { ...origin, left: origin.left + dx, top: origin.top + dy };
       d.box = box;
       if (justStarted) {
-        setDrag({ orig: d.obj.rect, box, ghost: cropGhost(d.obj.rect) });
+        const group = d.members.length > 1;
+        setDrag({
+          orig: origin,
+          box,
+          group,
+          ghost: group ? undefined : cropGhost(origin),
+        });
       } else {
         setDrag((p) => (p ? { ...p, box } : p));
       }
@@ -573,6 +689,38 @@ export function ObjectLayer({
   };
 
   const onPointerUp = () => {
+    const l = lassoRef.current;
+    if (l) {
+      lassoRef.current = null;
+      if (l.box) {
+        const box = l.box;
+        const hits = objects
+          .filter(
+            (object) =>
+              object.rect.left <= box.left + box.width &&
+              object.rect.left + object.rect.width >= box.left &&
+              object.rect.top <= box.top + box.height &&
+              object.rect.top + object.rect.height >= box.top,
+          )
+          .map((object) => object.index);
+        const next = l.additive
+          ? [...new Set([...selectedIndexes, ...hits])]
+          : hits;
+        setSelectedIndexes(next);
+        setSel(next[next.length - 1] ?? null);
+        if (next.length) {
+          app.setSelected(null);
+          app.setSelectedField(null);
+          window.dispatchEvent(
+            new CustomEvent("pdfwb:object-selection", {
+              detail: { pageIndex, objectIndex: next[next.length - 1] },
+            }),
+          );
+        }
+      }
+      setLasso(null);
+      return;
+    }
     const d = dragRef.current;
     dragRef.current = null;
     setPressing(false);
@@ -591,8 +739,8 @@ export function ObjectLayer({
       return;
     }
     const moved =
-      Math.abs(box.left - d.obj.rect.left) > 1 ||
-      Math.abs(box.top - d.obj.rect.top) > 1 ||
+      Math.abs(box.left - (d.members.length > 1 ? groupBounds(d.members).left : d.obj.rect.left)) > 1 ||
+      Math.abs(box.top - (d.members.length > 1 ? groupBounds(d.members).top : d.obj.rect.top)) > 1 ||
       Math.abs(box.width - d.obj.rect.width) > 1;
     if (!moved) {
       setDrag(null);
@@ -605,18 +753,20 @@ export function ObjectLayer({
         if (d.mode === "move") {
           // Screen delta → page-space translation (rotation-correct).
           const [ax, ay] = vp.convertToPdfPoint(0, 0);
-          const [bx, by] = vp.convertToPdfPoint(
-            box.left - d.obj.rect.left,
-            box.top - d.obj.rect.top,
+          const origin = d.members.length > 1 ? groupBounds(d.members) : d.obj.rect;
+          const [bx, by] = vp.convertToPdfPoint(box.left - origin.left, box.top - origin.top);
+          await Promise.all(
+            d.members.map((object) =>
+              app.applyObjectTransform(pageIndex, object.index, {
+                a: 1,
+                b: 0,
+                c: 0,
+                d: 1,
+                e: bx - ax,
+                f: by - ay,
+              }),
+            ),
           );
-          await app.applyObjectTransform(pageIndex, d.obj.index, {
-            a: 1,
-            b: 0,
-            c: 0,
-            d: 1,
-            e: bx - ax,
-            f: by - ay,
-          });
         } else {
           const s = box.width / d.obj.rect.width;
           // Anchor = the screen-opposite corner, in PDF page space. Corners are
@@ -646,6 +796,8 @@ export function ObjectLayer({
   };
 
   const onPointerCancel = () => {
+    lassoRef.current = null;
+    setLasso(null);
     dragRef.current = null;
     setPressing(false);
     setDrag(null);
@@ -661,9 +813,9 @@ export function ObjectLayer({
       }}
       title={
         hoveredObj?.kind === "text"
-          ? "Drag to move · double-click to edit"
+          ? "Drag to move - double-click to edit - Shift-click to add - Alt-click to select behind"
           : hoveredObj
-            ? "Drag to move"
+            ? "Drag to move - Shift-click to add - Alt-click to select behind"
             : undefined
       }
       onPointerDown={onPointerDown}
@@ -673,17 +825,17 @@ export function ObjectLayer({
       onPointerLeave={() => !dragRef.current && setHovered(null)}
       onDoubleClick={onDoubleClick}
     >
-      {/* At most two outlines are mounted: the hovered and selected objects. */}
+      {/* Only hovered and selected outlines are mounted, even on dense pages. */}
       {objects
-        .filter((o) => o.index === sel || o.index === hovered)
+        .filter((o) => selectedIndexSet.has(o.index) || o.index === hovered)
         .map((o) => (
           <div
             key={o.index}
-            data-native-object-outline={o.index === sel ? "selected" : "hovered"}
+            data-native-object-outline={selectedIndexSet.has(o.index) ? "selected" : "hovered"}
             onPointerDown={onPointerDown}
             className={cn(
               "absolute rounded-[1px]",
-              o.index === sel
+              selectedIndexSet.has(o.index)
                 ? "outline outline-2 outline-primary"
                 : "outline outline-1 outline-primary/50",
             )}
@@ -693,9 +845,20 @@ export function ObjectLayer({
               width: o.rect.width,
               height: o.rect.height,
               cursor: "move",
+              transform:
+                drag?.group && selectedIndexSet.has(o.index)
+                  ? `translate(${drag.box.left - drag.orig.left}px, ${drag.box.top - drag.orig.top}px)`
+                  : undefined,
             }}
           />
         ))}
+
+      {lasso && (
+        <div
+          className="pointer-events-none absolute border border-dashed border-primary bg-primary/10"
+          style={lasso}
+        />
+      )}
 
       {/* Live color preview while the picker is open (shape fills only). */}
       {previewHex && selObj && selObj.kind === "path" && (
@@ -713,6 +876,7 @@ export function ObjectLayer({
 
       {/* Resize handles for a selected image or shape. */}
       {selObj &&
+        selectedIndexes.length === 1 &&
         (selObj.kind === "image" || selObj.kind === "path") &&
         !drag &&
         (["nw", "ne", "sw", "se"] as Corner[]).map((c) => {
@@ -730,8 +894,8 @@ export function ObjectLayer({
         })}
 
       {/* Contextual properties popover for the selected object. */}
-      {selObj && !drag && !pressing && (
-        <Popover open onOpenChange={(o: boolean) => !o && setSel(null)}>
+      {selObj && selectedIndexes.length === 1 && !drag && !pressing && (
+        <Popover open onOpenChange={(o: boolean) => !o && clearSelection()}>
           <PopoverContent
             anchor={{
               getBoundingClientRect: () => {
@@ -765,7 +929,7 @@ export function ObjectLayer({
               }}
               onDelete={() => {
                 const idx = selObj.index;
-                setSel(null);
+                clearSelection();
                 setBusy(true);
                 app
                   .removeObjectAt(pageIndex, idx)
@@ -774,7 +938,7 @@ export function ObjectLayer({
               }}
               onReplaceImage={(data, png) => {
                 const idx = selObj.index;
-                setSel(null);
+                clearSelection();
                 setBusy(true);
                 app
                   .applyBytesOp(async (bytes) => {
@@ -791,15 +955,17 @@ export function ObjectLayer({
       {/* Drag preview: dim the original, float a ghost of the content. */}
       {drag && (
         <>
-          <div
-            className="absolute bg-white/60"
-            style={{
-              left: drag.orig.left,
-              top: drag.orig.top,
-              width: drag.orig.width,
-              height: drag.orig.height,
-            }}
-          />
+          {!drag.group && (
+            <div
+              className="absolute bg-white/60"
+              style={{
+                left: drag.orig.left,
+                top: drag.orig.top,
+                width: drag.orig.width,
+                height: drag.orig.height,
+              }}
+            />
+          )}
           {drag.ghost && (
             <img
               src={drag.ghost}
@@ -811,6 +977,12 @@ export function ObjectLayer({
                 width: drag.box.width,
                 height: drag.box.height,
               }}
+            />
+          )}
+          {drag.group && (
+            <div
+              className="pointer-events-none absolute border border-dashed border-primary/70"
+              style={drag.box}
             />
           )}
         </>
