@@ -17,8 +17,10 @@ vi.mock("./lib/persist", () => ({
   getStoredDoc: vi.fn(async () => null),
   listStoredDocs: vi.fn(async () => []),
   markDocClosed: vi.fn(async () => {}),
+  persistAnnotations: vi.fn(async () => "stored"),
   persistDoc: vi.fn(async () => {}),
   removeStoredDocs: vi.fn(async () => true),
+  touchStoredDoc: vi.fn(async () => {}),
 }));
 vi.mock("./lib/folder", () => ({
   pickFolder: vi.fn(async () => null),

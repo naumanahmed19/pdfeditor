@@ -22,8 +22,10 @@ vi.mock("./lib/persist", () => ({
   getStoredDoc: vi.fn(async () => undefined),
   listStoredDocs: vi.fn(async () => [...persistence.docs]),
   markDocClosed: vi.fn(async () => {}),
+  persistAnnotations: vi.fn(async () => "stored"),
   persistDoc: vi.fn(async () => "stored"),
   removeStoredDocs: persistence.remove,
+  touchStoredDoc: vi.fn(async () => {}),
 }));
 
 vi.mock("./lib/folder", () => ({
@@ -66,6 +68,25 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("recent history removal", () => {
+  it("shows every open session entry even when there are more than ten", async () => {
+    persistence.docs = Array.from({ length: 15 }, (_, index) => ({
+      id: `open-${index}`,
+      name: `open-${index}.pdf`,
+      bytes: new Uint8Array([index]),
+      lastOpened: 100 - index,
+      open: true,
+    }));
+
+    render(
+      <AppProvider>
+        <Capture />
+      </AppProvider>,
+    );
+
+    await waitFor(() => expect(store.recentFiles).toHaveLength(15));
+    expect(store.recentFiles.every((item) => item.open)).toBe(true);
+  });
+
   it("removes one item and then clears the remaining closed history", async () => {
     render(
       <AppProvider>

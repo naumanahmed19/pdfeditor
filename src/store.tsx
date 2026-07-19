@@ -67,8 +67,10 @@ import {
   getStoredDoc,
   listStoredDocs,
   markDocClosed,
+  persistAnnotations,
   persistDoc,
   removeStoredDocs,
+  touchStoredDoc,
   MAX_PERSIST_BYTES,
   type PersistResult,
 } from "./lib/persist";
@@ -170,6 +172,8 @@ interface OpenDoc {
   id: string;
   name: string;
   sourceKey?: string;
+  /** Used to unload the least-recently-used clean document engines. */
+  lastAccessed: number;
   bytes: Uint8Array;
   pdf: PdfDoc;
   annotations: AnnotationMap;
@@ -926,6 +930,7 @@ function summarizeRestrictions(perms: DocPermissions): string[] {
 }
 
 const HISTORY_CAP = 60;
+const MAX_WARM_DOCS = 6;
 
 /**
  * Append a new undo step. Trims any redone tail, carries the current base
@@ -1788,6 +1793,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [recentLoading, setRecentLoading] = useState(true);
+  const recoverableIds = useRef(new Set<string>());
   const [folderRoot, setFolderRoot] = useState<FolderNode | null>(null);
   const [folderBusy, setFolderBusy] = useState(false);
   const docHandles = useRef(new Map<string, any>());
@@ -1852,22 +1858,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // hand a session restore an unprotected copy.
       if (protectionInfo.current.has(id) || encryptedAtOpen.current.has(id))
         return;
-      // Byte edits must not wipe the record's overlay annotations (imported
-      // markup lives ONLY there — the working bytes are stripped): carry the
-      // previously stored map forward; the annotation autosave effect below
-      // keeps it fresh on overlay edits.
-      void getStoredDoc(id).then((prev) =>
-        persistDoc({
-          id,
-          name,
-          sourceKey:
-            docsRef.current.find((doc) => doc.id === id)?.sourceKey ?? prev?.sourceKey,
-          bytes,
-          ...(prev?.annotations ? { annotations: prev.annotations } : {}),
-          lastOpened: Date.now(),
-          open: true,
-        }).then((result) => noteAutosaveSkipped(id, result)),
-      );
+      const current = docsRef.current.find((doc) => doc.id === id);
+      void persistDoc({
+        id,
+        name,
+        sourceKey: current?.sourceKey,
+        bytes,
+        ...(current?.annotations ? { annotations: current.annotations } : {}),
+        lastOpened: Date.now(),
+        open: true,
+      }).then((result) => noteAutosaveSkipped(id, result));
     },
     [noteAutosaveSkipped],
   );
@@ -1883,17 +1883,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       encryptedAtOpen.current.has(active.id)
     )
       return;
-    const { id, name, sourceKey, bytes, annotations } = active;
+    const { id, annotations } = active;
     const t = setTimeout(() => {
-      void persistDoc({
-        id,
-        name,
-        sourceKey,
-        bytes,
-        annotations,
-        lastOpened: Date.now(),
-        open: true,
-      });
+      void persistAnnotations(id, annotations);
     }, 1200);
     return () => clearTimeout(t);
     // Keyed on the map identity — every overlay edit replaces it.
@@ -1902,27 +1894,91 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshRecent = useCallback(async () => {
     const stored = await listStoredDocs();
-    const seen = new Set<string>();
-    setRecentFiles(
-      stored.flatMap((d) => {
-        const sourceKey = d.sourceKey ?? legacyBytesSourceKey(d.name, d.bytes);
-        if (seen.has(sourceKey)) return [];
-        seen.add(sourceKey);
-        return [
-          {
-            id: d.id,
-            name: d.name,
-            sourceKey,
-            lastOpened: d.lastOpened,
-            open: d.open,
-          },
-        ];
-      }),
-    );
+    recoverableIds.current = new Set(stored.map((item) => item.id));
+    setRecentFiles((previous) => {
+      const previousById = new Map(previous.map((item) => [item.id, item]));
+      const storedById = new Map(stored.map((item) => [item.id, item]));
+      const live = docsRef.current.map((doc) => {
+        const saved = storedById.get(doc.id);
+        const optimistic = previousById.get(doc.id);
+        return {
+          id: doc.id,
+          name: doc.name,
+          sourceKey: doc.sourceKey,
+          lastOpened: saved?.lastOpened ?? optimistic?.lastOpened ?? Date.now(),
+          open: true,
+        };
+      });
+      const liveIds = new Set(live.map((item) => item.id));
+      const candidates = [
+        ...live.sort((a, b) => b.lastOpened - a.lastOpened),
+        ...stored
+          .filter((item) => !liveIds.has(item.id))
+          .map((item) => ({
+            id: item.id,
+            name: item.name,
+            sourceKey: item.sourceKey,
+            lastOpened: item.lastOpened,
+            open: item.open,
+          })),
+      ];
+      const seen = new Set<string>();
+      return candidates.filter((item) => {
+        const identity = item.sourceKey ?? `record:${item.id}`;
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      });
+    });
   }, []);
+
+  // Keep only a small warm set of parsed PDF engines. Every open document
+  // remains in `recentFiles`; selecting an unloaded entry restores it lazily
+  // from its verified recovery snapshot. Dirty/protected/visible documents
+  // are never evicted.
+  useEffect(() => {
+    const excess = docs.length - MAX_WARM_DOCS;
+    if (excess <= 0) return;
+    const visible = new Set([
+      ...(activeTabId ? [activeTabId] : []),
+      ...panes.map((pane) => pane.docId),
+    ]);
+    const candidates = docs
+      .filter(
+        (doc) =>
+          !visible.has(doc.id) &&
+          recoverableIds.current.has(doc.id) &&
+          !docHasEdits(doc) &&
+          !pendingPdfEdits.current.has(doc.id) &&
+          !protectionInfo.current.has(doc.id) &&
+          !encryptedAtOpen.current.has(doc.id),
+      )
+      .sort((a, b) => a.lastAccessed - b.lastAccessed)
+      .slice(0, excess);
+    if (!candidates.length) return;
+    const evicted = new Set(candidates.map((doc) => doc.id));
+    for (const doc of candidates) destroyDocProxies(doc);
+    setDocs((prev) => prev.filter((doc) => !evicted.has(doc.id)));
+  }, [docs, activeTabId, panes, recentFiles, protectedIds]);
 
   const activateLoadedDoc = useCallback(
     (id: string) => {
+      const accessedAt = Date.now();
+      setDocs((prev) =>
+        prev.map((doc) =>
+          doc.id === id ? { ...doc, lastAccessed: accessedAt } : doc,
+        ),
+      );
+      setRecentFiles((prev) =>
+        prev
+          .map((item) =>
+            item.id === id
+              ? { ...item, lastOpened: accessedAt, open: true }
+              : item,
+          )
+          .sort((a, b) => b.lastOpened - a.lastOpened),
+      );
+      void touchStoredDoc(id, accessedAt);
       if (panes.length > 0) {
         const inPane = panes.find((p) => p.docId === id);
         if (inPane) {
@@ -2092,6 +2148,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           id: id ?? uid(),
           name,
           sourceKey,
+          lastAccessed: Date.now(),
           bytes: realBytes,
           pdf: pdfDoc,
           annotations: overlaySeed,
@@ -2264,7 +2321,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const openFile = useCallback(
     async (file: File, handle?: unknown): Promise<string | null> => {
       const handleMatch = await docIdForHandle(handle);
-      if (handleMatch) {
+      if (handleMatch && docsRef.current.some((doc) => doc.id === handleMatch)) {
         activateLoadedDoc(handleMatch);
         return handleMatch;
       }
@@ -2275,6 +2332,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (handle) docHandles.current.set(existing.id, handle);
         activateLoadedDoc(existing.id);
         return existing.id;
+      }
+
+      // A clean inactive document may have had its PDF engine unloaded. Its
+      // session record still owns the source identity, so restore that record
+      // instead of creating a duplicate document ID.
+      const storedMatch = (await listStoredDocs()).find(
+        (doc) => doc.open && doc.sourceKey === sourceKey,
+      );
+      if (storedMatch) {
+        const stored = await getStoredDoc(storedMatch.id);
+        if (stored) {
+          if (handle) docHandles.current.set(stored.id, handle);
+          return openBytesInternal(
+            stored.bytes,
+            stored.name,
+            stored.id,
+            true,
+            stored.annotations,
+            stored.sourceKey ?? sourceKey,
+          );
+        }
       }
 
       const pending = openingSources.current.get(sourceKey);
@@ -2399,24 +2477,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     restoredRef.current = true;
     void (async () => {
       const stored = await listStoredDocs();
+      // Metadata is cheap: render the complete session immediately. Reading
+      // and parsing the active PDF happens afterward and must not hold the
+      // sidebar in its loading state.
+      await refreshRecent();
+      setRecentLoading(false);
       const active = stored
         .filter((d) => d.open)
         .sort((a, b) => b.lastOpened - a.lastOpened)[0];
+      const activeDoc = active ? await getStoredDoc(active.id) : undefined;
       // Skip auto-open when the active doc is locked (PickPDF wrapper or
       // standard-encrypted) — it would pop a password dialog on startup. It
       // unlocks lazily when the user activates it.
-      if (active && !(await needsPasswordToOpen(active.bytes))) {
+      if (activeDoc && !(await needsPasswordToOpen(activeDoc.bytes))) {
         await openBytesInternal(
-          active.bytes,
-          active.name,
-          active.id,
+          activeDoc.bytes,
+          activeDoc.name,
+          activeDoc.id,
           true,
-          active.annotations,
-          active.sourceKey ?? legacyBytesSourceKey(active.name, active.bytes),
+          activeDoc.annotations,
+          activeDoc.sourceKey ?? legacyBytesSourceKey(activeDoc.name, activeDoc.bytes),
         );
       }
-      await refreshRecent();
-      setRecentLoading(false);
     })();
   }, [openBytesInternal, refreshRecent, needsPasswordToOpen]);
 
@@ -2457,8 +2539,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const ids = stored
         .filter((doc) => {
           if (doc.open) return false;
-          const sourceKey = doc.sourceKey ?? legacyBytesSourceKey(doc.name, doc.bytes);
-          return target.sourceKey ? sourceKey === target.sourceKey : doc.id === id;
+          return target.sourceKey
+            ? doc.sourceKey === target.sourceKey
+            : doc.id === id;
         })
         .map((doc) => doc.id);
       const removed = await removeStoredDocs(ids.length ? ids : [id]);
@@ -2484,38 +2567,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [recentFiles, refreshRecent]);
 
   const switchTab = useCallback(
-    (id: string) => {
-      if (panes.length > 0) {
-        // If the document is already shown in a pane, focus that pane
-        // instead of loading it into the current one (VS Code behavior).
-        const existing = panes.find((p) => p.docId === id);
-        if (existing) {
-          setActivePaneId(existing.id);
-          if (id !== activeTabId) {
-            setActiveTabId(id);
-            setDocVersion((v) => v + 1);
-            resetTransient();
-          }
-          setScreen("viewer");
-          return;
-        }
-        // Otherwise load it into the focused pane.
-        if (activePaneId) {
-          setPanes((prev) =>
-            prev.map((p) => (p.id === activePaneId ? { ...p, docId: id } : p)),
-          );
-        }
-      }
-      if (id === activeTabId) {
-        setScreen("viewer");
-        return;
-      }
-      setActiveTabId(id);
-      setDocVersion((v) => v + 1);
-      resetTransient();
-      setScreen("viewer");
-    },
-    [activeTabId, panes, activePaneId, resetTransient],
+    (id: string) => activateLoadedDoc(id),
+    [activateLoadedDoc],
   );
 
   const closeTab = useCallback(
@@ -2622,19 +2675,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [docs, activeTabId],
   );
 
-  const focusPane = useCallback((paneId: string) => {
-    setPanes((prev) => {
-      const pane = prev.find((p) => p.id === paneId);
-      if (pane) {
-        setActivePaneId(paneId);
-        setActiveTabId(pane.docId);
-        setDocVersion((v) => v + 1);
-        resetTransient();
-      }
-      return prev;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const focusPane = useCallback(
+    (paneId: string) => {
+      const pane = panes.find((item) => item.id === paneId);
+      if (!pane) return;
+      setActivePaneId(paneId);
+      activateLoadedDoc(pane.docId);
+    },
+    [panes, activateLoadedDoc],
+  );
 
   const closePane = useCallback((paneId: string) => {
     setPanes((prev) => {
