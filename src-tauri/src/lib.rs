@@ -11,6 +11,8 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![fonts::match_system_font])
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_fs::init())
+    .plugin(tauri_plugin_sql::Builder::default().build())
     .plugin(updater.build())
     .setup(|app| {
       if cfg!(debug_assertions) {

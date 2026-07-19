@@ -75,6 +75,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "../ui/command";
+import { Tip } from "../ui/tooltip";
 
 type CommandGroupId =
   | "global"
@@ -450,14 +451,13 @@ function CommandRow({
   const Icon = command.icon;
   const disabled = !!command.disabledReason;
 
-  return (
+  const item = (
     <CommandItem
       value={command.label}
       keywords={command.aliases}
       disabled={disabled}
       onSelect={() => onRun(command)}
       className="group items-center gap-3"
-      title={command.disabledReason}
     >
       <Icon
         className={cn(
@@ -472,6 +472,14 @@ function CommandRow({
         <CommandShortcut>{command.shortcut}</CommandShortcut>
       )}
     </CommandItem>
+  );
+
+  return command.disabledReason ? (
+    <Tip label="Unavailable" desc={command.disabledReason} side="right">
+      {item}
+    </Tip>
+  ) : (
+    item
   );
 }
 

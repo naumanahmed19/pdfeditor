@@ -43,6 +43,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
+import { Tip } from "../ui/tooltip";
 
 export const TYPE_ICON: Record<FormFieldType, LucideIcon> = {
   text: TextCursorInput,
@@ -66,26 +67,17 @@ export function FormBuilderSidebar() {
     <div className="scrollbar-soft flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
       {/* Mode header */}
       <div className="flex items-center gap-1.5">
-        <Button
-          size="sm"
-          variant={app.formPreview ? "default" : "outline"}
-          className="h-7 flex-1 gap-1.5 text-xs"
-          onClick={() => app.setFormPreview(!app.formPreview)}
-          title="Try the form without leaving the builder"
-        >
-          <Eye className="h-3.5 w-3.5" />
-          {app.formPreview ? "Previewing — click to design" : "Preview"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 gap-1 text-xs"
-          onClick={() => app.setFormBuilder(false)}
-          title="Leave the form builder"
-        >
-          <X className="h-3.5 w-3.5" />
-          Done
-        </Button>
+        <Tip label="Preview" desc="Try the form without leaving the builder">
+          <Button size="sm" variant={app.formPreview ? "default" : "outline"} className="h-7 flex-1 gap-1.5 text-xs" onClick={() => app.setFormPreview(!app.formPreview)}>
+            <Eye className="h-3.5 w-3.5" />
+            {app.formPreview ? "Previewing — click to design" : "Preview"}
+          </Button>
+        </Tip>
+        <Tip label="Done" desc="Leave the form builder">
+          <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => app.setFormBuilder(false)}>
+            <X className="h-3.5 w-3.5" /> Done
+          </Button>
+        </Tip>
       </div>
 
       {/* Palette */}
@@ -96,8 +88,8 @@ export function FormBuilderSidebar() {
             const Icon = TYPE_ICON[m.type];
             const armed = app.tool === TOOL_FOR_FIELD[m.type];
             return (
-              <button
-                key={m.type}
+              <Tip key={m.type} label={m.label} desc={`Drag onto the page, or click then click/drag to place${m.small ? " (stays armed)" : ""}`}>
+                <button
                 draggable
                 onDragStart={(e) => {
                   paletteDrag.type = m.type;
@@ -116,21 +108,18 @@ export function FormBuilderSidebar() {
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border text-foreground hover:bg-muted",
                 )}
-                title={`Drag onto the page, or click then click/drag to place${m.small ? " (stays armed)" : ""}`}
               >
                 <Icon className="h-3.5 w-3.5 shrink-0" />
                 {m.label}
-              </button>
+                </button>
+              </Tip>
             );
           })}
-          <button
-            onClick={() => setRadioDialog(true)}
-            className="col-span-2 flex items-center gap-2 rounded-md border border-dashed px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title="Create a whole radio group with labeled options at once"
-          >
-            <Plus className="h-3.5 w-3.5 shrink-0" />
-            Radio group…
-          </button>
+          <Tip label="Radio group" desc="Create a labeled option group at once">
+            <button onClick={() => setRadioDialog(true)} className="col-span-2 flex items-center gap-2 rounded-md border border-dashed px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+              <Plus className="h-3.5 w-3.5 shrink-0" /> Radio group…
+            </button>
+          </Tip>
         </div>
       </section>
 
@@ -275,23 +264,27 @@ function FieldOutline() {
                   isSel ? "bg-primary/10 text-foreground" : "hover:bg-muted",
                 )}
               >
-                <button
-                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                  onClick={(e) => {
-                    app.scrollToPage(page);
-                    if (e.shiftKey) app.toggleMultiSelected(page, ann.id);
-                    else app.setSelected({ page, id: ann.id });
-                  }}
-                  title={`${ann.fieldName} — click to select, Shift-click to multi-select (#${idx + 1} in tab order)`}
+                <Tip
+                  label={ann.fieldName}
+                  desc={`Click to select; Shift-click to multi-select. #${idx + 1} in tab order.`}
                 >
-                  <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="truncate">
-                    {ann.fieldName}
-                    {ann.fieldType === "radio" && ann.optionValue && (
-                      <span className="text-muted-foreground"> · {ann.optionValue}</span>
-                    )}
-                  </span>
-                </button>
+                  <button
+                    className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                    onClick={(e) => {
+                      app.scrollToPage(page);
+                      if (e.shiftKey) app.toggleMultiSelected(page, ann.id);
+                      else app.setSelected({ page, id: ann.id });
+                    }}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">
+                      {ann.fieldName}
+                      {ann.fieldType === "radio" && ann.optionValue && (
+                        <span className="text-muted-foreground"> · {ann.optionValue}</span>
+                      )}
+                    </span>
+                  </button>
+                </Tip>
                 <span className="hidden shrink-0 items-center group-hover:flex">
                   <IconBtn
                     title="Earlier in tab order"
@@ -338,19 +331,21 @@ function IconBtn({
   danger?: boolean;
 }) {
   return (
-    <button
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "flex h-5 w-5 items-center justify-center rounded transition-colors disabled:opacity-30",
-        danger
-          ? "text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          : "text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
+    <Tip label={title}>
+      <button
+        aria-label={title}
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          "flex h-5 w-5 items-center justify-center rounded transition-colors disabled:opacity-30",
+          danger
+            ? "text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            : "text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground",
+        )}
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }
 
@@ -460,28 +455,29 @@ function ExistingFields() {
                   op?.deleted && "opacity-45",
                 )}
               >
-                <button
-                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                  onClick={() => {
-                    app.scrollToPage(w.page);
-                    app.setSelected(null);
-                    app.setSelectedField({
-                      key: w.key,
-                      fieldName: w.name,
-                      pageIndex: w.page,
-                      origRect: w.rect,
-                    });
-                  }}
-                  title={`${w.name} — page ${w.page + 1}`}
-                >
-                  <TextCursorInput className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className={cn("truncate", op?.deleted && "line-through")}>
-                    {op?.newName ?? w.name}
-                  </span>
-                  <span className="ml-auto shrink-0 pl-1 text-[10px] text-muted-foreground/70">
-                    p.{w.page + 1}
-                  </span>
-                </button>
+                <Tip label={op?.newName ?? w.name} desc={`Page ${w.page + 1}`}>
+                  <button
+                    className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                    onClick={() => {
+                      app.scrollToPage(w.page);
+                      app.setSelected(null);
+                      app.setSelectedField({
+                        key: w.key,
+                        fieldName: w.name,
+                        pageIndex: w.page,
+                        origRect: w.rect,
+                      });
+                    }}
+                  >
+                    <TextCursorInput className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className={cn("truncate", op?.deleted && "line-through")}>
+                      {op?.newName ?? w.name}
+                    </span>
+                    <span className="ml-auto shrink-0 pl-1 text-[10px] text-muted-foreground/70">
+                      p.{w.page + 1}
+                    </span>
+                  </button>
+                </Tip>
                 <span className="hidden shrink-0 group-hover:flex">
                   {!op?.deleted && !w.spec.radioButton && (
                     <IconBtn title="Edit field (convert to editable)" onClick={() => promote(w)}>

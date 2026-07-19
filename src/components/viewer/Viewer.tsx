@@ -34,6 +34,7 @@ import { FloatingNav } from "./FloatingNav";
 import { PageView } from "./PageView";
 import type { PageDims } from "./types";
 import { Select } from "../ui/select";
+import { Tip } from "../ui/tooltip";
 import { BrandLogo } from "../layout/BrandLogo";
 
 
@@ -602,8 +603,7 @@ function StartAction({
 function EmptyState() {
   const app = useAppSelector(
     (s) => ({
-      openBytes: s.openBytes,
-      registerFileHandle: s.registerFileHandle,
+      openFile: s.openFile,
       requestOpen: s.requestOpen,
       openFolder: s.openFolder,
       openRecent: s.openRecent,
@@ -631,6 +631,11 @@ function EmptyState() {
       onDragLeave={() => setDragOver(false)}
       onDrop={(e) => {
         e.preventDefault();
+        // This empty-state handler also captures the file-system handle for
+        // save-in-place. Keep the same drop from bubbling to the global
+        // DropZone, which would otherwise read and open large PDFs a second
+        // time.
+        e.stopPropagation();
         setDragOver(false);
         // Grab file-system handles synchronously (the list is neutered after
         // the first await) so dropped files support save-in-place.
@@ -643,12 +648,8 @@ function EmptyState() {
           for (let i = 0; i < files.length; i++) {
             const f = files[i];
             if (f.type !== "application/pdf" && !f.name.endsWith(".pdf")) continue;
-            const id = await app.openBytes(
-              new Uint8Array(await f.arrayBuffer()),
-              f.name,
-            );
             const h = handles[i];
-            if (id && h?.kind === "file") app.registerFileHandle(id, h);
+            await app.openFile(f, h?.kind === "file" ? h : undefined);
           }
         })();
       }}
@@ -684,21 +685,21 @@ function EmptyState() {
                 </p>
               ) : (
                 recent.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    title={r.name}
-                    onClick={() => void app.openRecent(r.id)}
-                    className="group flex max-w-full items-center gap-2 text-left"
-                  >
-                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-                    <span className="truncate text-sm text-foreground transition-colors group-hover:text-primary group-hover:underline">
-                      {r.name}
-                    </span>
-                    <span className="shrink-0 text-xs text-muted-foreground/60">
-                      {relTime(r.lastOpened)}
-                    </span>
-                  </button>
+                  <Tip key={r.id} label={r.name}>
+                    <button
+                      type="button"
+                      onClick={() => void app.openRecent(r.id)}
+                      className="group flex max-w-full items-center gap-2 text-left"
+                    >
+                      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                      <span className="truncate text-sm text-foreground transition-colors group-hover:text-primary group-hover:underline">
+                        {r.name}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted-foreground/60">
+                        {relTime(r.lastOpened)}
+                      </span>
+                    </button>
+                  </Tip>
                 ))
               )}
             </div>

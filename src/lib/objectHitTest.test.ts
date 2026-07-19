@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickSmallestObjectAt } from "./objectHitTest";
+import { objectsAtPoint, pickSmallestObjectAt } from "./objectHitTest";
 
 describe("native object hit testing", () => {
   const objects = [
@@ -15,5 +15,29 @@ describe("native object hit testing", () => {
 
   it("returns undefined outside every object", () => {
     expect(pickSmallestObjectAt(objects, 150, 150)).toBeUndefined();
+  });
+
+  it("makes thin and zero-width objects easy to target", () => {
+    const hairlines = [
+      { id: "line", rect: { left: 40, top: 10, width: 0, height: 80 } },
+    ];
+    expect(pickSmallestObjectAt(hairlines, 44, 30)?.id).toBe("line");
+    expect(pickSmallestObjectAt(hairlines, 46, 30)).toBeUndefined();
+  });
+
+  it("prefers a precise contained hit over a nearby tiny object", () => {
+    const nearby = [
+      { id: "inside", rect: { left: 10, top: 10, width: 30, height: 20 } },
+      { id: "nearby", rect: { left: 43, top: 20, width: 1, height: 1 } },
+    ];
+    expect(pickSmallestObjectAt(nearby, 39, 20)?.id).toBe("inside");
+  });
+
+  it("returns an ordered stack for overlap cycling", () => {
+    expect(objectsAtPoint(objects, 22, 24).map((object) => object.id)).toEqual([
+      "glyph",
+      "text",
+      "background",
+    ]);
   });
 });

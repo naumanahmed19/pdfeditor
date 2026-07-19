@@ -64,6 +64,7 @@ import { PasswordModal } from "./PasswordModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PrintModal } from "../viewer/PrintModal";
 import { BrandLogo } from "./BrandLogo";
+import { Tip } from "../ui/tooltip";
 
 // Memoized: it has no props, so it ignores parent (Shell) re-renders and only
 // re-renders when its own selected store fields change.
@@ -345,19 +346,21 @@ function TitleBarImpl() {
         isTauri && "pr-0 sm:pr-0",
       )}
     >
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7"
-        title={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-        onClick={() => {
-          const next = !app.sidebarOpen;
-          app.setSidebarOpen(next);
-          if (next && app.isMobile) app.setAiOpen(false);
-        }}
-      >
-        <PanelLeft className="h-4 w-4" />
-      </Button>
+      <Tip label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          aria-label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          onClick={() => {
+            const next = !app.sidebarOpen;
+            app.setSidebarOpen(next);
+            if (next && app.isMobile) app.setAiOpen(false);
+          }}
+        >
+          <PanelLeft className="h-4 w-4" />
+        </Button>
+      </Tip>
 
       <BrandLogo
         className="mr-1 hidden min-w-0 sm:flex"
@@ -380,17 +383,19 @@ function TitleBarImpl() {
         </MenuTrigger>
         <MenuContent className="min-w-48">{toolsItems}</MenuContent>
       </Menu>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7"
-        title="Command palette"
-        onClick={() =>
-          window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
-        }
-      >
-        <CommandIcon className="h-4 w-4" />
-      </Button>
+      <Tip label="Command palette">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          aria-label="Command palette"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
+          }
+        >
+          <CommandIcon className="h-4 w-4" />
+        </Button>
+      </Tip>
       <input
         ref={fileRef}
         id="global-open-input"
@@ -430,9 +435,9 @@ function TitleBarImpl() {
           className="h-full min-w-24 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
         />
         {app.searchError ? (
-          <span className="shrink-0 text-[11px] text-destructive" title={app.searchError}>
-            Error
-          </span>
+          <Tip label={app.searchError}>
+            <span className="shrink-0 text-[11px] text-destructive">Error</span>
+          </Tip>
         ) : (
           <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
             {app.searchMatches.length
@@ -443,21 +448,23 @@ function TitleBarImpl() {
           </span>
         )}
         <Menu>
-          <MenuTrigger
-            type="button"
-            className={optionButtonClass(
-              app.searchOptions.matchCase ||
-                app.searchOptions.wholeWord ||
-                app.searchOptions.regex ||
-                app.searchOptions.preserveCase ||
-                !app.searchOptions.includePdfText ||
-                !app.searchOptions.includeAnnotations ||
-                !app.searchOptions.includeFormValues,
-            )}
-            title="Search options"
-          >
-            <SlidersHorizontal className="h-3 w-3" />
-          </MenuTrigger>
+          <Tip label="Search options">
+            <MenuTrigger
+              type="button"
+              aria-label="Search options"
+              className={optionButtonClass(
+                app.searchOptions.matchCase ||
+                  app.searchOptions.wholeWord ||
+                  app.searchOptions.regex ||
+                  app.searchOptions.preserveCase ||
+                  !app.searchOptions.includePdfText ||
+                  !app.searchOptions.includeAnnotations ||
+                  !app.searchOptions.includeFormValues,
+              )}
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+            </MenuTrigger>
+          </Tip>
           <MenuContent align="end" className="min-w-60">
             <MenuGroup>
               <MenuLabel>Match</MenuLabel>
@@ -532,13 +539,15 @@ function TitleBarImpl() {
           </MenuContent>
         </Menu>
         <Popover open={replaceOpen} onOpenChange={setReplaceOpen}>
-          <PopoverTrigger
-            type="button"
-            className={optionButtonClass(replaceOpen)}
-            title="Toggle replace"
-          >
-            <Replace className="h-3 w-3" />
-          </PopoverTrigger>
+          <Tip label="Toggle replace">
+            <PopoverTrigger
+              type="button"
+              aria-label="Toggle replace"
+              className={optionButtonClass(replaceOpen)}
+            >
+              <Replace className="h-3 w-3" />
+            </PopoverTrigger>
+          </Tip>
           <PopoverContent
             anchor={searchFormRef}
             side="bottom"
@@ -586,73 +595,88 @@ function TitleBarImpl() {
         </Popover>
         {app.searchMatches.length > 0 && (
           <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
-            <button
-              type="button"
-              className="rounded p-0.5 hover:bg-accent"
-              onClick={() => app.gotoMatch(app.activeMatch - 1)}
-            >
-              <ChevronUp className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              className="rounded p-0.5 hover:bg-accent"
-              onClick={() => app.gotoMatch(app.activeMatch + 1)}
-            >
-              <ChevronDown className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              className="rounded p-0.5 hover:bg-accent"
-              onClick={() => {
-                setQuery("");
-                app.clearSearch();
-              }}
-            >
-              <X className="h-3 w-3" />
-            </button>
+            <Tip label="Previous match">
+              <button
+                type="button"
+                aria-label="Previous match"
+                className="rounded p-0.5 hover:bg-accent"
+                onClick={() => app.gotoMatch(app.activeMatch - 1)}
+              >
+                <ChevronUp className="h-3 w-3" />
+              </button>
+            </Tip>
+            <Tip label="Next match">
+              <button
+                type="button"
+                aria-label="Next match"
+                className="rounded p-0.5 hover:bg-accent"
+                onClick={() => app.gotoMatch(app.activeMatch + 1)}
+              >
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </Tip>
+            <Tip label="Clear search">
+              <button
+                type="button"
+                aria-label="Clear search"
+                className="rounded p-0.5 hover:bg-accent"
+                onClick={() => {
+                  setQuery("");
+                  app.clearSearch();
+                }}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Tip>
           </div>
         )}
       </form>
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="ml-auto h-7 w-7 sm:hidden"
-        title="Search"
-        disabled={!app.pdf}
-        onClick={() => setMobileSearch(true)}
-      >
-        <Search className="h-4 w-4" />
-      </Button>
+      <Tip label="Search">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="ml-auto h-7 w-7 sm:hidden"
+          aria-label="Search"
+          disabled={!app.pdf}
+          onClick={() => setMobileSearch(true)}
+        >
+          <Search className="h-4 w-4" />
+        </Button>
+      </Tip>
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className={cn(
-          "h-7 w-7",
-          app.aiOpen && "bg-background text-foreground shadow-sm hover:bg-background",
-        )}
-        title={app.aiOpen ? "Hide AI assistant" : "Show AI assistant"}
-        onClick={() => {
-          const next = !app.aiOpen;
-          app.setAiOpen(next);
-          if (next && app.isMobile) app.setSidebarOpen(false);
-        }}
-      >
-        <Bot className="h-4 w-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className={cn(
-          "h-7 w-7",
-          app.screen === "settings" && "bg-background text-foreground shadow-sm hover:bg-background",
-        )}
-        title="Settings"
-        onClick={() => app.setScreen("settings")}
-      >
-        <Settings className="h-4 w-4" />
-      </Button>
+      <Tip label={app.aiOpen ? "Hide AI assistant" : "Show AI assistant"}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-7 w-7",
+            app.aiOpen && "bg-background text-foreground shadow-sm hover:bg-background",
+          )}
+          aria-label={app.aiOpen ? "Hide AI assistant" : "Show AI assistant"}
+          onClick={() => {
+            const next = !app.aiOpen;
+            app.setAiOpen(next);
+            if (next && app.isMobile) app.setSidebarOpen(false);
+          }}
+        >
+          <Bot className="h-4 w-4" />
+        </Button>
+      </Tip>
+      <Tip label="Settings">
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-7 w-7",
+            app.screen === "settings" && "bg-background text-foreground shadow-sm hover:bg-background",
+          )}
+          aria-label="Settings"
+          onClick={() => app.setScreen("settings")}
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
+      </Tip>
 
       {/* Frameless-window controls — desktop shell only */}
       {isTauri && <WindowControls />}

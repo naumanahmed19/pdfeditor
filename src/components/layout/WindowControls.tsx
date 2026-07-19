@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Minus, Square, Copy, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Tip } from "../ui/tooltip";
 
 /**
  * Custom min/maximize/close buttons for the frameless (decorations: false)
@@ -57,19 +58,20 @@ function WinButton({
   danger?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      className={
-        "inline-flex h-full w-11 items-center justify-center text-muted-foreground transition-colors " +
-        (danger
-          ? "hover:bg-destructive hover:text-destructive-foreground"
-          : "hover:bg-accent hover:text-foreground")
-      }
-    >
-      {children}
-    </button>
+    <Tip label={title} side="bottom">
+      <button
+        type="button"
+        aria-label={title}
+        onClick={onClick}
+        className={
+          "inline-flex h-full w-11 items-center justify-center text-muted-foreground transition-colors " +
+          (danger
+            ? "hover:bg-destructive hover:text-destructive-foreground"
+            : "hover:bg-accent hover:text-foreground")
+        }
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }

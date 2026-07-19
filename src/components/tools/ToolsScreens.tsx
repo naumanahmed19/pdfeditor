@@ -29,6 +29,7 @@ import { Input } from "../ui/input";
 import { Radio, RadioGroup } from "../ui/radio";
 import { Select } from "../ui/select";
 import { Slider } from "../ui/slider";
+import { Tip } from "../ui/tooltip";
 import { Thumbnail } from "../layout/Sidebar";
 import {
   addHeadersFooters,
@@ -298,16 +299,18 @@ function IconBtn({
   disabled?: boolean;
 }) {
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      className="h-6 w-6 rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
-    >
-      {children}
-    </Button>
+    <Tip label={title}>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={title}
+        disabled={disabled}
+        onClick={onClick}
+        className="h-6 w-6 rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
+      >
+        {children}
+      </Button>
+    </Tip>
   );
 }
 

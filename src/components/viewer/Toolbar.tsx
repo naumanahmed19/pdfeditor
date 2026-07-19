@@ -972,29 +972,39 @@ export function EditorToolbar() {
 
       <div className="flex shrink-0 items-center gap-1">
         {app.activeProtected && (
-          <button
-            onClick={() => app.setSecurityModalOpen(true)}
-            title={
+          <Tip
+            label={
               app.docPermissions.restricted
-                ? "Restricted document — click to view permissions or unlock"
+                ? "Restricted document"
                 : app.activeWrapped
-                  ? "Locked to PickPDF — other viewers see a notice page. Click for options"
-                  : "Encrypted document — click for security options"
+                  ? "PickPDF-locked document"
+                  : "Encrypted document"
             }
-            className={cn(
-              "flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
+            desc={
               app.docPermissions.restricted
-                ? "bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-400"
-                : "bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-400",
-            )}
+                ? "View permissions or unlock"
+                : app.activeWrapped
+                  ? "Other viewers see a notice page. Open security options."
+                  : "Open security options"
+            }
           >
-            <Lock className="h-3.5 w-3.5" />
-            {app.docPermissions.restricted
-              ? "Restricted"
-              : app.activeWrapped
-                ? "PickPDF-locked"
-                : "Protected"}
-          </button>
+            <button
+              onClick={() => app.setSecurityModalOpen(true)}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
+                app.docPermissions.restricted
+                  ? "bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-400"
+                  : "bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-400",
+              )}
+            >
+              <Lock className="h-3.5 w-3.5" />
+              {app.docPermissions.restricted
+                ? "Restricted"
+                : app.activeWrapped
+                  ? "PickPDF-locked"
+                  : "Protected"}
+            </button>
+          </Tip>
         )}
         {app.tool === "redact" && app.redactCount === 0 && (
           <span className="rounded-md bg-red-500/10 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400">
@@ -1002,15 +1012,19 @@ export function EditorToolbar() {
           </span>
         )}
         {app.redactCount > 0 && (
-          <Button
-            size="sm"
-            className="h-7 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
-            onClick={app.applyRedactions}
-            title="Permanently delete the text and images under every redaction box (verified after applying; annotations and metadata are not removed)"
+          <Tip
+            label="Apply redactions"
+            desc="Permanently deletes text and images under every redaction box; annotations and metadata are not removed."
           >
-            <SquareSlash className="h-3.5 w-3.5" />
-            Apply {app.redactCount} redaction{app.redactCount === 1 ? "" : "s"}
-          </Button>
+            <Button
+              size="sm"
+              className="h-7 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
+              onClick={app.applyRedactions}
+            >
+              <SquareSlash className="h-3.5 w-3.5" />
+              Apply {app.redactCount} redaction{app.redactCount === 1 ? "" : "s"}
+            </Button>
+          </Tip>
         )}
         {app.pendingStamp && (
           <span className="rounded-md bg-blue-500/10 px-2 py-1 text-xs font-medium text-blue-600 dark:text-blue-400">
@@ -1131,30 +1145,36 @@ export function EditorToolbar() {
                 aria-label="Edit scope"
                 className="shrink-0"
               >
-                <ToggleGroupItem
-                  value="line"
-                  aria-label="Edit one line"
-                  title="Edit a single line at a time"
-                  className="h-7 w-auto px-2.5 text-xs"
+                <Tip label="Line" desc="Edit a single line at a time">
+                  <ToggleGroupItem
+                    value="line"
+                    aria-label="Edit one line"
+                    className="h-7 w-auto px-2.5 text-xs"
+                  >
+                    Line
+                  </ToggleGroupItem>
+                </Tip>
+                <Tip label="Paragraph" desc="Edit the whole paragraph around the clicked line">
+                  <ToggleGroupItem
+                    value="paragraph"
+                    aria-label="Edit the paragraph"
+                    className="h-7 w-auto px-2.5 text-xs"
+                  >
+                    Paragraph
+                  </ToggleGroupItem>
+                </Tip>
+                <Tip
+                  label="Block"
+                  desc="Edit the whole contiguous text block, across paragraph breaks"
                 >
-                  Line
-                </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="paragraph"
-                  aria-label="Edit the paragraph"
-                  title="Edit the whole paragraph around the clicked line"
-                  className="h-7 w-auto px-2.5 text-xs"
-                >
-                  Paragraph
-                </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="block"
-                  aria-label="Edit the text block"
-                  title="Edit the whole contiguous text block, across paragraph breaks"
-                  className="h-7 w-auto px-2.5 text-xs"
-                >
-                  Block
-                </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="block"
+                    aria-label="Edit the text block"
+                    className="h-7 w-auto px-2.5 text-xs"
+                  >
+                    Block
+                  </ToggleGroupItem>
+                </Tip>
               </ToggleGroup>
               <Separator orientation="vertical" className="h-6 shrink-0" />
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">

@@ -45,6 +45,7 @@ import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Button } from "../ui/button";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
+import { Tip } from "../ui/tooltip";
 
 // Memoized: no props, so parent (Shell) re-renders don't touch it; it and its
 // panels track their own store slices via useAppSelector.
@@ -235,7 +236,7 @@ function collectFileNames(
 
 function RecentList() {
   const app = useAppSelector(
-    (s) => ({ folderRoot: s.folderRoot, recentFiles: s.recentFiles, requestOpen: s.requestOpen, openFolder: s.openFolder, folderBusy: s.folderBusy, recentLoading: s.recentLoading }),
+    (s) => ({ folderRoot: s.folderRoot, recentFiles: s.recentFiles, requestOpen: s.requestOpen, openFolder: s.openFolder, folderBusy: s.folderBusy, recentLoading: s.recentLoading, clearRecent: s.clearRecent, closeAllTabs: s.closeAllTabs }),
     shallowEqual,
   );
   // Files that live in the opened folder tree are shown there, not in the
@@ -247,66 +248,120 @@ function RecentList() {
   const closedDocs = app.recentFiles.filter(
     (r) => !r.open && !folderNames.has(r.name),
   );
+  const [openExpanded, setOpenExpanded] = useState(true);
+  const [closedExpanded, setClosedExpanded] = useState(true);
+  const hasOpenDocs = app.recentFiles.some((r) => r.open);
 
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
       <div className="flex items-center justify-between pb-0.5 pr-0.5">
-        <SectionLabel>Open</SectionLabel>
+        <SectionToggle
+          expanded={openExpanded}
+          count={app.recentFiles.filter((r) => r.open).length}
+          onToggle={() => setOpenExpanded((expanded) => !expanded)}
+        >
+          Open
+        </SectionToggle>
         <div className="flex items-center gap-0.5">
-          <button
-            title="Open a PDF"
-            onClick={() => void app.requestOpen()}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-          <button
-            title="Open a folder of PDFs"
-            onClick={() => void app.openFolder()}
-            disabled={app.folderBusy}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:opacity-50"
-          >
-            {app.folderBusy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <FolderOpen className="h-3.5 w-3.5" />
-            )}
-          </button>
+          <Tip label="Open a PDF">
+            <button
+              aria-label="Open a PDF"
+              onClick={() => void app.requestOpen()}
+              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </Tip>
+          <Tip label="Open a folder of PDFs">
+            <button
+              aria-label="Open a folder of PDFs"
+              onClick={() => void app.openFolder()}
+              disabled={app.folderBusy}
+              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:opacity-50"
+            >
+              {app.folderBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FolderOpen className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tip>
+          {hasOpenDocs && (
+            <Menu>
+              <Tip label="More open document actions">
+                <MenuTrigger
+                  aria-label="More open document actions"
+                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                >
+                  <MoreVertical className="h-3.5 w-3.5" />
+                </MenuTrigger>
+              </Tip>
+              <MenuContent align="end" className="min-w-40">
+                <MenuItem onClick={() => app.closeAllTabs()}>
+                  <X className="h-4 w-4" />
+                  Close all
+                </MenuItem>
+              </MenuContent>
+            </Menu>
+          )}
         </div>
       </div>
 
-      {app.folderRoot && <FolderSection root={app.folderRoot} />}
-
-      {app.recentLoading ? (
-        <RecentListSkeleton />
-      ) : (
+      {openExpanded && (
         <>
-          {openDocs.length > 0 && (
-            <div className="flex flex-col gap-0.5 pb-1">
-              {openDocs.map((r) => (
+          {app.folderRoot && <FolderSection root={app.folderRoot} />}
+          {app.recentLoading ? (
+            <RecentListSkeleton />
+          ) : (
+            <>
+              {openDocs.length > 0 && (
+                <div className="flex flex-col gap-0.5 pb-1">
+                  {openDocs.map((r) => (
+                    <RecentRow key={r.id} r={r} />
+                  ))}
+                </div>
+              )}
+
+              {!openDocs.length && !app.folderRoot && (
+                <p className="px-2 pb-2 text-[11px] text-muted-foreground">
+                  No document open. Use + to open a file or the folder icon to browse
+                  a folder.
+                </p>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {!app.recentLoading && closedDocs.length > 0 && (
+        <div className="pt-2">
+          <div className="flex items-center justify-between pr-1">
+            <SectionToggle
+              expanded={closedExpanded}
+              count={closedDocs.length}
+              onToggle={() => setClosedExpanded((expanded) => !expanded)}
+            >
+              Recently closed
+            </SectionToggle>
+            <Tip label="Clear all" side="top">
+              <button
+                type="button"
+                aria-label="Clear all recently closed items"
+                onClick={() => void app.clearRecent()}
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </Tip>
+          </div>
+          {closedExpanded && (
+            <div className="flex flex-col gap-0.5">
+              {closedDocs.map((r) => (
                 <RecentRow key={r.id} r={r} />
               ))}
             </div>
           )}
-
-          {!openDocs.length && !app.folderRoot && (
-            <p className="px-2 pb-2 text-[11px] text-muted-foreground">
-              No document open. Use + to open a file or the folder icon to browse
-              a folder.
-            </p>
-          )}
-
-          {closedDocs.length > 0 && (
-            <div className="pt-2">
-              <SectionLabel>Recently closed</SectionLabel>
-              <div className="flex flex-col gap-0.5">
-                {closedDocs.map((r) => (
-                  <RecentRow key={r.id} r={r} />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
+        </div>
       )}
     </div>
   );
@@ -345,24 +400,28 @@ function FolderSection({ root }: { root: FolderNode }) {
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           )}
           <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium" title={root.name}>
-            {root.name}
-          </span>
+          <Tip label={root.name}>
+            <span className="min-w-0 flex-1 truncate text-xs font-medium">{root.name}</span>
+          </Tip>
         </button>
-        <button
-          onClick={() => void app.openFolder()}
-          title="Open another folder"
-          className="rounded p-0.5 text-muted-foreground opacity-0 transition-colors hover:bg-accent hover:text-foreground group-hover:opacity-100"
-        >
-          <FolderOpen className="h-3 w-3" />
-        </button>
-        <button
-          onClick={() => app.closeFolder()}
-          title="Close folder"
-          className="rounded p-0.5 text-muted-foreground opacity-0 transition-colors hover:bg-accent hover:text-foreground group-hover:opacity-100"
-        >
-          <X className="h-3 w-3" />
-        </button>
+        <Tip label="Open another folder">
+          <button
+            onClick={() => void app.openFolder()}
+            aria-label="Open another folder"
+            className="rounded p-0.5 text-muted-foreground opacity-0 transition-colors hover:bg-accent hover:text-foreground group-hover:opacity-100"
+          >
+            <FolderOpen className="h-3 w-3" />
+          </button>
+        </Tip>
+        <Tip label="Close folder">
+          <button
+            onClick={() => app.closeFolder()}
+            aria-label="Close folder"
+            className="rounded p-0.5 text-muted-foreground opacity-0 transition-colors hover:bg-accent hover:text-foreground group-hover:opacity-100"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </Tip>
       </div>
       {open &&
         (root.children ?? []).map((n) => (
@@ -372,17 +431,9 @@ function FolderSection({ root }: { root: FolderNode }) {
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-      {children}
-    </p>
-  );
-}
-
 function RecentRow({ r }: { r: RecentFile }) {
   const app = useAppSelector(
-    (s) => ({ activeTabId: s.activeTabId, tabs: s.tabs, openRecent: s.openRecent, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen, openInPane: s.openInPane, closeTab: s.closeTab }),
+    (s) => ({ activeTabId: s.activeTabId, tabs: s.tabs, openRecent: s.openRecent, removeRecent: s.removeRecent, isMobile: s.isMobile, setSidebarOpen: s.setSidebarOpen, openInPane: s.openInPane, closeTab: s.closeTab }),
     shallowEqual,
   );
   const isActive = r.id === app.activeTabId;
@@ -405,7 +456,6 @@ function RecentRow({ r }: { r: RecentFile }) {
           open();
         }
       }}
-      title={r.name}
       className={cn(
         "group flex cursor-pointer items-center gap-2 rounded-md border-l-2 px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         isActive
@@ -419,55 +469,79 @@ function RecentRow({ r }: { r: RecentFile }) {
           isActive ? "text-foreground" : "text-muted-foreground",
         )}
       />
-      <span className="min-w-0 flex-1 truncate">{r.name}</span>
+      <Tip label={r.name}>
+        <span className="min-w-0 flex-1 truncate">{r.name}</span>
+      </Tip>
       {r.open ? (
         <>
-          <span
-            className={cn(
-              "h-1.5 w-1.5 shrink-0 rounded-full group-hover:hidden",
-              !isLoaded
-                ? "border border-muted-foreground/50"
-                : hasEdits
-                  ? "bg-amber-500"
-                  : "bg-emerald-500",
-            )}
-            title={
+          <Tip
+            label={
               !isLoaded
                 ? "Open — click to load"
                 : hasEdits
                   ? "Unsaved edits"
                   : "Currently open"
             }
-          />
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 shrink-0 rounded-full group-hover:hidden",
+                !isLoaded
+                  ? "border border-muted-foreground/50"
+                  : hasEdits
+                    ? "bg-amber-500"
+                    : "bg-emerald-500",
+              )}
+            />
+          </Tip>
           <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
             {isLoaded && (
+              <Tip label="Open in a split pane">
+                <button
+                  className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  aria-label="Open in a split pane"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    app.openInPane(r.id);
+                  }}
+                >
+                  <Columns2 className="h-3 w-3" />
+                </button>
+              </Tip>
+            )}
+            <Tip label="Close document">
               <button
                 className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                title="Open in a split pane"
+                aria-label="Close document"
                 onClick={(e) => {
                   e.stopPropagation();
-                  app.openInPane(r.id);
+                  app.closeTab(r.id);
                 }}
               >
-                <Columns2 className="h-3 w-3" />
+                <X className="h-3 w-3" />
               </button>
-            )}
+            </Tip>
+          </div>
+        </>
+      ) : (
+        <>
+          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden group-focus-within:hidden">
+            {timeAgo(r.lastOpened)}
+          </span>
+          <Tip label="Remove from recents">
             <button
-              className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title="Close document"
+              type="button"
+              aria-label={`Remove ${r.name} from recents`}
+              className="hidden shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground group-hover:block group-focus-within:block"
               onClick={(e) => {
                 e.stopPropagation();
-                app.closeTab(r.id);
+                void app.removeRecent(r.id);
               }}
             >
               <X className="h-3 w-3" />
             </button>
-          </div>
+          </Tip>
         </>
-      ) : (
-        <span className="shrink-0 text-[10px] text-muted-foreground">
-          {timeAgo(r.lastOpened)}
-        </span>
       )}
     </div>
   );
@@ -524,19 +598,20 @@ function MoreTabsMenu({
 
   return (
     <Menu>
-      <MenuTrigger
-        aria-label="More panels"
-        title={active ? active.label : "More panels"}
-        className={cn(
-          "flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium transition-colors",
-          active
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <TriggerIcon className="h-4 w-4" />
-        {active && <ChevronDown className="h-3 w-3 opacity-60" />}
-      </MenuTrigger>
+      <Tip label={active ? active.label : "More panels"}>
+        <MenuTrigger
+          aria-label="More panels"
+          className={cn(
+            "flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium transition-colors",
+            active
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <TriggerIcon className="h-4 w-4" />
+          {active && <ChevronDown className="h-3 w-3 opacity-60" />}
+        </MenuTrigger>
+      </Tip>
       <MenuContent align="end" className="min-w-40">
         {MORE_TABS.map((t) => (
           <MenuItem
@@ -567,10 +642,9 @@ function TabButton({
   label: string;
   iconOnly?: boolean;
 }) {
-  return (
+  const button = (
     <button
       onClick={onClick}
-      title={iconOnly ? label : undefined}
       aria-label={label}
       className={cn(
         "flex items-center gap-1.5 rounded-md text-xs font-medium transition-colors",
@@ -582,6 +656,36 @@ function TabButton({
     >
       {icon}
       {!iconOnly && label}
+    </button>
+  );
+  return iconOnly ? <Tip label={label}>{button}</Tip> : button;
+}
+
+function SectionToggle({
+  children,
+  expanded,
+  count,
+  onToggle,
+}: {
+  children: React.ReactNode;
+  expanded: boolean;
+  count: number;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      onClick={onToggle}
+      className="flex min-w-0 items-center gap-1 rounded px-1 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+    >
+      {expanded ? (
+        <ChevronDown className="h-3 w-3 shrink-0" />
+      ) : (
+        <ChevronRight className="h-3 w-3 shrink-0" />
+      )}
+      <span className="truncate">{children}</span>
+      <span className="font-normal tabular-nums opacity-70">{count}</span>
     </button>
   );
 }
@@ -648,19 +752,20 @@ function PageInsertSlot({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-      className="group mx-auto flex w-[150px] items-center gap-1 py-0.5 text-muted-foreground transition-colors hover:text-foreground"
-    >
-      <span className="h-px flex-1 bg-sidebar-border transition-colors group-hover:bg-primary/50" />
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-sidebar shadow-sm transition-colors group-hover:border-primary/60 group-hover:bg-background">
-        <Plus className="h-3 w-3" />
-      </span>
-      <span className="h-px flex-1 bg-sidebar-border transition-colors group-hover:bg-primary/50" />
-    </button>
+    <Tip label={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={onClick}
+        className="group mx-auto flex w-[150px] items-center gap-1 py-0.5 text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span className="h-px flex-1 bg-sidebar-border transition-colors group-hover:bg-primary/50" />
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-sidebar shadow-sm transition-colors group-hover:border-primary/60 group-hover:bg-background">
+          <Plus className="h-3 w-3" />
+        </span>
+        <span className="h-px flex-1 bg-sidebar-border transition-colors group-hover:bg-primary/50" />
+      </button>
+    </Tip>
   );
 }
 
@@ -770,23 +875,23 @@ function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
   const isActive = !!openDoc && openDoc.id === app.activeTabId;
 
   return (
-    <button
-      onClick={() => {
-        if (openDoc) app.openRecent(openDoc.id);
-        else void app.openTreeFile(node);
-        if (app.isMobile) app.setSidebarOpen(false);
-      }}
-      title={node.name}
-      style={{ paddingLeft: pad + 18 }}
-      className={cn(
-        "flex w-full items-center gap-1.5 rounded-md border-l-2 py-1 pr-2 text-left text-xs transition-colors",
-        isActive
-          ? "border-primary bg-sidebar-accent font-medium text-foreground"
-          : openDoc
-            ? "border-transparent text-foreground hover:bg-sidebar-accent"
-            : "border-transparent text-sidebar-foreground hover:bg-sidebar-accent",
-      )}
-    >
+    <Tip label={node.name} side="right">
+      <button
+        onClick={() => {
+          if (openDoc) app.openRecent(openDoc.id);
+          else void app.openTreeFile(node);
+          if (app.isMobile) app.setSidebarOpen(false);
+        }}
+        style={{ paddingLeft: pad + 18 }}
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded-md border-l-2 py-1 pr-2 text-left text-xs transition-colors",
+          isActive
+            ? "border-primary bg-sidebar-accent font-medium text-foreground"
+            : openDoc
+              ? "border-transparent text-foreground hover:bg-sidebar-accent"
+              : "border-transparent text-sidebar-foreground hover:bg-sidebar-accent",
+        )}
+      >
       <FileText
         className={cn(
           "h-3.5 w-3.5 shrink-0",
@@ -794,13 +899,9 @@ function FolderTreeNode({ node, depth }: { node: FolderNode; depth: number }) {
         )}
       />
       <span className="min-w-0 flex-1 truncate">{node.name}</span>
-      {openDoc && (
-        <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
-          title="Open"
-        />
-      )}
-    </button>
+        {openDoc && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />}
+      </button>
+    </Tip>
   );
 }
 
@@ -848,18 +949,20 @@ function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
           <span className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             Editing outline
           </span>
-          <button
-            onClick={() =>
-              setDraft((d) => [
-                ...(d ?? []),
-                { title: `Page ${app.currentPage + 1}`, pageIndex: app.currentPage, children: [] },
-              ])
-            }
-            title="Add an entry for the current page"
-            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+          <Tip label="Add an entry for the current page">
+            <button
+              onClick={() =>
+                setDraft((d) => [
+                  ...(d ?? []),
+                  { title: `Page ${app.currentPage + 1}`, pageIndex: app.currentPage, children: [] },
+                ])
+              }
+              aria-label="Add an entry for the current page"
+              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </Tip>
         </div>
         <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
           {draft.length === 0 ? (
@@ -892,13 +995,15 @@ function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-1 px-3 pb-1 pt-2">
         <span className="flex-1" />
-        <button
-          onClick={startEdit}
-          title="Edit outline (add / rename / remove entries)"
-          className="flex h-5 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-        >
-          <Pencil className="h-3 w-3" /> Edit
-        </button>
+        <Tip label="Edit outline" desc="Add, rename, or remove entries">
+          <button
+            onClick={startEdit}
+            aria-label="Edit outline"
+            className="flex h-5 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+          >
+            <Pencil className="h-3 w-3" /> Edit
+          </button>
+        </Tip>
       </div>
       {!outline.length ? (
         <p className="px-4 py-1 text-xs text-muted-foreground">
@@ -933,15 +1038,16 @@ function OutlineTree({
     <div className="flex flex-col">
       {nodes.map((n, i) => (
         <div key={i}>
-          <button
-            disabled={n.pageIndex === null}
-            onClick={() => n.pageIndex !== null && onGoto(n.pageIndex)}
-            className="w-full truncate rounded px-2 py-1 text-left text-xs text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-60"
-            style={{ paddingLeft: 8 + depth * 14 }}
-            title={n.title}
-          >
-            {n.title}
-          </button>
+          <Tip label={n.title} side="right">
+            <button
+              disabled={n.pageIndex === null}
+              onClick={() => n.pageIndex !== null && onGoto(n.pageIndex)}
+              className="w-full truncate rounded px-2 py-1 text-left text-xs text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-60"
+              style={{ paddingLeft: 8 + depth * 14 }}
+            >
+              {n.title}
+            </button>
+          </Tip>
           {n.children.length > 0 && (
             <OutlineTree nodes={n.children} depth={depth + 1} onGoto={onGoto} />
           )}
@@ -995,55 +1101,48 @@ function OutlineEditorTree({
               onChange={(e) => patch(i, { ...n, title: e.target.value })}
               className="h-6 min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-xs text-sidebar-foreground focus:border-input focus:bg-background focus:outline-none"
             />
-            <button
-              className={cn(btn, "text-[9px] font-semibold tabular-nums")}
-              title={
-                n.pageIndex === null
-                  ? "No target page — click to set to the current page"
-                  : `Goes to page ${n.pageIndex + 1} — click to retarget to the current page`
-              }
-              onClick={() => patch(i, { ...n, pageIndex: app.currentPage })}
-            >
-              {n.pageIndex === null ? "—" : `p${n.pageIndex + 1}`}
-            </button>
+            <Tip label="Retarget to the current page">
+              <button
+                className={cn(btn, "text-[9px] font-semibold tabular-nums")}
+                aria-label="Retarget to the current page"
+                onClick={() => patch(i, { ...n, pageIndex: app.currentPage })}
+              >
+                {n.pageIndex === null ? "—" : `p${n.pageIndex + 1}`}
+              </button>
+            </Tip>
             <div className="hidden shrink-0 items-center group-hover:flex">
-              <button className={btn} title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
-                <ArrowUp className="h-3 w-3" />
-              </button>
-              <button
-                className={btn}
-                title="Move down"
-                disabled={i === nodes.length - 1}
-                onClick={() => move(i, 1)}
-              >
-                <ArrowDown className="h-3 w-3" />
-              </button>
-              <button
-                className={btn}
-                title="Add sub-entry (targets the current page)"
-                onClick={() =>
-                  patch(i, {
-                    ...n,
-                    children: [
-                      ...n.children,
-                      {
-                        title: `Page ${app.currentPage + 1}`,
-                        pageIndex: app.currentPage,
-                        children: [],
-                      },
-                    ],
-                  })
-                }
-              >
-                <Plus className="h-3 w-3" />
-              </button>
-              <button
-                className={btn}
-                title="Remove (children too)"
-                onClick={() => patch(i, null)}
-              >
-                <Trash2 className="h-3 w-3 text-destructive" />
-              </button>
+              <Tip label="Move up">
+                <button className={btn} aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp className="h-3 w-3" /></button>
+              </Tip>
+              <Tip label="Move down">
+                <button className={btn} aria-label="Move down" disabled={i === nodes.length - 1} onClick={() => move(i, 1)}><ArrowDown className="h-3 w-3" /></button>
+              </Tip>
+              <Tip label="Add sub-entry" desc="Targets the current page">
+                <button
+                  className={btn}
+                  aria-label="Add sub-entry"
+                  onClick={() =>
+                    patch(i, {
+                      ...n,
+                      children: [
+                        ...n.children,
+                        {
+                          title: `Page ${app.currentPage + 1}`,
+                          pageIndex: app.currentPage,
+                          children: [],
+                        },
+                      ],
+                    })
+                  }
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+              </Tip>
+              <Tip label="Remove" desc="Also removes child entries">
+                <button className={btn} aria-label="Remove outline entry" onClick={() => patch(i, null)}>
+                  <Trash2 className="h-3 w-3 text-destructive" />
+                </button>
+              </Tip>
             </div>
           </div>
           {n.children.length > 0 && (
@@ -1126,13 +1225,15 @@ function AttachmentsPanel() {
         <span className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           Attached files
         </span>
-        <button
-          onClick={() => fileRef.current?.click()}
-          title="Attach a file to this document"
-          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+        <Tip label="Attach a file to this document">
+          <button
+            onClick={() => fileRef.current?.click()}
+            aria-label="Attach a file to this document"
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </Tip>
         <input
           ref={fileRef}
           type="file"
@@ -1160,27 +1261,31 @@ function AttachmentsPanel() {
                 className="group flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs hover:bg-sidebar-accent"
               >
                 <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate" title={att.name}>
-                  {att.name || "(unnamed)"}
-                </span>
+                <Tip label={att.name || "(unnamed)"}>
+                  <span className="min-w-0 flex-1 truncate">{att.name || "(unnamed)"}</span>
+                </Tip>
                 <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden">
                   {formatBytes(att.size)}
                 </span>
                 <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-                  <button
-                    className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    title="Save file"
-                    onClick={() => void download(att)}
-                  >
-                    <Download className="h-3 w-3" />
-                  </button>
-                  <button
-                    className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
-                    title="Remove attachment"
-                    onClick={() => remove(att)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                  <Tip label="Save file">
+                    <button
+                      className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      aria-label="Save file"
+                      onClick={() => void download(att)}
+                    >
+                      <Download className="h-3 w-3" />
+                    </button>
+                  </Tip>
+                  <Tip label="Remove attachment">
+                    <button
+                      className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+                      aria-label="Remove attachment"
+                      onClick={() => remove(att)}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </Tip>
                 </div>
               </div>
             ))}
@@ -1280,30 +1385,32 @@ function LayersPanel() {
                 className="flex items-center gap-1.5 rounded-md py-0.5 pr-1 text-xs hover:bg-sidebar-accent"
                 style={{ paddingLeft: 4 + l.depth * 14 }}
               >
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-                  title={l.visible ? "Hide layer" : "Show layer"}
-                  aria-label={`${l.visible ? "Hide" : "Show"} layer ${l.name}`}
-                  aria-pressed={l.visible}
-                  onClick={() => setVisibility([l.id], !l.visible, "Layer visibility changed")}
-                >
-                  {l.visible ? (
-                    <Eye className="h-3.5 w-3.5" />
-                  ) : (
-                    <EyeOff className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate",
-                    !l.visible && "text-muted-foreground",
-                  )}
-                  title={l.name}
-                >
-                  {l.name}
-                </span>
+                <Tip label={l.visible ? "Hide layer" : "Show layer"}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                    aria-label={`${l.visible ? "Hide" : "Show"} layer ${l.name}`}
+                    aria-pressed={l.visible}
+                    onClick={() => setVisibility([l.id], !l.visible, "Layer visibility changed")}
+                  >
+                    {l.visible ? (
+                      <Eye className="h-3.5 w-3.5" />
+                    ) : (
+                      <EyeOff className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </Tip>
+                <Tip label={l.name}>
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate",
+                      !l.visible && "text-muted-foreground",
+                    )}
+                  >
+                    {l.name}
+                  </span>
+                </Tip>
               </div>
             ))}
           </div>
@@ -1351,13 +1458,15 @@ function SignaturesPanel() {
         <span className="flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           Digital signatures
         </span>
-        <button
-          onClick={() => app.setSignModalOpen(true)}
-          title="Sign with a certificate (.p12/.pfx)"
-          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+        <Tip label="Sign with a certificate (.p12/.pfx)">
+          <button
+            onClick={() => app.setSignModalOpen(true)}
+            aria-label="Sign with a certificate (.p12/.pfx)"
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </Tip>
       </div>
       <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
         {list === null ? (
@@ -1404,9 +1513,11 @@ function SignatureRow({ sig }: { sig: SignatureInfo }) {
     <div className="rounded-md border border-sidebar-border/60 px-2 py-1.5 text-xs">
       <div className="flex items-center gap-1.5">
         <Icon className={cn("h-3.5 w-3.5 shrink-0", tone)} />
-        <span className="min-w-0 flex-1 truncate font-medium" title={sig.fieldName}>
-          {sig.signerName ?? "(unknown signer)"}
-        </span>
+        <Tip label={sig.fieldName}>
+          <span className="min-w-0 flex-1 truncate font-medium">
+            {sig.signerName ?? "(unknown signer)"}
+          </span>
+        </Tip>
         <span className={cn("shrink-0 text-[10px] font-medium", tone)}>{headline}</span>
       </div>
       <p className="pt-1 text-[11px] leading-snug text-muted-foreground">
