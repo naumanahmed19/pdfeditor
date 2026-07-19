@@ -86,6 +86,10 @@ export function InlineTextEditor({
       // Select-all invites replacing the text wholesale — right for a single
       // line, an accident waiting to happen for a whole paragraph.
       if (lineCount > 1) t.setSelectionRange(0, 0);
+      // Bare CFF/Type1 subsets cannot be registered with FontFace. Leave the
+      // original page paint visible and put the caret at the end instead of
+      // covering it with a blue select-all block in a substitute face.
+      else if (!edit.embeddedFont) t.setSelectionRange(t.value.length, t.value.length);
       else t.select();
     }
   }, []);
@@ -135,6 +139,14 @@ export function InlineTextEditor({
   // leading, so the editor's lines sit on the page's lines.
   const lineH = lineCount > 1 ? baseH / lineCount : baseH;
   const boxH = lineH * rows;
+  const originalPaintUnchanged =
+    family === "original" &&
+    !embeddedFamily &&
+    value === edit.original &&
+    colorHex.toLowerCase() === edit.colorHex.toLowerCase() &&
+    sizePt === Math.round(edit.fontSize) &&
+    bold === edit.bold &&
+    italic === edit.italic;
 
   return (
     <div
@@ -175,13 +187,19 @@ export function InlineTextEditor({
             onCancel();
           }
         }}
-        className="block resize-none overflow-hidden whitespace-pre rounded-[2px] bg-white shadow-sm outline outline-2 outline-primary"
+        className="block resize-none overflow-hidden whitespace-pre rounded-[2px] shadow-sm outline outline-2 outline-primary"
         style={{
           width: Math.max(edit.width + 24, 60),
           height: boxH,
           fontSize: fontPx,
           lineHeight: `${lineH}px`,
-          color: colorHex,
+          // When the browser cannot load the real embedded font, an untouched
+          // edit session should not repaint the line in Helvetica. Transparent
+          // text/background reveal the exact PDF rendering underneath. As soon
+          // as content or styling changes, the normal editable preview appears.
+          color: originalPaintUnchanged ? "transparent" : colorHex,
+          caretColor: colorHex,
+          backgroundColor: originalPaintUnchanged ? "transparent" : "white",
           padding: "0 1px",
           fontFamily:
             family === "original"

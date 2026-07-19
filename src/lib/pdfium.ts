@@ -618,6 +618,42 @@ export interface TextObject {
   originY: number;
 }
 
+/**
+ * Font size after the text object's affine matrix is applied. Illustrator and
+ * other authoring tools commonly emit text at size 1 and put the real point
+ * size in the matrix, so FPDFTextObj_GetFontSize alone is not a visual size.
+ * The transformed font-height vector is (c,d); fall back to the baseline
+ * vector only for a degenerate matrix.
+ */
+export function effectiveFontSize(
+  rawSize: number,
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+): number {
+  const verticalScale = Math.hypot(c, d);
+  const scale = verticalScale > 1e-6 ? verticalScale : Math.hypot(a, b);
+  return rawSize * (scale > 1e-6 ? scale : 1);
+}
+
+/** Convert a requested visual point size back to the object's raw font size. */
+function rawSizeForVisualTarget(
+  rawSize: number,
+  matrix: number[],
+  visualTarget: number | undefined,
+): number {
+  if (visualTarget == null) return rawSize;
+  const current = effectiveFontSize(
+    rawSize,
+    matrix[0],
+    matrix[1],
+    matrix[2],
+    matrix[3],
+  );
+  return current > 1e-6 ? rawSize * (visualTarget / current) : visualTarget;
+}
+
 /** Write a JS string as a NUL-terminated UTF-16LE buffer; caller frees it. */
 function allocUtf16(mod: WrappedPdfiumModule, str: string): number {
   const rt = rtx(mod);
@@ -711,7 +747,15 @@ export async function getTextObjects(
             rt.getValue(c4 + 8, "i32") & 0xff,
             rt.getValue(c4 + 12, "i32") & 0xff,
           ],
-          fontSize: rt.getValue(fs, "float"),
+          fontSize: hasMatrix
+            ? effectiveFontSize(
+                rt.getValue(fs, "float"),
+                rt.getValue(m6, "float"),
+                rt.getValue(m6 + 4, "float"),
+                rt.getValue(m6 + 8, "float"),
+                rt.getValue(m6 + 12, "float"),
+              )
+            : rt.getValue(fs, "float"),
           fontName,
         });
       }
@@ -836,6 +880,7 @@ export async function getPageObjects(
     const f4 = rt.wasmExports.malloc(16);
     const fs = rt.wasmExports.malloc(4);
     const c4 = rt.wasmExports.malloc(16); // 4 uints for a color read
+    const m6 = rt.wasmExports.malloc(24); // FS_MATRIX (6 floats)
     const readColor = (get: (o: number, r: number, g: number, b: number, a: number) => boolean, obj: number): Rgba => {
       if (!get(obj, c4, c4 + 4, c4 + 8, c4 + 12)) return null;
       const a = rt.getValue(c4 + 12, "i32") & 0xff;
@@ -871,7 +916,16 @@ export async function getPageObjects(
             rt.wasmExports.free(b);
           }
           mod.FPDFTextObj_GetFontSize(obj, fs);
-          fontSize = rt.getValue(fs, "float");
+          const rawSize = rt.getValue(fs, "float");
+          fontSize = mod.FPDFPageObj_GetMatrix(obj, m6)
+            ? effectiveFontSize(
+                rawSize,
+                rt.getValue(m6, "float"),
+                rt.getValue(m6 + 4, "float"),
+                rt.getValue(m6 + 8, "float"),
+                rt.getValue(m6 + 12, "float"),
+              )
+            : rawSize;
         }
         let fontName = "";
         if (type === FPDF_PAGEOBJ_TEXT) {
@@ -914,6 +968,7 @@ export async function getPageObjects(
       rt.wasmExports.free(f4);
       rt.wasmExports.free(fs);
       rt.wasmExports.free(c4);
+      rt.wasmExports.free(m6);
       mod.FPDFText_ClosePage(textPage);
       mod.FPDF_ClosePage(page);
     }
@@ -1067,9 +1122,13 @@ export async function styleTextRuns(
           }
           // Preserve the original placement (matrix), color and size.
           mod.FPDFPageObj_GetMatrix(obj, mPtr);
+          const matrix = Array.from({ length: 6 }, (_, j) =>
+            rt.getValue(mPtr + j * 4, "float"),
+          );
           const fill = style.fill ?? readFillColor(mod, obj);
           mod.FPDFTextObj_GetFontSize(obj, fs);
-          const size = style.fontSize ?? rt.getValue(fs, "float");
+          const rawSize = rt.getValue(fs, "float");
+          const size = rawSizeForVisualTarget(rawSize, matrix, style.fontSize);
 
           const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
           const sp = allocUtf16(mod, r.text);
@@ -1290,7 +1349,7 @@ export async function reflowTextLines(
         createLine(
           extra.text,
           extraFont,
-          spec.fontSize ?? tSize,
+          rawSizeForVisualTarget(tSize, tMatrix, spec.fontSize),
           m,
           tFill,
         );
@@ -1317,7 +1376,8 @@ export async function reflowTextLines(
             rt.getValue(mPtr + i * 4, "float"),
           );
           mod.FPDFTextObj_GetFontSize(first, fs);
-          const size = spec.fontSize ?? rt.getValue(fs, "float");
+          const rawSize = rt.getValue(fs, "float");
+          const size = rawSizeForVisualTarget(rawSize, m, spec.fontSize);
           const fill = spec.fill ?? readFillColor(mod, first);
           createLine(line.text, loadedFont, size, m, fill);
           objs.forEach(removeObj);

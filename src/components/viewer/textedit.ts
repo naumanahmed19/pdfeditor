@@ -58,6 +58,8 @@ export interface InlineEdit {
   anchor: [number, number];
   /** Per-font proven glyphs: all page text drawn with each face. */
   fontChars: Record<string, string>;
+  /** One sample objectIndex per page face: fontName -> objectIndex. */
+  faceIndexes: Record<string, number>;
   /** Same-family runs in other styles: styleKey() -> objectIndex. */
   siblings: Partial<Record<string, number>>;
   /**
@@ -83,6 +85,67 @@ export function familyRoot(name: string): string {
     )
     .replace(/(MT|PS|Std|Pro)$/i, "")
     .toLowerCase();
+}
+
+/**
+ * Typeface part of a base font name: weight/width/slant and foundry tokens
+ * stripped entirely, so "HQMWAZ+UniversLTStd-LightUltraCn",
+ * "Univers67CondensedBold" and "UniversLTStd-Cn" all yield "univers".
+ * Looser than familyRoot (which keeps width, so B/I sibling switching never
+ * jumps to a differently-proportioned face) — used to find same-typeface
+ * faces in the document when the edited run's subset lacks a typed glyph:
+ * any Univers beats a generic bundled substitute.
+ */
+export function typefaceRoot(name: string): string {
+  let n = name
+    .replace(/^[A-Z]{6}\+/, "")
+    .replace(/[^a-zA-Z]/g, "")
+    .toLowerCase();
+  const tokens =
+    /(extrabold|semibold|demibold|bold|black|heavy|italic|oblique|obl|regular|roman|book|extralight|ultralight|light|thin|medium|ultra|condensed|cond|cn|compressed|narrow|wide|extended|std|pro|lt|mt|ps)$/;
+  for (;;) {
+    const next = n.replace(tokens, "");
+    if (next === n) break;
+    n = next;
+  }
+  return n.length >= 3 ? n : "";
+}
+
+/** Weight/width/slant traits read from a base font name. */
+export function faceTraits(name: string): {
+  bold: boolean;
+  italic: boolean;
+  condensed: boolean;
+  light: boolean;
+} {
+  const n = name.replace(/^[A-Z]{6}\+/, "");
+  return {
+    bold: /bold|black|heavy|semib|demib/i.test(n),
+    italic: /italic|oblique|obl$/i.test(n),
+    condensed: /cond|narrow|compres|cn(?![a-bd-z])/i.test(n),
+    light: /light|thin/i.test(n),
+  };
+}
+
+/**
+ * How far a candidate face is from the wanted style, for ranking the
+ * same-typeface fallbacks. Weight/slant mismatches dominate (a Bold where
+ * Regular was asked reads as an error); width and lightness refine.
+ */
+export function faceStyleDistance(
+  candidate: string,
+  target: string,
+  wantBold: boolean,
+  wantItalic: boolean,
+): number {
+  const c = faceTraits(candidate);
+  const t = faceTraits(target);
+  return (
+    (c.bold !== wantBold ? 4 : 0) +
+    (c.italic !== wantItalic ? 4 : 0) +
+    (c.condensed !== t.condensed ? 2 : 0) +
+    (c.light !== t.light ? 1 : 0)
+  );
 }
 
 /**

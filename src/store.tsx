@@ -392,6 +392,8 @@ interface AppStore {
   docName: string | null;
   renameDoc: (name: string) => void;
   docBytes: Uint8Array | null;
+  /** Stable identity of the active document — unchanged across content edits. */
+  docId: string | null;
   pdf: PdfDoc | null;
   numPages: number;
   docVersion: number;
@@ -3832,6 +3834,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     docName: active?.name ?? null,
     renameDoc,
     docBytes: active?.bytes ?? null,
+    docId: active?.id ?? null,
     pdf: active?.pdf ?? null,
     numPages: active?.pdf?.numPages ?? 0,
     docVersion,

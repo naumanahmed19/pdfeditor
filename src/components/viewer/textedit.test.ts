@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   styleKey,
   familyRoot,
+  typefaceRoot,
+  faceStyleDistance,
   detectFontFromName,
   collectLine,
   mapLineEditToRuns,
@@ -64,6 +66,43 @@ describe("familyRoot", () => {
   });
   it("strips a trailing foundry suffix", () => {
     expect(familyRoot("ArialMT")).toBe("arial");
+  });
+});
+
+// --- typefaceRoot -----------------------------------------------------------
+
+describe("typefaceRoot", () => {
+  it("unifies every width/weight cut of one typeface", () => {
+    expect(typefaceRoot("HQMWAZ+UniversLTStd-LightUltraCn")).toBe("univers");
+    expect(typefaceRoot("UniversLTStd-Cn")).toBe("univers");
+    expect(typefaceRoot("Univers67CondensedBold")).toBe("univers");
+    expect(typefaceRoot("ASJHEU+UniversLTStd-LightCnObl")).toBe("univers");
+  });
+  it("keeps distinct typefaces apart", () => {
+    expect(typefaceRoot("Helvetica-Bold")).not.toBe(typefaceRoot("Arial-Bold"));
+    expect(typefaceRoot("OpenSans-Italic")).toBe("opensans");
+  });
+  it("refuses names that are nothing but style tokens", () => {
+    expect(typefaceRoot("Bold")).toBe("");
+    expect(typefaceRoot("")).toBe("");
+  });
+});
+
+// --- faceStyleDistance -------------------------------------------------------
+
+describe("faceStyleDistance", () => {
+  const target = "UniversLTStd-LightUltraCn"; // light, condensed, upright
+  it("prefers the same-width upright cut over bold or oblique ones", () => {
+    const cn = faceStyleDistance("UniversLTStd-Cn", target, false, false);
+    const bold = faceStyleDistance("Univers67CondensedBold", target, false, false);
+    const obl = faceStyleDistance("UniversLTStd-LightCnObl", target, false, false);
+    expect(cn).toBeLessThan(bold);
+    expect(cn).toBeLessThan(obl);
+  });
+  it("prefers a real bold cut when bold is wanted", () => {
+    const bold = faceStyleDistance("Univers67CondensedBold", target, true, false);
+    const light = faceStyleDistance("UniversLTStd-Cn", target, true, false);
+    expect(bold).toBeLessThan(light);
   });
 });
 

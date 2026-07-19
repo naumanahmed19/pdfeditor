@@ -1,3 +1,5 @@
+mod fonts;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   #[cfg(target_os = "macos")]
@@ -6,6 +8,7 @@ pub fn run() {
   let updater = tauri_plugin_updater::Builder::new();
 
   tauri::Builder::default()
+    .invoke_handler(tauri::generate_handler![fonts::match_system_font])
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_opener::init())
     .plugin(updater.build())
