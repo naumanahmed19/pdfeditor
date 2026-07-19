@@ -5,6 +5,7 @@ import { useApp } from "../../store";
 import { cn, uid, ROTATABLE_KINDS } from "../../lib/utils";
 import { MARKUP_COLORS, squigglyPath } from "../../lib/markup";
 import { MARK_STROKE_FRAC, markSegments } from "../../lib/marks";
+import { isDoublePress, type PressPoint } from "../../lib/doublePress";
 import {
   FIELD_FOR_TOOL,
   FIELD_META,
@@ -1039,7 +1040,7 @@ function AnnotationItem({
     startY: number;
     orig: { x: number; y: number; w: number; h: number };
   } | null>(null);
-  const lastDownAt = useRef(0);
+  const lastDown = useRef<PressPoint | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const maxTextWidth = Math.max(40, baseDims.width - ann.x - 2);
@@ -1118,9 +1119,10 @@ function AnnotationItem({
 
     // Canceling pointerdown suppresses the browser's dblclick, so detect
     // double-press by timing to open the text editor.
-    const now = performance.now();
-    const isDouble = mode === "move" && now - lastDownAt.current < 400;
-    lastDownAt.current = now;
+    const press = { at: performance.now(), x: e.clientX, y: e.clientY };
+    const isDouble =
+      mode === "move" && isDoublePress(lastDown.current, press, e.detail);
+    lastDown.current = press;
     if (isDouble && ann.kind === "text") {
       setEditing(true);
       return;
@@ -1172,11 +1174,16 @@ function AnnotationItem({
     };
     const pageBox = { w: baseDims.width, h: baseDims.height };
     let finalBox: { x: number; y: number; w: number; h: number } | null = null;
+    let started = false;
     const onMove = (ev: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
-      const dx = (ev.clientX - d.startX) / scale;
-      const dy = (ev.clientY - d.startY) / scale;
+      const screenDx = ev.clientX - d.startX;
+      const screenDy = ev.clientY - d.startY;
+      if (!started && Math.hypot(screenDx, screenDy) < 4) return;
+      started = true;
+      const dx = screenDx / scale;
+      const dy = screenDy / scale;
       if (d.mode === "move") {
         let next = { ...d.orig, x: d.orig.x + dx, y: d.orig.y + dy };
         // Alt suspends snapping for fine positioning.

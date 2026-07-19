@@ -77,6 +77,7 @@ function ViewerImpl() {
       scale: s.scale,
       selected: s.selected,
       setCurrentPage: s.setCurrentPage,
+      setEditRequestId: s.setEditRequestId,
       setMultiSelected: s.setMultiSelected,
       setPendingStamp: s.setPendingStamp,
       setSelected: s.setSelected,
@@ -385,6 +386,19 @@ function ViewerImpl() {
               y: ann.y + dy,
             });
           }
+        }
+      }
+      if (
+        app.selected &&
+        app.editMode &&
+        (e.key === "Enter" || e.key === "F2")
+      ) {
+        const ann = (app.annotations[app.selected.page] ?? []).find(
+          (a) => a.id === app.selected!.id,
+        );
+        if (ann?.kind === "text") {
+          e.preventDefault();
+          app.setEditRequestId(ann.id);
         }
       }
       // Form builder: Ctrl+A selects every field on the current page.

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
+import { pickSmallestObjectAt } from "../../lib/objectHitTest";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Select } from "../ui/select";
@@ -210,12 +211,13 @@ function ObjectProperties({
 
 type Corner = "nw" | "ne" | "sw" | "se";
 const HANDLE = 9; // px hit radius for resize handles
+const DRAG_START_PX = 4;
 
 /**
  * Native-object branch of the unified Move/select tool: click any existing
- * text run, image or vector shape (rectangles, lines, fills)
- * to select it, drag
- * to move, drag a corner (images/shapes) to resize, recolor via the color chip,
+ * text run, image or vector shape (rectangles, lines, fills) to select it;
+ * double-click text to edit; drag to move; drag a corner (images/shapes) to
+ * resize; recolor via the color chip,
  * or press Delete to remove it. Everything commits through PDFium — true
  * content-stream edits, unified undo.
  */
@@ -237,6 +239,8 @@ export function ObjectLayer({
   const viewportRef = useRef<any>(null);
   const [objects, setObjects] = useState<ScreenObj[]>([]);
   const [sel, setSel] = useState<number | null>(null);
+  const [hovered, setHovered] = useState<number | null>(null);
+  const [pressing, setPressing] = useState(false);
   const [busy, setBusy] = useState(false);
   // Live color while the picker is open (overlay only — the real recolor is
   // committed once on picker close to avoid a PDFium reload per input event).
@@ -254,6 +258,7 @@ export function ObjectLayer({
     startY: number;
     obj: ScreenObj;
     box: ScreenObj["rect"];
+    started: boolean;
   }>(null);
 
   // (Re)load object rects whenever the page bytes change (pdf proxy swaps).
@@ -300,6 +305,7 @@ export function ObjectLayer({
   }, [pdf, pageIndex, scale, app.contentRev]);
 
   const selObj = objects.find((o) => o.index === sel) ?? null;
+  const hoveredObj = objects.find((o) => o.index === hovered) ?? null;
 
   // Only one native object, annotation, or form field may own the selection.
   // Object layers exist per page, so a lightweight event clears selections on
@@ -319,7 +325,7 @@ export function ObjectLayer({
     if (app.selected || app.selectedField) setSel(null);
   }, [app.selected, app.selectedField]);
 
-  // Delete removes the selected object.
+  // Keyboard parity with annotations: delete, dismiss, nudge, or edit text.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -327,6 +333,7 @@ export function ObjectLayer({
         return;
       if ((e.key === "Delete" || e.key === "Backspace") && sel != null && !busy) {
         e.preventDefault();
+        e.stopImmediatePropagation();
         setBusy(true);
         const idx = sel;
         setSel(null);
@@ -334,11 +341,60 @@ export function ObjectLayer({
           .removeObjectAt(pageIndex, idx)
           .catch(() => toast.error("Couldn't delete that object."))
           .finally(() => setBusy(false));
+        return;
+      }
+      if (e.key === "Escape" && sel != null) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setSel(null);
+        return;
+      }
+      if (
+        (e.key === "Enter" || e.key === "F2") &&
+        selObj?.kind === "text" &&
+        layerRef.current
+      ) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const lr = layerRef.current.getBoundingClientRect();
+        onEditText(
+          selObj.index,
+          lr.left + selObj.rect.left + selObj.rect.width / 2,
+          lr.top + selObj.rect.top + selObj.rect.height / 2,
+        );
+        return;
+      }
+      if (
+        selObj &&
+        !busy &&
+        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)
+      ) {
+        const vp = viewportRef.current;
+        if (!vp) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0;
+        const dy = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
+        const [ax, ay] = vp.convertToPdfPoint(0, 0);
+        const [bx, by] = vp.convertToPdfPoint(dx, dy);
+        setBusy(true);
+        app
+          .applyObjectTransform(pageIndex, selObj.index, {
+            a: 1,
+            b: 0,
+            c: 0,
+            d: 1,
+            e: bx - ax,
+            f: by - ay,
+          })
+          .catch(() => toast.error("Couldn't move that object."))
+          .finally(() => setBusy(false));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sel, busy, app, pageIndex]);
+  }, [sel, selObj, busy, app, pageIndex, onEditText]);
 
   const cornerAt = (o: ScreenObj, px: number, py: number): Corner | null => {
     const { left, top, width, height } = o.rect;
@@ -382,17 +438,7 @@ export function ObjectLayer({
   };
 
   const objectAt = (px: number, py: number) =>
-    objects
-      .filter(
-        (o) =>
-          px >= o.rect.left &&
-          px <= o.rect.left + o.rect.width &&
-          py >= o.rect.top &&
-          py <= o.rect.top + o.rect.height,
-      )
-      .sort(
-        (a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height,
-      )[0];
+    pickSmallestObjectAt(objects, px, py);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (busy) return;
@@ -418,8 +464,9 @@ export function ObjectLayer({
           startY: e.clientY,
           obj: selObj,
           box: selObj.rect,
+          started: false,
         };
-        setDrag({ orig: selObj.rect, box: selObj.rect, ghost: cropGhost(selObj.rect) });
+        setPressing(true);
         return;
       }
     }
@@ -427,6 +474,7 @@ export function ObjectLayer({
     // Otherwise pick the smallest object under the point → select + move.
     const hit = objectAt(px, py);
     if (!hit) {
+      setPressing(false);
       setSel(null);
       return;
     }
@@ -451,8 +499,9 @@ export function ObjectLayer({
       startY: e.clientY,
       obj: hit,
       box: hit.rect,
+      started: false,
     };
-    setDrag({ orig: hit.rect, box: hit.rect, ghost: cropGhost(hit.rect) });
+    setPressing(true);
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
@@ -463,19 +512,35 @@ export function ObjectLayer({
     e.stopPropagation();
     e.preventDefault();
     dragRef.current = null;
+    setPressing(false);
     setDrag(null);
     onEditText(hit.index, e.clientX, e.clientY);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
-    if (!d) return;
+    if (!d) {
+      if (!layerRef.current) return;
+      const lr = layerRef.current.getBoundingClientRect();
+      setHovered(
+        objectAt(e.clientX - lr.left, e.clientY - lr.top)?.index ?? null,
+      );
+      return;
+    }
     const dx = e.clientX - d.startX;
     const dy = e.clientY - d.startY;
+    if (!d.started && Math.hypot(dx, dy) < DRAG_START_PX) return;
+    const justStarted = !d.started;
+    d.started = true;
+    setHovered(null);
     if (d.mode === "move") {
       const box = { ...d.obj.rect, left: d.obj.rect.left + dx, top: d.obj.rect.top + dy };
       d.box = box;
-      setDrag((p) => (p ? { ...p, box } : p));
+      if (justStarted) {
+        setDrag({ orig: d.obj.rect, box, ghost: cropGhost(d.obj.rect) });
+      } else {
+        setDrag((p) => (p ? { ...p, box } : p));
+      }
     } else {
       // Aspect-locked resize about the opposite corner.
       const r = d.obj.rect;
@@ -499,14 +564,23 @@ export function ObjectLayer({
         height: nh,
       };
       d.box = box;
-      setDrag((p) => (p ? { ...p, box } : p));
+      if (justStarted) {
+        setDrag({ orig: d.obj.rect, box, ghost: cropGhost(d.obj.rect) });
+      } else {
+        setDrag((p) => (p ? { ...p, box } : p));
+      }
     }
   };
 
   const onPointerUp = () => {
     const d = dragRef.current;
     dragRef.current = null;
+    setPressing(false);
     if (!d) {
+      setDrag(null);
+      return;
+    }
+    if (!d.started) {
       setDrag(null);
       return;
     }
@@ -571,35 +645,57 @@ export function ObjectLayer({
     })();
   };
 
+  const onPointerCancel = () => {
+    dragRef.current = null;
+    setPressing(false);
+    setDrag(null);
+  };
+
   return (
     <div
       ref={layerRef}
       className="absolute inset-0"
-      style={{ cursor: busy ? "wait" : "default", touchAction: "none" }}
+      style={{
+        cursor: busy ? "wait" : hoveredObj ? "move" : "default",
+        touchAction: "none",
+      }}
+      title={
+        hoveredObj?.kind === "text"
+          ? "Drag to move · double-click to edit"
+          : hoveredObj
+            ? "Drag to move"
+            : undefined
+      }
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onPointerLeave={() => !dragRef.current && setHovered(null)}
       onDoubleClick={onDoubleClick}
     >
-      {/* Hover/selectable outlines for each object. */}
-      {objects.map((o) => (
-        <div
-          key={o.index}
-          className={cn(
-            "absolute rounded-[1px]",
-            o.index === sel
-              ? "outline outline-2 outline-primary"
-              : "hover:outline hover:outline-1 hover:outline-primary/50",
-          )}
-          style={{
-            left: o.rect.left,
-            top: o.rect.top,
-            width: o.rect.width,
-            height: o.rect.height,
-            cursor: "move",
-          }}
-        />
-      ))}
+      {/* At most two outlines are mounted: the hovered and selected objects. */}
+      {objects
+        .filter((o) => o.index === sel || o.index === hovered)
+        .map((o) => (
+          <div
+            key={o.index}
+            data-native-object-outline={o.index === sel ? "selected" : "hovered"}
+            onPointerDown={onPointerDown}
+            className={cn(
+              "absolute rounded-[1px]",
+              o.index === sel
+                ? "outline outline-2 outline-primary"
+                : "outline outline-1 outline-primary/50",
+            )}
+            style={{
+              left: o.rect.left,
+              top: o.rect.top,
+              width: o.rect.width,
+              height: o.rect.height,
+              cursor: "move",
+            }}
+          />
+        ))}
 
       {/* Live color preview while the picker is open (shape fills only). */}
       {previewHex && selObj && selObj.kind === "path" && (
@@ -634,7 +730,7 @@ export function ObjectLayer({
         })}
 
       {/* Contextual properties popover for the selected object. */}
-      {selObj && !drag && (
+      {selObj && !drag && !pressing && (
         <Popover open onOpenChange={(o: boolean) => !o && setSel(null)}>
           <PopoverContent
             anchor={{

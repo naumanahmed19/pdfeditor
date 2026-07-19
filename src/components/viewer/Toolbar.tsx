@@ -104,7 +104,7 @@ type ToolbarTool = {
 const TOOLS: Array<ToolbarTool & { group: number }> = [
   { key: "read", icon: MousePointer2, name: "Read", desc: "Select & copy text, follow links", group: 0, shortcut: "V" },
   { key: "pan", icon: Hand, name: "Pan", desc: "Drag to scroll the page", group: 0 },
-  { key: "select", icon: Move, name: "Move / select", desc: "Move annotations, native PDF text/images/shapes, or form fields. Switch to Read to fill forms", group: 0, shortcut: "M" },
+  { key: "select", icon: Move, name: "Move / select", desc: "Click to select, drag to move, and double-click text or fields to edit. Switch to Read to fill forms", group: 0, shortcut: "M" },
   { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
   { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Text mode: drag over text. Area mode: drag a box over any region. Click a highlight to recolor or delete it", group: 2, shortcut: "H" },
   { key: "underline", icon: Underline, name: "Underline text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "U" },
@@ -1296,6 +1296,11 @@ export function EditorToolbar() {
               title="Color"
             />
           </div>
+        ) : app.tool === "select" ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            Click to select · drag to move · double-click text or fields to edit ·
+            Enter/F2 edits selected text or fields
+          </span>
         ) : app.tool === "highlight" ? (
           <div className="flex items-center gap-2">
             <ToggleGroup

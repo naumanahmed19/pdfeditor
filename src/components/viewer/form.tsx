@@ -20,6 +20,7 @@ import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { canMoveExistingFormField } from "../../lib/selectionPolicy";
+import { isDoublePress, type PressPoint } from "../../lib/doublePress";
 
 interface FormFieldSpec {
   key: string;
@@ -595,6 +596,7 @@ function FieldDesigner({
   };
   const op = app.fieldOps[key];
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const lastDown = useRef<PressPoint | null>(null);
 
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
@@ -618,24 +620,40 @@ function FieldDesigner({
     );
     app.setSelectedField(base);
     app.setSelected(null);
+    const press = { at: performance.now(), x: e.clientX, y: e.clientY };
+    const doublePress =
+      mode === "move" && isDoublePress(lastDown.current, press, e.detail);
+    lastDown.current = press;
+    if (doublePress) {
+      app.setFormBuilder(true);
+      return;
+    }
     const start = { x: e.clientX, y: e.clientY };
     const orig = op?.newRect ?? base.origRect;
+    let started = false;
+    let finalRect: { x: number; y: number; w: number; h: number } | null = null;
     const onMove = (ev: PointerEvent) => {
-      const dx = (ev.clientX - start.x) / scale;
-      const dy = (ev.clientY - start.y) / scale;
-      setLive(
+      const screenDx = ev.clientX - start.x;
+      const screenDy = ev.clientY - start.y;
+      if (!started && Math.hypot(screenDx, screenDy) < 4) return;
+      started = true;
+      const dx = screenDx / scale;
+      const dy = screenDy / scale;
+      finalRect =
         mode === "move"
           ? { ...orig, x: orig.x + dx, y: orig.y + dy }
-          : { ...orig, w: Math.max(10, orig.w + dx), h: Math.max(10, orig.h + dy) },
-      );
+          : {
+              ...orig,
+              w: Math.max(10, orig.w + dx),
+              h: Math.max(10, orig.h + dy),
+            };
+      setLive(finalRect);
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      setLive((finalRect) => {
-        if (finalRect) app.upsertFieldOp(base, { newRect: finalRect });
-        return null;
-      });
+      if (finalRect) app.upsertFieldOp(base, { newRect: finalRect });
+      setLive(null);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -646,12 +664,47 @@ function FieldDesigner({
     if (!isSelected) return;
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      )
+        return;
       if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
         app.upsertFieldOp(base, { deleted: true });
         app.setSelectedField(null);
+        return;
       }
-      if (e.key === "Escape") app.setSelectedField(null);
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const step = e.shiftKey ? 10 : 1;
+        app.upsertFieldOp(base, {
+          newRect: {
+            ...rect,
+            x:
+              rect.x +
+              (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
+            y:
+              rect.y +
+              (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0),
+          },
+        });
+        return;
+      }
+      if (e.key === "Enter" || e.key === "F2") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        app.setFormBuilder(true);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        app.setSelectedField(null);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -709,6 +762,13 @@ function FieldDesigner({
         !isSelected && canEdit && "hover:ring-1 hover:ring-blue-400/60",
       )}
       onPointerDown={(e) => beginDrag(e, "move")}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        app.setFormBuilder(true);
+      }}
+      aria-label={`Form field ${displayName}`}
+      title="Drag to move · double-click to open field properties"
     >
       <div
         className={cn(
