@@ -26,6 +26,7 @@ import {
 import { collectParagraph } from "./paragraph";
 import { makeParagraphMeasure, planReflow } from "./reflow";
 import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
+import { canMoveNativeContent } from "../../lib/selectionPolicy";
 import { InlineTextEditor } from "./InlineTextEditor";
 import { ObjectLayer } from "./objectlayer";
 import { LinkLayer } from "./LinkLayer";
@@ -68,6 +69,7 @@ export function PageView({
 
   const w = baseDims.width * scale;
   const h = baseDims.height * scale;
+  const canMovePageObjects = canMoveNativeContent(app.tool, app.docPermissions);
 
   // Drop a field dragged from the sidebar palette, centered on the cursor.
   const onFieldDrop = (e: React.DragEvent) => {
@@ -1078,6 +1080,9 @@ export function PageView({
       style={{ width: w, height: h, scrollMarginTop: 16 }}
       onPointerDown={() => {
         if (app.tool === "select") {
+          window.dispatchEvent(
+            new CustomEvent("pdfwb:object-selection", { detail: null }),
+          );
           app.setSelected(null);
           app.setSelectedField(null);
         }
@@ -1117,15 +1122,11 @@ export function PageView({
         onClick={onTextLayerClick}
       />
       <LinkLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
-      {/* Existing-content editing lives on the "Move objects" tool
-          (app.tool === "editobject"), kept separate from Select in the normal
-          editor. In the form builder (design, not preview) the Select tool
-          doubles as it — one tool moves/deletes existing labels and fields.
-          Rendered BELOW the form/annotation layers so fields keep priority and
-          only clicks that miss them fall through to editing page content. */}
-      {(app.tool === "editobject" ||
-        (app.formBuilder && !app.formPreview && app.tool === "select")) &&
-        visible && (
+      {/* Move/select handles both annotations and native PDF content. This
+          layer stays BELOW fields and annotations, giving those overlays first
+          pick; clicks that miss them reach page text/images. Restricted
+          annotate-only documents omit this modifying layer. */}
+      {canMovePageObjects && visible && (
         <ObjectLayer
           pdf={pdf}
           pageIndex={pageIndex}

@@ -33,7 +33,6 @@ import {
   Minimize2,
   Minus,
   MousePointer2,
-  MousePointerClick,
   Move,
   MoveUpRight,
   PanelLeft,
@@ -122,11 +121,11 @@ const EDITOR_TOOLS: Array<{
   },
   {
     key: "select",
-    label: "Select",
-    description: "Move, resize, or delete annotations.",
+    label: "Move / select",
+    description: "Move annotations, native page objects, or form fields.",
     icon: Move,
     shortcut: "M",
-    aliases: ["move"],
+    aliases: ["move", "objects"],
   },
   {
     key: "text",
@@ -141,13 +140,6 @@ const EDITOR_TOOLS: Array<{
     description: "Retype existing PDF text.",
     icon: TextCursorInput,
     shortcut: "E",
-  },
-  {
-    key: "editobject",
-    label: "Move objects",
-    description: "Move, resize, recolor, or delete existing page objects.",
-    icon: MousePointerClick,
-    shortcut: "G",
   },
   {
     key: "highlight",
@@ -545,7 +537,7 @@ export function CommandPalette() {
     if (!app.pdf) return hasPdfReason;
     const p = app.docPermissions;
     if (!p.restricted || tool === "read") return undefined;
-    if (tool === "edittext" || tool === "editobject" || tool === "redact") {
+    if (tool === "edittext" || tool === "redact") {
       return p.modify ? undefined : permissionReason;
     }
     if (tool.startsWith("form")) {

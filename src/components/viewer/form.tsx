@@ -19,6 +19,7 @@ import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
+import { canMoveExistingFormField } from "../../lib/selectionPolicy";
 
 interface FormFieldSpec {
   key: string;
@@ -598,20 +599,23 @@ function FieldDesigner({
   const rect = live ?? op?.newRect ?? base.origRect;
   const isSelected = app.selectedField?.key === key;
   const displayName = op?.newName ?? field.name;
-  // In the form builder, existing fields are first-class editable objects, so
-  // they move with the Select tool alongside the new fields you're placing. In
-  // the regular editor they're existing page content — like page text/images —
-  // and move only on the "Move objects" tool, NOT the Select tool that drags
-  // annotations you added. A read-only widget acts as "locked" (clicks pass
-  // through) in either case.
-  const canEdit =
-    ((app.formBuilder && app.tool === "select") || app.tool === "editobject") &&
-    !field.readOnly;
+  // Read mode fills fields; Move/select edits their geometry. Existing fields
+  // take pointer priority over native page objects, so selecting a widget can
+  // never accidentally grab the text or border painted underneath it. A
+  // read-only or permission-locked widget passes clicks through.
+  const canEdit = canMoveExistingFormField(
+    app.tool,
+    app.docPermissions,
+    field.readOnly,
+  );
 
   const beginDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
     if (!canEdit) return;
     e.stopPropagation();
     e.preventDefault();
+    window.dispatchEvent(
+      new CustomEvent("pdfwb:object-selection", { detail: null }),
+    );
     app.setSelectedField(base);
     app.setSelected(null);
     const start = { x: e.clientX, y: e.clientY };

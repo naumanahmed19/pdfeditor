@@ -27,7 +27,6 @@ import {
   MessageSquareQuote,
   Minus,
   MousePointer2,
-  MousePointerClick,
   Move,
   MoveUpRight,
   PaintBucket,
@@ -105,7 +104,7 @@ type ToolbarTool = {
 const TOOLS: Array<ToolbarTool & { group: number }> = [
   { key: "read", icon: MousePointer2, name: "Read", desc: "Select & copy text, follow links", group: 0, shortcut: "V" },
   { key: "pan", icon: Hand, name: "Pan", desc: "Drag to scroll the page", group: 0 },
-  { key: "select", icon: Move, name: "Move / select", desc: "Move, resize or delete annotations you added (highlights, shapes, text boxes, stamps…)", group: 0, shortcut: "M" },
+  { key: "select", icon: Move, name: "Move / select", desc: "Move annotations, native PDF text/images/shapes, or form fields. Switch to Read to fill forms", group: 0, shortcut: "M" },
   { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
   { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Text mode: drag over text. Area mode: drag a box over any region. Click a highlight to recolor or delete it", group: 2, shortcut: "H" },
   { key: "underline", icon: Underline, name: "Underline text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "U" },
@@ -139,7 +138,6 @@ const TOOLS: Array<ToolbarTool & { group: number }> = [
  */
 const EDIT_TOOLS: ToolbarTool[] = [
   { key: "edittext", icon: TextCursorInput, name: "Edit text", desc: "Click a line of the document to retype it, or change its font, size and color", shortcut: "E" },
-  { key: "editobject", icon: MousePointerClick, name: "Move objects", desc: "Click existing text or an image to move, resize, recolor or delete it", shortcut: "G" },
 ];
 
 const ALL_TOOLS: ToolbarTool[] = [...TOOLS, ...EDIT_TOOLS];
@@ -159,7 +157,7 @@ const TOOL_FLYOUTS: Array<{
     label: "Text",
     desc: "Add text or edit existing page content",
     defaultTool: "text",
-    tools: ["text", "edittext", "editobject"],
+    tools: ["text", "edittext"],
   },
   {
     id: "markup",

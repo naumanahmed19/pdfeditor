@@ -1101,6 +1101,10 @@ function AnnotationItem({
     // Live preview: fields act as real inputs, not draggable designer boxes.
     if (previewing) return;
     if (app.tool !== "select") return;
+    window.dispatchEvent(
+      new CustomEvent("pdfwb:object-selection", { detail: null }),
+    );
+    app.setSelectedField(null);
     // Shift-click builds a multi-selection (any annotation kind).
     if (e.shiftKey) {
       e.stopPropagation();

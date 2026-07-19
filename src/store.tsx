@@ -3607,13 +3607,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const p = docPermissions;
       if (!p.restricted || t === "read") return true;
       // True content-stream edits need the modify permission…
-      if (t === "edittext" || t === "editobject" || t === "redact") return p.modify;
+      if (t === "edittext" || t === "redact") return p.modify;
       // …form tools need form-fill (or modify)…
       if (t.startsWith("form")) return p.fillForms || p.modify;
-      // …Select and Eraser primarily manage the annotation layer (move/delete
-      // what the user is allowed to place), so annotate is enough; everything
-      // else is annotation too. This is why placing a note then auto-switching
-      // to Select doesn't get rejected on an annotate-only document.
+      // …Select remains available with annotate permission so user-added
+      // annotations can still move. Its native-object/form layers separately
+      // require modify permission, so annotate-only documents stay protected.
+      // Everything else here creates or edits annotations too.
       return p.annotate || p.modify;
     },
     [docPermissions],

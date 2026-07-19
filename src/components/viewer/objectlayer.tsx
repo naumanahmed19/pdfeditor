@@ -212,8 +212,8 @@ type Corner = "nw" | "ne" | "sw" | "se";
 const HANDLE = 9; // px hit radius for resize handles
 
 /**
- * Object editor (active on the "Move objects" tool, app.tool === "editobject"):
- * click any existing text run, image or vector shape (rectangles, lines, fills)
+ * Native-object branch of the unified Move/select tool: click any existing
+ * text run, image or vector shape (rectangles, lines, fills)
  * to select it, drag
  * to move, drag a corner (images/shapes) to resize, recolor via the color chip,
  * or press Delete to remove it. Everything commits through PDFium — true
@@ -299,6 +299,24 @@ export function ObjectLayer({
 
   const selObj = objects.find((o) => o.index === sel) ?? null;
 
+  // Only one native object, annotation, or form field may own the selection.
+  // Object layers exist per page, so a lightweight event clears selections on
+  // other pages without moving this PDFium-specific state into the app store.
+  useEffect(() => {
+    const onObjectSelection = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ pageIndex: number; objectIndex: number } | null>
+      ).detail;
+      if (!detail || detail.pageIndex !== pageIndex) setSel(null);
+    };
+    window.addEventListener("pdfwb:object-selection", onObjectSelection);
+    return () =>
+      window.removeEventListener("pdfwb:object-selection", onObjectSelection);
+  }, [pageIndex]);
+  useEffect(() => {
+    if (app.selected || app.selectedField) setSel(null);
+  }, [app.selected, app.selectedField]);
+
   // Delete removes the selected object.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -371,6 +389,7 @@ export function ObjectLayer({
     if (selObj && (selObj.kind === "image" || selObj.kind === "path")) {
       const c = cornerAt(selObj, px, py);
       if (c) {
+        e.stopPropagation();
         e.preventDefault();
         try {
           (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -404,12 +423,20 @@ export function ObjectLayer({
       setSel(null);
       return;
     }
+    e.stopPropagation();
     e.preventDefault();
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
       /* pointer capture is best-effort */
     }
+    app.setSelected(null);
+    app.setSelectedField(null);
+    window.dispatchEvent(
+      new CustomEvent("pdfwb:object-selection", {
+        detail: { pageIndex, objectIndex: hit.index },
+      }),
+    );
     setSel(hit.index);
     dragRef.current = {
       mode: "move",
