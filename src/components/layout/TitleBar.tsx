@@ -57,7 +57,7 @@ import {
 import { Checkbox } from "../ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { cn } from "../../lib/utils";
-import { isTauri } from "../../lib/tauri";
+import { isTauri, isTauriMacOS } from "../../lib/tauri";
 import { WindowControls } from "./WindowControls";
 import { AboutModal } from "./AboutModal";
 import { PasswordModal } from "./PasswordModal";
@@ -116,6 +116,7 @@ function TitleBarImpl() {
   const fileRef = useRef<HTMLInputElement>(null);
   const searchFormRef = useRef<HTMLFormElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const nativeMenuActionRef = useRef<(id: string) => void>(() => {});
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [replaceOpen, setReplaceOpen] = useState(false);
@@ -182,6 +183,149 @@ function TitleBarImpl() {
     setQuery(value);
     void app.runSearch(value);
   };
+
+  const flattenDocument = async () => {
+    if (!app.pdf) return;
+    const ok = await app.requestConfirm({
+      title: "Flatten the document?",
+      message:
+        "All annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
+      confirmLabel: "Flatten",
+    });
+    if (!ok) return;
+    await app.applyBytesOp(async (b) => {
+      const { flattenPdf } = await import("../../lib/pdfium");
+      return flattenPdf(b);
+    }, "Document flattened");
+  };
+
+  nativeMenuActionRef.current = (id) => {
+    switch (id) {
+      case "pickpdf.about":
+        setAboutOpen(true);
+        break;
+      case "pickpdf.settings":
+        app.setScreen("settings");
+        break;
+      case "pickpdf.file.open":
+        void app.requestOpen();
+        break;
+      case "pickpdf.file.new-template":
+        app.setScreen("templates");
+        break;
+      case "pickpdf.file.save":
+        if (app.pdf) void app.saveCurrent();
+        break;
+      case "pickpdf.file.download-copy":
+        if (app.pdf) void app.downloadCurrent();
+        break;
+      case "pickpdf.file.print":
+        if (app.pdf) void app.printCurrent();
+        break;
+      case "pickpdf.file.properties":
+        if (app.pdf) setPropsOpen(true);
+        break;
+      case "pickpdf.file.security":
+        if (app.pdf) app.setSecurityModalOpen(true);
+        break;
+      case "pickpdf.file.sign":
+        if (app.pdf) app.setSignModalOpen(true);
+        break;
+      case "pickpdf.file.close-document":
+        if (app.pdf) app.closeDocument();
+        break;
+      case "pickpdf.view.sidebar": {
+        const next = !app.sidebarOpen;
+        app.setSidebarOpen(next);
+        if (next && app.isMobile) app.setAiOpen(false);
+        break;
+      }
+      case "pickpdf.view.search":
+        window.dispatchEvent(new CustomEvent("pdfwb:focus-document-search"));
+        break;
+      case "pickpdf.view.command-palette":
+        window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"));
+        break;
+      case "pickpdf.tools.organize":
+        app.setScreen("organize");
+        break;
+      case "pickpdf.tools.create-images":
+        app.setScreen("createimages");
+        break;
+      case "pickpdf.tools.create-document":
+        app.setScreen("createdoc");
+        break;
+      case "pickpdf.tools.merge":
+        app.setScreen("merge");
+        break;
+      case "pickpdf.tools.split":
+        app.setScreen("split");
+        break;
+      case "pickpdf.tools.watermark":
+        app.setScreen("watermark");
+        break;
+      case "pickpdf.tools.header-footer":
+        app.setScreen("headerfooter");
+        break;
+      case "pickpdf.tools.crop":
+        app.setScreen("crop");
+        break;
+      case "pickpdf.tools.compress":
+        app.setScreen("compress");
+        break;
+      case "pickpdf.tools.export":
+        app.setScreen("export");
+        break;
+      case "pickpdf.tools.compare":
+        app.setScreen("compare");
+        break;
+      case "pickpdf.tools.pdfa":
+        app.setScreen("pdfa");
+        break;
+      case "pickpdf.tools.ocr":
+        if (app.pdf && !app.ocrBusy) void app.runOcrText();
+        break;
+      case "pickpdf.tools.flatten":
+        void flattenDocument();
+        break;
+    }
+  };
+
+  useEffect(() => {
+    if (!isTauriMacOS) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<string>("pickpdf:native-menu", (event) => {
+          nativeMenuActionRef.current(event.payload);
+        }),
+      )
+      .then((stopListening) => {
+        if (disposed) stopListening();
+        else unlisten = stopListening;
+      })
+      .catch((error) => console.error("Could not connect the macOS menu", error));
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriMacOS) return;
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) =>
+        invoke("sync_native_menu_state", {
+          hasPdf: !!app.pdf,
+          ocrBusy: app.ocrBusy,
+          activeProtected: app.activeProtected,
+        }),
+      )
+      .catch((error) => console.error("Could not update the macOS menu", error));
+  }, [app.activeProtected, app.ocrBusy, app.pdf]);
 
   const optionButtonClass = (active: boolean) =>
     cn(
@@ -313,21 +457,7 @@ function TitleBarImpl() {
       </MenuItem>
       <MenuItem
         disabled={!app.pdf}
-        onClick={() => {
-          void (async () => {
-            const ok = await app.requestConfirm({
-              title: "Flatten the document?",
-              message:
-                "All annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
-              confirmLabel: "Flatten",
-            });
-            if (!ok) return;
-            await app.applyBytesOp(async (b) => {
-              const { flattenPdf } = await import("../../lib/pdfium");
-              return flattenPdf(b);
-            }, "Document flattened");
-          })();
-        }}
+        onClick={() => void flattenDocument()}
       >
         <Layers2 className="h-4 w-4 text-muted-foreground" />
         Flatten document
@@ -343,7 +473,8 @@ function TitleBarImpl() {
       data-tauri-drag-region
       className={cn(
         "relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3",
-        isTauri && "pr-0 sm:pr-0",
+        isTauri && !isTauriMacOS && "pr-0 sm:pr-0",
+        isTauriMacOS && "pl-[76px] sm:pl-[76px]",
       )}
     >
       <Tip label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}>
@@ -362,27 +493,33 @@ function TitleBarImpl() {
         </Button>
       </Tip>
 
-      <BrandLogo
-        className="mr-1 hidden min-w-0 sm:flex"
-        markClassName="h-7 w-7"
-        wordmarkClassName="mt-[5px] text-[24px]"
-      />
+      {!isTauriMacOS && (
+        <BrandLogo
+          className="mr-1 hidden min-w-0 sm:flex"
+          markClassName="h-7 w-7"
+          wordmarkClassName="mt-[5px] text-[24px]"
+        />
+      )}
 
       {/* File / Tools — icon-only on mobile, text on desktop */}
-      <Menu>
-        <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="File menu">
-          <FolderOpen className="h-4 w-4 sm:hidden" />
-          <span className="hidden sm:inline">File</span>
-        </MenuTrigger>
-        <MenuContent className="min-w-52">{fileItems}</MenuContent>
-      </Menu>
-      <Menu>
-        <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="Tools menu">
-          <Wrench className="h-4 w-4 sm:hidden" />
-          <span className="hidden sm:inline">Tools</span>
-        </MenuTrigger>
-        <MenuContent className="min-w-48">{toolsItems}</MenuContent>
-      </Menu>
+      {!isTauriMacOS && (
+        <>
+          <Menu>
+            <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="File menu">
+              <FolderOpen className="h-4 w-4 sm:hidden" />
+              <span className="hidden sm:inline">File</span>
+            </MenuTrigger>
+            <MenuContent className="min-w-52">{fileItems}</MenuContent>
+          </Menu>
+          <Menu>
+            <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="Tools menu">
+              <Wrench className="h-4 w-4 sm:hidden" />
+              <span className="hidden sm:inline">Tools</span>
+            </MenuTrigger>
+            <MenuContent className="min-w-48">{toolsItems}</MenuContent>
+          </Menu>
+        </>
+      )}
       <Tip label="Command palette">
         <Button
           variant="ghost"
@@ -679,7 +816,7 @@ function TitleBarImpl() {
       </Tip>
 
       {/* Frameless-window controls — desktop shell only */}
-      {isTauri && <WindowControls />}
+      {isTauri && !isTauriMacOS && <WindowControls />}
 
       {/* Mobile full-width search overlay */}
       {mobileSearch && (
