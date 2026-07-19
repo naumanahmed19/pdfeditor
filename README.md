@@ -156,7 +156,8 @@ edits away.
 A right-side, collapsible panel backed by a **local** model by default — with a
 zero-setup option that needs no server at all.
 
-- **Chat** about the open document (its text is extracted and sent as context).
+- **Chat** about the open document. Local providers include PDF context by
+  default; remote APIs require an explicit **Include PDF context** opt-in.
 - **Quick actions**: summarize, key points, explain page — also available from
   the viewer's floating pill, scoped to the page you're reading.
 - **Selection actions**: select text in the PDF and a floating assistant button
@@ -167,14 +168,15 @@ zero-setup option that needs no server at all.
   history is capped — so tight context windows (4k) work; overflow errors come
   back as readable messages with concrete fixes, not raw JSON.
 - **Insert** any AI answer into the page as a text box.
-- Streaming responses with a typing indicator, persisted chat history,
-  connection status, and a **model switcher in the composer**.
+- Streaming responses with a typing indicator, per-document persisted chat
+  history, connection status, and a **model switcher in the composer**.
 - **Providers**:
-  - **Built-in (Gemma 4, in-browser)** — the **default**; runs Google's
-    **Gemma 4 (E2B)** entirely in the browser via Transformers.js/WebGPU (CPU
+  - **Built-in (Gemma 3 1B)** — the **default**; runs Google's
+    **Gemma 3 1B** entirely on your device via Transformers.js/WebGPU (CPU
     fallback). No Ollama, LM Studio, API key or setup — the model downloads
-    once (~2 GB, then cached, with live byte-level progress and stall
-    detection) and works offline. Needs WebGPU (Chrome/Edge or the desktop app)
+    once (~0.9 GB, then cached, with resumable byte-level progress, hard loading
+    timeouts and cache verification) and works offline. Needs WebGPU
+    (Chrome/Edge or the desktop app)
     for the fast path.
   - **Ollama** (model `gemma3`), **LM Studio**, or any OpenAI-compatible
     endpoint — for users who already run a local/remote model server.

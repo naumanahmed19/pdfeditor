@@ -1,4 +1,4 @@
-// Single source of truth for the built-in, in-browser AI models.
+// Single source of truth for the built-in, on-device AI models.
 //
 // The assistant can run more than one fully-local model. Desktop defaults to the
 // higher-quality Gemma 4; phones and tablets are pinned to a small model that
@@ -35,6 +35,8 @@ export interface BrowserModelConfig {
   sizeLabel: string;
   /** Fits within a phone/tablet memory budget without OOM-crashing the tab. */
   mobileSafe: boolean;
+  /** How editor tool definitions are presented to this model. */
+  toolCalling: "native" | "prompted";
   /** One-line description for the Settings model picker. */
   blurb: string;
 }
@@ -47,7 +49,8 @@ export const BROWSER_MODELS: BrowserModelConfig[] = [
     dtype: { webgpu: "q4f16", wasm: "q4" },
     sizeLabel: "~3 GB",
     mobileSafe: false,
-    blurb: "Higher quality. Needs a desktop with ~8 GB RAM.",
+    toolCalling: "native",
+    blurb: "Higher quality. 16 GB RAM recommended.",
   },
   {
     id: "gemma-3-1b",
@@ -60,6 +63,7 @@ export const BROWSER_MODELS: BrowserModelConfig[] = [
     // workgroup storage, over the 32 KB most mobile GPUs allow, so its attention
     // compute pipeline can't be built on a phone. Runs great on desktop GPUs.
     mobileSafe: false,
+    toolCalling: "prompted",
     blurb: "Compact and capable — best on desktop.",
   },
   {
@@ -73,24 +77,29 @@ export const BROWSER_MODELS: BrowserModelConfig[] = [
     dtype: { webgpu: "q4", wasm: "q4f16" },
     sizeLabel: "~0.5 GB",
     mobileSafe: true,
+    toolCalling: "native",
     blurb: "Lightweight — runs on phones and tablets.",
   },
 ];
 
-/** Default in-browser model on desktop/web (the user can switch). */
-export const DEFAULT_DESKTOP_MODEL_ID = "gemma-4";
+/** Default built-in model on desktop/web (the user can switch). */
+export const DEFAULT_DESKTOP_MODEL_ID = "gemma-3-1b";
 /** The model phones/tablets are pinned to (small enough head dim for mobile GPUs). */
 export const MOBILE_MODEL_ID = "qwen-0.5b";
 
 /** Look up a model by id, falling back to the first (desktop default). */
 export function getBrowserModel(id: string | undefined): BrowserModelConfig {
-  return BROWSER_MODELS.find((m) => m.id === id) ?? BROWSER_MODELS[0];
+  return (
+    BROWSER_MODELS.find((m) => m.id === id) ??
+    BROWSER_MODELS.find((m) => m.id === DEFAULT_DESKTOP_MODEL_ID) ??
+    BROWSER_MODELS[0]
+  );
 }
 
 /**
  * The model actually used on this device: phones/tablets are always pinned to
  * the mobile-safe model regardless of the stored preference; desktop honours the
- * user's choice (defaulting to Gemma 4).
+ * user's choice (defaulting to Gemma 3 1B).
  */
 export function effectiveBrowserModel(
   browserModelId: string | undefined,
@@ -106,7 +115,7 @@ export function availableBrowserModels(handheld: boolean): BrowserModelConfig[] 
   return handheld ? [getBrowserModel(MOBILE_MODEL_ID)] : BROWSER_MODELS;
 }
 
-/** Picker/status label, e.g. "Gemma 4 (in-browser)". */
+/** Picker/status label, e.g. "Gemma 4 (built-in)". */
 export function browserModelLabel(m: BrowserModelConfig): string {
-  return `${m.name} (in-browser)`;
+  return `${m.name} (built-in)`;
 }

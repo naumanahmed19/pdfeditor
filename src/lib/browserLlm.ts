@@ -11,11 +11,18 @@
 import type { ChatMessage } from "../types";
 import type { BrowserModelConfig } from "./modelConfig";
 import { isHandheldDevice } from "./device";
+import {
+  EDITOR_TOOL_DEFINITIONS,
+  editorToolMessages,
+  parseEditorToolCall,
+  type EditorToolCall,
+} from "./aiTools";
 
 // IndexedDB database that ./modelCache streams the download into. Duplicated here
 // (rather than imported) because importing ./modelCache would run its fetch patch
 // on the main thread — it must only patch the worker.
 const MODEL_CACHE_DB = "pickpdf-model-cache";
+const MODEL_CACHE_META_STORE = "meta";
 // Sticky per-model flag: this model finished downloading at least once, so it's
 // on disk and loads offline. Keyed by model id so each model tracks separately
 // (both can be cached at once). Survives reloads, unlike the session state below.
@@ -49,6 +56,74 @@ let worker: Worker | null = null;
 let activeModel: BrowserModelConfig | null = null;
 // Which model finished loading this session (in-memory, ready to generate now).
 let readyModelId: string | null = null;
+let requestSequence = 0;
+const pendingOperations = new Map<string, (reason: Error) => void>();
+
+function nextRequestId(): string {
+  requestSequence += 1;
+  return `browser-llm-${Date.now()}-${requestSequence}`;
+}
+
+/** Verify the sticky UI flag against durable model records in IndexedDB. */
+export async function verifyBrowserModelDownloaded(
+  model: BrowserModelConfig,
+): Promise<boolean> {
+  if (!isBrowserModelDownloaded(model.id) || typeof indexedDB === "undefined") {
+    return false;
+  }
+  return new Promise<boolean>((resolve) => {
+    const req = indexedDB.open(MODEL_CACHE_DB);
+    req.onerror = () => resolve(false);
+    req.onupgradeneeded = () => {
+      // A newly-created database cannot contain the model. Close and let the
+      // normal worker create its stores on the next download.
+      req.transaction?.abort();
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(MODEL_CACHE_META_STORE)) {
+        db.close();
+        resolve(false);
+        return;
+      }
+      const repo = model.repo.toLowerCase();
+      let foundLargeCompleteFile = false;
+      let foundIncompleteFile = false;
+      const tx = db.transaction(MODEL_CACHE_META_STORE, "readonly");
+      const cursor = tx.objectStore(MODEL_CACHE_META_STORE).openCursor();
+      cursor.onsuccess = () => {
+        const current = cursor.result;
+        if (!current) return;
+        const meta = current.value as {
+          url?: string;
+          total?: number;
+          received?: number;
+          done?: boolean;
+        };
+        if ((meta.url ?? "").toLowerCase().includes(repo)) {
+          const complete =
+            meta.done === true &&
+            (meta.total ?? 0) > 0 &&
+            meta.received === meta.total;
+          if (!complete) foundIncompleteFile = true;
+          if (complete && (meta.total ?? 0) >= 10 * 1024 * 1024) {
+            foundLargeCompleteFile = true;
+          }
+        }
+        current.continue();
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve(foundLargeCompleteFile && !foundIncompleteFile);
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve(false);
+      };
+      tx.onabort = tx.onerror;
+    };
+  });
+}
 
 /** Is the given model loaded and ready to generate in this session? */
 export function browserModelReady(id: string): boolean {
@@ -71,20 +146,36 @@ function requestPersistentStorage(): void {
 function getWorker(): Worker {
   if (!worker) {
     requestPersistentStorage();
-    worker = new Worker(new URL("./browserLlm.worker.ts", import.meta.url), {
+    const created = new Worker(new URL("./browserLlm.worker.ts", import.meta.url), {
       type: "module",
     });
+    const fail = (event: ErrorEvent | MessageEvent) => {
+      if (worker !== created) return;
+      if ("preventDefault" in event) event.preventDefault();
+      const message =
+        event instanceof ErrorEvent && event.message
+          ? event.message
+          : "The local model worker stopped unexpectedly.";
+      resetBrowserEngine(new Error(message));
+    };
+    created.addEventListener("error", fail);
+    created.addEventListener("messageerror", fail);
+    worker = created;
   }
   return worker;
 }
 
 /** Drop the worker so the next call reloads (after a GPU crash / OOM / model switch). */
-export function resetBrowserEngine(): void {
-  if (worker) {
-    worker.terminate();
-    worker = null;
-  }
+export function resetBrowserEngine(
+  reason: Error = new Error("The local model was restarted. Please try again."),
+): void {
+  const current = worker;
+  worker = null;
+  current?.terminate();
   readyModelId = null;
+  const failures = [...pendingOperations.values()];
+  pendingOperations.clear();
+  for (const fail of failures) fail(reason);
 }
 
 /** Point the engine at a model, dropping the worker if it was running a different one. */
@@ -100,9 +191,14 @@ function modelName(): string {
 /** Turn a raw WebGPU/ORT failure into an actionable message. */
 function friendlyError(err: unknown): Error {
   const raw = err instanceof Error ? err.message : String(err);
-  if (/device is lost|out of memory|mapasync|failed to allocate|oom/i.test(raw)) {
+  if (/quota|storage.*full|disk.*full|not enough (?:disk )?space/i.test(raw)) {
     return new Error(
-      `The GPU ran out of memory running ${modelName()}. Try again — it should fall back to CPU — pick a lighter model, or connect a local/remote server in Settings.`,
+      `There is not enough storage space for ${modelName()}. Clear another cached model or free disk space, then retry.`,
+    );
+  }
+  if (/device is lost|out of memory|mapasync|failed to allocate|oom|bad_alloc|failed to call ortrun/i.test(raw)) {
+    return new Error(
+      `${modelName()} ran out of memory on this device. Choose Gemma 3 1B or Qwen2.5 0.5B in the assistant model menu, then try again.`,
     );
   }
   return err instanceof Error ? err : new Error(raw);
@@ -130,9 +226,13 @@ function downloadStatusText(loaded: number, total: number): string {
 }
 
 /** How long without a progress event before we call the download stalled. */
-const STALL_MS = 25_000;
+const STALL_WARNING_MS = 25_000;
+const LOAD_STALL_TIMEOUT_MS = 120_000;
+const PREPARE_TIMEOUT_MS = 5 * 60_000;
+const STOP_TIMEOUT_MS = 10_000;
+const TOOL_TIMEOUT_MS = 90_000;
 
-/** Stream a chat completion from the given in-browser model (via the worker). */
+/** Stream a chat completion from the given on-device model (via the worker). */
 export function streamBrowserChat(
   model: BrowserModelConfig,
   messages: ChatMessage[],
@@ -143,6 +243,7 @@ export function streamBrowserChat(
 ): Promise<string> {
   ensureModel(model);
   const w = getWorker();
+  const requestId = nextRequestId();
 
   return new Promise<string>((resolve, reject) => {
     let full = "";
@@ -154,32 +255,49 @@ export function streamBrowserChat(
 
     // If progress events stop arriving mid-download, say so instead of
     // leaving a frozen percentage on screen.
-    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    let warningTimer: ReturnType<typeof setTimeout> | undefined;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
     let lastDownloadStatus = "";
-    const armStallTimer = () => {
-      clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => {
+    const armWatchdog = (phase: "starting" | "downloading" | "preparing") => {
+      clearTimeout(warningTimer);
+      clearTimeout(hardTimer);
+      const preparing = phase === "preparing";
+      warningTimer = setTimeout(() => {
         onStatus?.(
-          `${lastDownloadStatus} — connection looks stalled. Check your network; finished parts are cached, so Stop + retry resumes quickly.`,
+          preparing
+            ? "Model preparation is taking longer than expected…"
+            : `${lastDownloadStatus || "Starting the model"} — no progress yet. Check your connection.`,
         );
-      }, STALL_MS);
+      }, STALL_WARNING_MS);
+      hardTimer = setTimeout(() => {
+        resetBrowserEngine(
+          new Error(
+            preparing
+              ? "Model preparation timed out. Try a lighter model or clear the model cache."
+              : "Model download timed out because no progress was received.",
+          ),
+        );
+      }, preparing ? PREPARE_TIMEOUT_MS : LOAD_STALL_TIMEOUT_MS);
     };
 
     const onMessage = (e: MessageEvent) => {
       const d = e.data || {};
+      if (d.requestId !== requestId) return;
       switch (d.type) {
         case "progress": {
           lastDownloadStatus = downloadStatusText(d.loaded ?? 0, d.total ?? 0);
           onStatus?.(`${lastDownloadStatus} · one-time, then cached`);
-          armStallTimer();
+          armWatchdog("downloading");
           break;
         }
         case "status":
-          clearTimeout(stallTimer);
           onStatus?.(d.text ?? "");
+          armWatchdog(d.phase === "preparing" ? "preparing" : "downloading");
           break;
         case "ready":
-          clearTimeout(stallTimer);
+          clearTimeout(warningTimer);
+          clearTimeout(hardTimer);
           readyModelId = model.id;
           markDownloaded(model.id);
           // Back to the typing dots; if the first token is slow (prefill /
@@ -209,26 +327,51 @@ export function streamBrowserChat(
           resolve(full);
           break;
         case "error":
-          cleanup();
-          resetBrowserEngine();
-          if (!full) reject(friendlyError(new Error(d.message)));
-          else resolve(full);
+          fail(friendlyError(new Error(d.message)));
+          resetBrowserEngine(friendlyError(new Error(d.message)));
           break;
       }
     };
 
-    const onAbort = () => w.postMessage({ type: "stop" });
+    const onAbort = () => {
+      if (readyModelId !== model.id) {
+        const error = new DOMException("Aborted", "AbortError");
+        if (pendingOperations.size > 1) {
+          fail(error);
+          w.postMessage({ type: "stop", requestId });
+        } else {
+          resetBrowserEngine(error);
+        }
+        return;
+      }
+      w.postMessage({ type: "stop", requestId });
+      clearTimeout(stopTimer);
+      stopTimer = setTimeout(() => {
+        resetBrowserEngine(new DOMException("Aborted", "AbortError"));
+      }, STOP_TIMEOUT_MS);
+    };
     const cleanup = () => {
-      clearTimeout(stallTimer);
+      clearTimeout(warningTimer);
+      clearTimeout(hardTimer);
       clearTimeout(genTimer);
+      clearTimeout(stopTimer);
       w.removeEventListener("message", onMessage);
       signal?.removeEventListener("abort", onAbort);
+      pendingOperations.delete(requestId);
+    };
+    const fail = (reason: Error) => {
+      cleanup();
+      reject(reason);
     };
 
+    if (signal?.aborted) return fail(new DOMException("Aborted", "AbortError"));
+    pendingOperations.set(requestId, fail);
     w.addEventListener("message", onMessage);
     signal?.addEventListener("abort", onAbort);
+    armWatchdog("starting");
     w.postMessage({
       type: "generate",
+      requestId,
       model,
       // Phones/tablets run on CPU — mobile WebGPU has proven unreliable.
       forceCpu: isHandheldDevice(),
@@ -260,45 +403,72 @@ export function preloadBrowserModel(
 ): Promise<void> {
   ensureModel(model);
   const w = getWorker();
+  const requestId = nextRequestId();
 
   return new Promise<void>((resolve, reject) => {
-    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    let warningTimer: ReturnType<typeof setTimeout> | undefined;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
     let lastText = "";
-    const armStallTimer = () => {
-      clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => {
+    const armWatchdog = (phase: "starting" | "downloading" | "preparing") => {
+      clearTimeout(warningTimer);
+      clearTimeout(hardTimer);
+      const preparing = phase === "preparing";
+      warningTimer = setTimeout(() => {
         onProgress({
-          phase: "downloading",
-          text: `${lastText} — connection looks stalled. Finished parts are cached, so this resumes if you retry.`,
+          phase: preparing ? "preparing" : "downloading",
+          text: preparing
+            ? "Model preparation is taking longer than expected…"
+            : `${lastText || "Starting the model"} — no progress yet. Check your connection.`,
           pct: null,
         });
-      }, STALL_MS);
+      }, STALL_WARNING_MS);
+      hardTimer = setTimeout(() => {
+        resetBrowserEngine(
+          new Error(
+            preparing
+              ? "Model preparation timed out. Try a lighter model or clear the model cache."
+              : "Model download timed out because no progress was received.",
+          ),
+        );
+      }, preparing ? PREPARE_TIMEOUT_MS : LOAD_STALL_TIMEOUT_MS);
     };
 
     const cleanup = () => {
-      clearTimeout(stallTimer);
+      clearTimeout(warningTimer);
+      clearTimeout(hardTimer);
       w.removeEventListener("message", onMessage);
       signal?.removeEventListener("abort", onAbort);
+      pendingOperations.delete(requestId);
     };
     const onAbort = () => {
-      cleanup();
       // No clean cancel for a load in progress — drop the worker. The resumable
-      // cache keeps whatever was downloaded so far.
-      resetBrowserEngine();
-      reject(new DOMException("Aborted", "AbortError"));
+      // cache keeps whatever was downloaded so far. If another operation needs
+      // the same worker, detach only this caller and let that shared load finish.
+      const error = new DOMException("Aborted", "AbortError");
+      if (pendingOperations.size > 1) {
+        fail(error);
+        w.postMessage({ type: "stop", requestId });
+      } else {
+        resetBrowserEngine(error);
+      }
+    };
+    const fail = (reason: Error) => {
+      cleanup();
+      reject(reason);
     };
 
     const onMessage = (e: MessageEvent) => {
       const d = e.data || {};
+      if (d.requestId !== requestId) return;
       switch (d.type) {
         case "progress":
           lastText = downloadStatusText(d.loaded ?? 0, d.total ?? 0);
           onProgress({ phase: "downloading", text: lastText, pct: pctOf(d.loaded ?? 0, d.total ?? 0) });
-          armStallTimer();
+          armWatchdog("downloading");
           break;
         case "status":
-          clearTimeout(stallTimer);
           onProgress({ phase: "preparing", text: d.text ?? "Preparing the model…", pct: null });
+          armWatchdog(d.phase === "preparing" ? "preparing" : "downloading");
           break;
         case "ready":
           cleanup();
@@ -307,17 +477,109 @@ export function preloadBrowserModel(
           resolve();
           break;
         case "error":
-          cleanup();
-          resetBrowserEngine();
-          reject(friendlyError(new Error(d.message)));
+          fail(friendlyError(new Error(d.message)));
+          resetBrowserEngine(friendlyError(new Error(d.message)));
           break;
       }
     };
 
-    if (signal?.aborted) return onAbort();
+    if (signal?.aborted) return fail(new DOMException("Aborted", "AbortError"));
+    pendingOperations.set(requestId, fail);
     w.addEventListener("message", onMessage);
     signal?.addEventListener("abort", onAbort);
-    w.postMessage({ type: "load", model, forceCpu: isHandheldDevice() });
+    armWatchdog("starting");
+    w.postMessage({ type: "load", requestId, model, forceCpu: isHandheldDevice() });
+  });
+}
+
+/** Ask the selected local model to choose a validated editor tool. */
+export function routeBrowserEditorTool(
+  model: BrowserModelConfig,
+  input: string,
+  state: { currentPage: number; totalPages: number; zoomPercent: number },
+  signal?: AbortSignal,
+  onStatus?: (status: string) => void,
+): Promise<EditorToolCall | null> {
+  ensureModel(model);
+  const w = getWorker();
+  const requestId = nextRequestId();
+
+  return new Promise<EditorToolCall | null>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastDownloadStatus = "";
+    const cleanup = () => {
+      clearTimeout(timer);
+      w.removeEventListener("message", onMessage);
+      signal?.removeEventListener("abort", onAbort);
+      pendingOperations.delete(requestId);
+    };
+    const fail = (reason: Error) => {
+      cleanup();
+      reject(reason);
+    };
+    const finish = (value: EditorToolCall | null) => {
+      cleanup();
+      resolve(value);
+    };
+    const armTimeout = (duration = TOOL_TIMEOUT_MS) => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => fail(new Error("The local model took too long to interpret the editor command.")),
+        duration,
+      );
+    };
+    const onAbort = () => {
+      w.postMessage({ type: "stop", requestId });
+      fail(new DOMException("Aborted", "AbortError"));
+    };
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data || {};
+      if (data.requestId !== requestId) return;
+      switch (data.type) {
+        case "progress":
+          lastDownloadStatus = downloadStatusText(data.loaded ?? 0, data.total ?? 0);
+          onStatus?.(`${lastDownloadStatus} · one-time, then cached`);
+          armTimeout(LOAD_STALL_TIMEOUT_MS);
+          break;
+        case "status":
+          onStatus?.(data.text ?? "Preparing the model…");
+          armTimeout(PREPARE_TIMEOUT_MS);
+          break;
+        case "ready":
+          readyModelId = model.id;
+          markDownloaded(model.id);
+          onStatus?.("Understanding editor command…");
+          armTimeout();
+          break;
+        case "tool_result":
+          finish(parseEditorToolCall(String(data.text ?? "")));
+          break;
+        case "stopped":
+          finish(null);
+          break;
+        case "error": {
+          const error = friendlyError(new Error(data.message));
+          fail(error);
+          resetBrowserEngine(error);
+          break;
+        }
+      }
+    };
+
+    if (signal?.aborted) return fail(new DOMException("Aborted", "AbortError"));
+    pendingOperations.set(requestId, fail);
+    w.addEventListener("message", onMessage);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    onStatus?.("Understanding editor command…");
+    armTimeout();
+    w.postMessage({
+      type: "route_tool",
+      requestId,
+      model,
+      forceCpu: isHandheldDevice(),
+      messages: editorToolMessages(model, input, state),
+      tools: EDITOR_TOOL_DEFINITIONS,
+    });
   });
 }
 
@@ -329,28 +591,39 @@ export function preloadBrowserModel(
  * first to release its IndexedDB handle so the delete isn't blocked.
  */
 export function clearBrowserModelCache(): Promise<void> {
-  resetBrowserEngine();
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(DOWNLOADED_PREFIX)) localStorage.removeItem(k);
-    }
-  } catch {
-    /* ignore */
-  }
-  return new Promise<void>((resolve) => {
+  resetBrowserEngine(new DOMException("Aborted", "AbortError"));
+  return new Promise<void>((resolve, reject) => {
     let settled = false;
-    const finish = () => {
+    const clearFlags = () => {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith(DOWNLOADED_PREFIX)) localStorage.removeItem(k);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    const finish = (error?: Error) => {
       if (!settled) {
         settled = true;
-        resolve();
+        clearTimeout(timeout);
+        if (error) reject(error);
+        else {
+          clearFlags();
+          resolve();
+        }
       }
     };
     const req = indexedDB.deleteDatabase(MODEL_CACHE_DB);
-    req.onsuccess = finish;
-    req.onerror = finish;
-    // A stray open handle can leave the delete "blocked"; don't hang the UI.
-    req.onblocked = finish;
-    setTimeout(finish, 3000);
+    req.onsuccess = () => finish();
+    req.onerror = () => finish(req.error ?? new Error("Could not clear the model cache."));
+    // Do not report success while an open database handle is still blocking
+    // deletion. The timeout produces an actionable error instead.
+    req.onblocked = () => {};
+    const timeout = setTimeout(
+      () => finish(new Error("The model cache is still in use. Close other PickPDF windows and try again.")),
+      10_000,
+    );
   });
 }

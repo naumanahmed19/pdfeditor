@@ -3,7 +3,7 @@
 // The store's `isMobile` is viewport-based (<1024px) and flips when a desktop
 // window is merely narrowed, which is the wrong question for "what can this
 // hardware do". This asks a different one: is this an actual phone or tablet?
-// We use it to pin the in-browser AI to the lightweight model and to hide the
+// We use it to pin the on-device AI to the lightweight model and to hide the
 // localhost-only providers (Ollama / LM Studio) that a handheld can never reach.
 
 let cached: boolean | null = null;

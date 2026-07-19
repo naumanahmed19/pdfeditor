@@ -12,7 +12,7 @@ const baseInput = {
   details: "It suggested something unsafe & unexpected.",
   appVersion: "1.2.3",
   provider: "Built-in",
-  model: "Gemma 4 (in-browser)",
+  model: "Gemma 4 (built-in)",
 };
 
 describe("buildAiReport", () => {

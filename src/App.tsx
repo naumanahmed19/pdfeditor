@@ -549,7 +549,7 @@ function Shell() {
             {app.screen === "settings" && <SettingsScreen />}
           </div>
         </main>
-        <AiPanel />
+        <AiPanel key={app.activeTabId ?? "general"} />
 
         {/* Mobile drawer backdrops */}
         {app.sidebarOpen && (

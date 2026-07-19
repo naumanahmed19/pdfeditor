@@ -1,4 +1,4 @@
-// Resumable, offline cache for the in-browser LLM's model files.
+// Resumable, offline cache for the on-device LLM's model files.
 //
 // Transformers.js normally stores whole files in the browser's Cache Storage,
 // but the Cache API can only persist a *complete* response — so refreshing the
@@ -30,6 +30,8 @@ interface Meta {
   /** Number of chunk records stored for this URL (chunk keys are 0…count-1). */
   chunkCount: number;
   done: boolean;
+  etag?: string;
+  lastModified?: string;
 }
 
 /** Only model files come from the Hugging Face hub — leave everything else alone. */
@@ -173,28 +175,47 @@ async function* downloadAndPersist(
   const reader = netBody.getReader();
   let pending: Uint8Array[] = [];
   let pendingLen = 0;
-  const flush = async () => {
-    if (!pendingLen) return;
+  let completed = false;
+  const flush = async (done = false) => {
+    if (!pendingLen) {
+      if (done) {
+        meta.done = true;
+        if (!meta.total) meta.total = meta.received;
+        await putMeta(meta);
+      }
+      return;
+    }
     const merged = concat(pending, pendingLen);
     pending = [];
     pendingLen = 0;
     meta.chunkCount += 1;
     meta.received += merged.length;
+    meta.done = done;
+    if (done && !meta.total) meta.total = meta.received;
     await writeChunk(meta.chunkCount - 1, merged.buffer as ArrayBuffer, meta);
   };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    yield value;
-    pending.push(value);
-    pendingLen += value.length;
-    if (pendingLen >= FLUSH_BYTES) await flush();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      yield value;
+      pending.push(value);
+      pendingLen += value.length;
+      if (pendingLen >= FLUSH_BYTES) await flush();
+    }
+    // The final bytes and the `done` bit commit atomically whenever possible.
+    // If the last regular flush landed exactly on EOF, resume recovery below
+    // also recognizes received === total as complete.
+    await flush(true);
+    completed = true;
+  } finally {
+    if (!completed) {
+      // Preserve bytes already delivered to the model before cancellation.
+      await flush(false).catch(() => {});
+      await reader.cancel().catch(() => {});
+    }
   }
-  await flush();
-  meta.done = true;
-  if (!meta.total) meta.total = meta.received;
-  await putMeta(meta);
 }
 
 function responseFrom(
@@ -214,6 +235,18 @@ function responseFrom(
 async function cachedModelFetch(url: string, netFetch: typeof fetch): Promise<Response> {
   let meta = await getMeta(url);
 
+  if (meta && meta.total > 0 && meta.received > meta.total) {
+    await clearUrl(url);
+    meta = undefined;
+  }
+
+  // A worker can be terminated after the final chunk transaction but before a
+  // separate completion update. Treat an exact durable byte count as complete.
+  if (meta && !meta.done && meta.total > 0 && meta.received === meta.total) {
+    meta.done = true;
+    await putMeta(meta);
+  }
+
   // Already fully downloaded — serve straight from disk, no network at all.
   if (meta?.done) {
     return responseFrom(
@@ -224,8 +257,33 @@ async function cachedModelFetch(url: string, netFetch: typeof fetch): Promise<Re
   }
 
   let start = meta?.received ?? 0;
-  const init: RequestInit = start > 0 ? { headers: { Range: `bytes=${start}-` } } : {};
+  const headers: Record<string, string> = {};
+  if (start > 0) {
+    headers.Range = `bytes=${start}-`;
+    const validator = meta?.etag ?? meta?.lastModified;
+    if (validator) headers["If-Range"] = validator;
+  }
+  const init: RequestInit = { headers };
   let res = await netFetch(url, init);
+
+  // Range-at-EOF is the common crash window described above. If metadata does
+  // not prove completeness, discard the partial rather than returning a 416
+  // that will poison every subsequent retry.
+  if (start > 0 && res.status === 416) {
+    if (meta && meta.total > 0 && meta.received === meta.total) {
+      meta.done = true;
+      await putMeta(meta);
+      return responseFrom(
+        replayStored(url, meta.chunkCount),
+        meta.total,
+        "application/octet-stream",
+      );
+    }
+    await clearUrl(url);
+    meta = undefined;
+    start = 0;
+    res = await netFetch(url, {});
+  }
 
   // Server ignored our Range and sent the whole file (200, not 206) — the
   // partial can't be trusted as a prefix, so start over cleanly.
@@ -241,13 +299,24 @@ async function cachedModelFetch(url: string, netFetch: typeof fetch): Promise<Re
   // Resume sanity check: if the server's total no longer matches what we saved,
   // the file changed under us — discard and re-download from scratch.
   if (meta && res.status === 206) {
-    const serverTotal = Number(res.headers.get("content-range")?.split("/")[1] ?? 0);
-    if (serverTotal && serverTotal !== meta.total) {
+    const match = res.headers
+      .get("content-range")
+      ?.match(/^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i);
+    const serverStart = Number(match?.[1] ?? -1);
+    const serverTotal = match?.[3] === "*" ? 0 : Number(match?.[3] ?? 0);
+    if (
+      !match ||
+      serverStart !== start ||
+      (serverTotal > 0 && meta.total > 0 && serverTotal !== meta.total)
+    ) {
       await clearUrl(url);
       meta = undefined;
       start = 0;
       res = await netFetch(url, {});
       if (!res.ok || !res.body) return res;
+    } else if (!meta.total && serverTotal > 0) {
+      meta.total = serverTotal;
+      await putMeta(meta);
     }
   }
 
@@ -259,7 +328,15 @@ async function cachedModelFetch(url: string, netFetch: typeof fetch): Promise<Re
     const len = Number(res.headers.get("content-length") ?? 0);
     const rangeTotal = Number(res.headers.get("content-range")?.split("/")[1] ?? 0);
     total = rangeTotal || len;
-    meta = { url, total, received: 0, chunkCount: 0, done: false };
+    meta = {
+      url,
+      total,
+      received: 0,
+      chunkCount: 0,
+      done: false,
+      etag: res.headers.get("etag") ?? undefined,
+      lastModified: res.headers.get("last-modified") ?? undefined,
+    };
     await putMeta(meta);
   }
 
