@@ -15,6 +15,8 @@ import {
   FONT_CSS,
   styleKey,
   familyRoot,
+  typefaceRoot,
+  faceStyleDistance,
   collectLine,
   mapLineEditToRuns,
   detectFontFromName,
@@ -54,6 +56,13 @@ export function PageView({
   const [textLayerReady, setTextLayerReady] = useState(0);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const inlineEditSeq = useRef(0);
+  const committedPreviewSeq = useRef(0);
+  const [committedPreview, setCommittedPreview] = useState<{
+    id: number;
+    edit: InlineEdit;
+    family: string;
+  } | null>(null);
   // Highlighted while a palette field is dragged over this page.
   const [fieldDropActive, setFieldDropActive] = useState(false);
 
@@ -142,7 +151,7 @@ export function PageView({
       } catch {
         /* text layer optional */
       }
-    }, 60);
+    }, contentOnly ? 0 : 60);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -346,8 +355,12 @@ export function PageView({
     // per-subset — a 'c' in the regular face proves nothing about the bold
     // face's subset — so the preflight checks each edited run's own font.
     const fontChars: Record<string, string> = {};
+    const faceIndexes: Record<string, number> = {};
     for (const o of objs) {
       fontChars[o.fontName] = (fontChars[o.fontName] ?? "") + o.text;
+      if (o.text.trim() && faceIndexes[o.fontName] == null) {
+        faceIndexes[o.fontName] = o.index;
+      }
     }
 
     // Other styles of the same family embedded in the page (a real Bold or
@@ -361,23 +374,6 @@ export function PageView({
         const key = styleKey(st.bold, st.italic);
         if (siblings[key] == null) siblings[key] = o.index;
       }
-    }
-
-    // Load the clicked run's real embedded font so the on-screen editor shows
-    // the page's actual face and metrics — but only when that subset can render
-    // the current line's characters. A bare-CFF/CID subset fontkit can't parse
-    // (or that lacks a Unicode cmap) would draw tofu in the textarea, so in that
-    // case we keep the CSS fallback instead.
-    let embeddedFont: Uint8Array | null = null;
-    try {
-      const fi = await app.getTextFontInfo(pageIndex, hit.index);
-      if (fi?.data) {
-        const chars = [...new Set(joined.replace(/\s+/g, ""))];
-        const miss = await missingGlyphs(fi.data, chars);
-        if (miss && miss.length === 0) embeddedFont = fi.data;
-      }
-    } catch {
-      /* keep the CSS fallback */
     }
 
     // Reflow eligibility: paragraph/block scope with ONE face and size across
@@ -415,32 +411,238 @@ export function PageView({
       };
     }
 
-    setInlineEdit({
+    const editId = ++inlineEditSeq.current;
+    const left = Math.min(vx1, vx2);
+    const top = Math.min(vy1, vy2);
+    const width = Math.max(Math.abs(vx2 - vx1), 24);
+    const hitRun = runs.find((run) => run.objectIndex === hit.index) ?? runs[0];
+    const hitFraction = Math.max(
+      0,
+      Math.min(1, (xPt - hit.left) / Math.max(hit.right - hit.left, 0.01)),
+    );
+    const caretOffset = Math.min(
+      joined.length,
+      hitRun.start + Math.round(hit.text.length * hitFraction),
+    );
+    const openedEdit: InlineEdit = {
+      id: editId,
       runs,
       original: joined,
-      left: Math.min(vx1, vx2),
-      top: Math.min(vy1, vy2),
-      width: Math.max(Math.abs(vx2 - vx1), 24),
+      left,
+      top,
+      width,
       height: Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale),
+      maxWidth: Math.max(width, w - left - 4),
+      maxHeight: Math.max(hit.fontSize * scale, h - top - 4),
+      caretOffset,
       fontPx: hit.fontSize * scale,
       color: `rgb(${r}, ${g}, ${b})`,
       colorHex: hex,
       fontSize: hit.fontSize,
       fontName: (hit.fontName || "").replace(/^[A-Z]{6}\+/, ""),
       fallbackFamily: f.family,
-      embeddedFont,
+      embeddedFont: null,
       bold: f.bold,
       italic: f.italic,
       anchor: [runs[0].originX, runs[0].originY],
       fontChars,
+      faceIndexes,
       siblings,
       reflow,
+    };
+    // Put the caret on screen immediately. Embedded-font extraction and
+    // validation are preview enhancements and must never delay typing.
+    setInlineEdit(openedEdit);
+
+    void (async () => {
+      let embeddedFont: Uint8Array | null = null;
+      try {
+        // Control characters (PDFium's stand-in for glyphs without a Unicode
+        // mapping) have no glyph in any font and must not veto the real face.
+        const chars = [
+          ...new Set(joined.replace(/[\s\u0000-\u001f\u007f-\u009f]/g, "")),
+        ];
+        const info = await app.getTextFontInfo(pageIndex, hit.index);
+        if (info?.data) {
+          const missing = await missingGlyphs(info.data, chars);
+          if (missing && missing.length === 0) embeddedFont = info.data;
+        }
+        if (!embeddedFont && app.docBytes && app.docId) {
+          const { compiledFontsForPage, compiledCandidates } = await import(
+            "../../lib/fontcompile"
+          );
+          const fonts = await compiledFontsForPage(
+            app.docId,
+            app.docBytes,
+            pageIndex,
+          );
+          for (const candidate of compiledCandidates(fonts, hit.fontName || "")) {
+            const missing = await missingGlyphs(candidate.data, chars);
+            if (missing && missing.length === 0) {
+              embeddedFont = candidate.data;
+              break;
+            }
+          }
+        }
+      } catch {
+        /* keep the CSS fallback */
+      }
+      if (embeddedFont) {
+        setInlineEdit((current) =>
+          current?.id === editId ? { ...current, embeddedFont } : current,
+        );
+      }
+    })();
+  };
+
+  /**
+   * Missing glyphs of `chars` in one run's face. The raw PDFium program is
+   * checked first; when fontkit can't parse it (bare CFF/Type1 subsets) the
+   * pdf.js-rebuilt program of the same face answers instead of returning
+   * "unverifiable" — so covered edits stay in place rather than being pushed
+   * into a substitute font.
+   */
+  const missingInFace = async (
+    objectIndex: number,
+    fontName: string,
+    chars: string[],
+  ): Promise<string[] | null> => {
+    const info = await app.getTextFontInfo(pageIndex, objectIndex);
+    let missing = info?.data ? await missingGlyphs(info.data, chars) : null;
+    if (missing === null && app.docBytes && app.docId) {
+      try {
+        const { compiledFontsForPage, compiledCandidates } = await import(
+          "../../lib/fontcompile"
+        );
+        const fonts = await compiledFontsForPage(app.docId!, app.docBytes, pageIndex);
+        for (const cand of compiledCandidates(fonts, fontName)) {
+          const m = await missingGlyphs(cand.data, chars);
+          if (m === null) continue;
+          if (missing === null || m.length < missing.length) missing = m;
+          if (m.length === 0) break;
+        }
+      } catch {
+        /* stays unverifiable */
+      }
+    }
+    return missing;
+  };
+
+  /**
+   * Program bytes of one page face (by a sample object index) that cover
+   * `chars`: the raw PDFium program first, then its pdf.js-rebuilt version
+   * when the raw one can't be parsed. Null when the face provably lacks a
+   * glyph or no usable program exists.
+   */
+  const faceBytesCovering = async (
+    objectIndex: number,
+    chars: string[],
+  ): Promise<Uint8Array | null> => {
+    const info = await app.getTextFontInfo(pageIndex, objectIndex);
+    if (!info) return null;
+    if (info.data) {
+      const missing = await missingGlyphs(info.data, chars);
+      if (missing !== null) return missing.length === 0 ? info.data : null;
+    }
+    if (app.docBytes && app.docId && info.name) {
+      try {
+        const { compiledFontsForPage, compiledCandidates } = await import(
+          "../../lib/fontcompile"
+        );
+        const fonts = await compiledFontsForPage(app.docId!, app.docBytes, pageIndex);
+        for (const cand of compiledCandidates(fonts, info.name)) {
+          const missing = await missingGlyphs(cand.data, chars);
+          if (missing !== null && missing.length === 0) return cand.data;
+        }
+      } catch {
+        /* unverifiable */
+      }
+    }
+    return null;
+  };
+
+  /** The full installed font matching a PDF face name, when it covers `chars`. */
+  const systemFaceCovering = async (
+    fontName: string,
+    chars: string[],
+  ): Promise<Uint8Array | null> => {
+    try {
+      const { findSystemFont } = await import("../../lib/systemfont");
+      const bytes = await findSystemFont(fontName);
+      if (!bytes) return null;
+      const missing = await missingGlyphs(bytes, chars);
+      return missing !== null && missing.length === 0 ? bytes : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * The closest same-typeface face on the page that covers `chars` — glyph
+   * borrowing: a document setting "UniversLTStd-LightUltraCn" often also
+   * embeds "UniversLTStd-Cn" or "Univers67CondensedBold", and any Univers
+   * beats a generic bundled substitute. Candidates are ranked by weight/
+   * width/slant closeness to the wanted style.
+   */
+  const sameTypefaceCovering = async (
+    edit: InlineEdit,
+    targetFontName: string,
+    chars: string[],
+    wantBold: boolean,
+    wantItalic: boolean,
+  ): Promise<Uint8Array | null> => {
+    const root = typefaceRoot(targetFontName);
+    if (!root) return null;
+    const candidates = Object.entries(edit.faceIndexes)
+      .filter(([name]) => name !== targetFontName && typefaceRoot(name) === root)
+      .sort(
+        ([a], [b]) =>
+          faceStyleDistance(a, targetFontName, wantBold, wantItalic) -
+          faceStyleDistance(b, targetFontName, wantBold, wantItalic),
+      );
+    for (const [, objectIndex] of candidates) {
+      const bytes = await faceBytesCovering(objectIndex, chars);
+      if (bytes) return bytes;
+    }
+    return null;
+  };
+
+  /** Leave committed text visually in place while a structural/font worker
+   * edit catches up, without keeping the editor or toolbar locked. */
+  const holdCommittedPreview = (
+    edit: InlineEdit,
+    text: string,
+    colorHex: string,
+    fontSize: number,
+    family: string,
+    bold: boolean,
+    italic: boolean,
+    settled: Promise<void>,
+  ) => {
+    const id = ++committedPreviewSeq.current;
+    setCommittedPreview({
+      id,
+      family,
+      edit: {
+        ...edit,
+        id,
+        original: text,
+        colorHex,
+        fontSize,
+        bold,
+        italic,
+        caretOffset: 0,
+      },
     });
+    const clear = () =>
+      setCommittedPreview((current) => (current?.id === id ? null : current));
+    void settled.then(clear, clear);
   };
 
   /**
    * Recreate the line's runs with a different face. Preference order: a face
-   * of the same family the document already embeds (perfect match), then the
+   * of the same family+width the document already embeds, the exact font
+   * installed on this machine, any same-typeface face on the page, then the
    * closest bundled/standard family. Used for explicit font replacement, for
    * un-bolding/un-italicizing (the regular face isn't synthesizable), and as
    * the offered fallback when the embedded subset lacks a typed glyph.
@@ -456,6 +658,9 @@ export function PageView({
     // Glyph-fallback: replace only the edited run(s), keeping the untouched
     // neighbors' original embedded faces. Explicit restyles cover the line.
     changedOnly = false,
+    // A face the caller already resolved (e.g. the installed system font) —
+    // used verbatim, skipping the cascade.
+    preset?: { standardName?: string; bytes?: Uint8Array },
   ) => {
     // Every run needs explicit text on the recreate path.
     const withText = edit.runs
@@ -467,23 +672,35 @@ export function PageView({
       .filter((r) => !changedOnly || r.changed)
       .map(({ objectIndex, text }) => ({ objectIndex, text }));
 
-    let font: { standardName?: string; bytes?: Uint8Array } | null = null;
-    if (family === "original") {
+    let font: { standardName?: string; bytes?: Uint8Array } | null = preset ?? null;
+    if (!font && family === "original") {
+      const chars = [
+        ...new Set(
+          withText
+            .map((r) => r.text)
+            .join("")
+            .replace(/[\s\u0000-\u001f\u007f-\u009f]/g, ""),
+        ),
+      ];
+      // Same family AND width in the requested style, already embedded.
       const sib = edit.siblings[styleKey(bold, italic)];
-      if (sib != null) {
-        const info = await app.getTextFontInfo(pageIndex, sib);
-        if (info?.data) {
-          // The sibling is a subset too — only use it if it covers the text.
-          const chars = [...new Set(withText.map((r) => r.text).join(""))];
-          const missing = await missingGlyphs(info.data, chars);
-          if (missing !== null && missing.length === 0) font = { bytes: info.data };
-        }
+      if (sib != null) font = await faceBytesCovering(sib, chars).then((b) => (b ? { bytes: b } : null));
+      // The exact installed font — only when the style isn't being changed
+      // (the installed face matches the ORIGINAL weight/slant).
+      if (!font && bold === edit.bold && italic === edit.italic) {
+        const sys = await systemFaceCovering(edit.fontName, chars);
+        if (sys) font = { bytes: sys };
+      }
+      // Any same-typeface face on the page, closest style first.
+      if (!font) {
+        const borrowed = await sameTypefaceCovering(edit, edit.fontName, chars, bold, italic);
+        if (borrowed) font = { bytes: borrowed };
       }
       if (!font) font = await resolveTextFont(edit.fallbackFamily, bold, italic);
-    } else {
+    } else if (!font) {
       font = await resolveTextFont(family, bold, italic);
     }
-    await app.applyTextRuns(pageIndex, withText, { font, fontSize, fill });
+    return app.applyTextRuns(pageIndex, withText, { font, fontSize, fill });
   };
 
   /** Returns true when the edit session is finished (editor should close). */
@@ -607,8 +824,7 @@ export function PageView({
         );
         let font: { standardName?: string; bytes?: Uint8Array } | undefined;
         if (fresh.length) {
-          const info = await app.getTextFontInfo(pageIndex, edit.runs[0].objectIndex);
-          const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
+          const missing = await missingInFace(edit.runs[0].objectIndex, face, fresh);
           const bad =
             missing === null
               ? trustedStandardFont(face, fresh)
@@ -616,14 +832,30 @@ export function PageView({
                 : fresh
               : missing;
           if (bad.length) {
-            const chars = [...new Set(bad)].map((c) => `"${c}"`).join(" ");
-            const ok = await app.requestConfirm({
-              title: "Substitute font?",
-              message: `The embedded font "${face.replace(/^[A-Z]{6}\+/, "")}" doesn't include ${chars}, so the reflowed paragraph would be set in a close matching font.`,
-              confirmLabel: "Use substitute",
-            });
-            if (!ok) return false;
-            font = await resolveTextFont(edit.fallbackFamily, bold, italic);
+            // Face replacement recreates every line, so any replacement face
+            // must cover the whole reflowed paragraph, not just the new chars.
+            const allChars = [
+              ...new Set(
+                plan.join("").replace(/[\s\u0000-\u001f\u007f-\u009f]/g, ""),
+              ),
+            ];
+            // The exact font installed on this machine renders precisely what
+            // the subset couldn't — same face, nothing visibly changes, so
+            // there is nothing to ask the user.
+            const sys = await systemFaceCovering(face, allChars);
+            if (sys) {
+              font = { bytes: sys };
+            } else {
+              // Same typeface elsewhere in the document beats a bundled family.
+              const borrowed = await sameTypefaceCovering(edit, face, allChars, bold, italic);
+              font = borrowed
+                ? { bytes: borrowed }
+                : await resolveTextFont(edit.fallbackFamily, bold, italic);
+              const chars = [...new Set(bad)].map((c) => `"${c}"`).join(" ");
+              toast.info(
+                `Used a close matching font because "${face.replace(/^[A-Z]{6}\+/, "")}" doesn't contain ${chars}.`,
+              );
+            }
             // Face replacement recreates every line — explicit text throughout.
             lines.forEach((l, i) => {
               if (l.text === null) l.text = oldLines[i];
@@ -631,19 +863,54 @@ export function PageView({
           }
         }
 
-        await app.applyTextReflow(pageIndex, {
+        const result = await app.applyTextReflow(pageIndex, {
           lines,
           extras,
           templateIndex,
           fill: newFill,
           font,
+          // A fallback may be much wider than a condensed embedded subset.
+          // Keep recreated lines inside the original paragraph column.
+          maxWidth: font ? meta.width : undefined,
         });
+        if (!result.previewed) {
+          holdCommittedPreview(
+            edit,
+            committed,
+            colorHex,
+            fontSize,
+            family,
+            bold,
+            italic,
+            result.settled,
+          );
+        }
         setInlineEdit(null);
         return true;
       }
 
       if (needsRecreate) {
-        await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic);
+        const result = await commitRecreate(
+          edit,
+          runEdits,
+          newFill,
+          newSize,
+          family,
+          bold,
+          italic,
+        );
+        if (!result.previewed) {
+          holdCommittedPreview(
+            edit,
+            committed,
+            colorHex,
+            fontSize,
+            family,
+            bold,
+            italic,
+            result.settled,
+          );
+        }
         setInlineEdit(null);
         return true;
       }
@@ -671,8 +938,7 @@ export function PageView({
             edit.fontChars[run.fontName] ?? "",
           );
           if (!fresh.length) continue;
-          const info = await app.getTextFontInfo(pageIndex, run.objectIndex);
-          const missing = info?.data ? await missingGlyphs(info.data, fresh) : null;
+          const missing = await missingInFace(run.objectIndex, run.fontName, fresh);
           // Unverifiable coverage (no parseable program) usually means a
           // non-embedded standard face — viewers render those with their own
           // complete font, so Latin text is safe. Anything else stays on the
@@ -691,23 +957,82 @@ export function PageView({
         }
       }
       if (substitute) {
-        // The substitution changes the visible face — ask before committing,
-        // and keep the editor open (text preserved) when the user declines.
+        // The replacement face must cover the changed runs' WHOLE text, not
+        // just the new characters — recreate rewrites those runs entirely.
+        const changedChars = [
+          ...new Set(
+            edit.runs
+              .map((r, i) => runEdits[i].text ?? "")
+              .join("")
+              .replace(/[\s\u0000-\u001f\u007f-\u009f]/g, ""),
+          ),
+        ];
+        // The exact installed font is the same face, complete — commit with
+        // it silently; nothing visible changes.
+        const sys = await systemFaceCovering(badFace, changedChars);
+        if (sys) {
+          const result = await commitRecreate(
+            edit,
+            runEdits,
+            newFill,
+            newSize,
+            family,
+            bold,
+            italic,
+            true,
+            { bytes: sys },
+          );
+          if (!result.previewed) {
+            holdCommittedPreview(
+              edit,
+              committed,
+              colorHex,
+              fontSize,
+              family,
+              bold,
+              italic,
+              result.settled,
+            );
+          }
+          setInlineEdit(null);
+          return true;
+        }
+        // A visible substitution is automatic and non-blocking; Undo/Discard
+        // remain available like they are for every other edit.
         const chars = [...new Set(badChars)].map((c) => `"${c}"`).join(" ");
-        const ok = await app.requestConfirm({
-          title: "Substitute font?",
-          message: `The embedded font "${badFace}" doesn't include ${chars}, so the edited text would be set in a close matching font.`,
-          confirmLabel: "Use substitute",
-        });
-        if (!ok) return false;
-        // Recreate only the edited runs with a close bundled/standard face; the
-        // untouched neighbors keep their original embedded fonts.
-        await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic, true);
+        // Recreate only the edited runs — same-typeface faces from the page
+        // first, then the closest bundled/standard family; the untouched
+        // neighbors keep their original embedded fonts.
+        const result = await commitRecreate(
+          edit,
+          runEdits,
+          newFill,
+          newSize,
+          family,
+          bold,
+          italic,
+          true,
+        );
+        toast.info(
+          `Used a close matching font because "${badFace}" doesn't contain ${chars}.`,
+        );
+        if (!result.previewed) {
+          holdCommittedPreview(
+            edit,
+            committed,
+            colorHex,
+            fontSize,
+            family,
+            bold,
+            italic,
+            result.settled,
+          );
+        }
         setInlineEdit(null);
         return true;
       }
 
-      await app.applyTextRuns(pageIndex, runEdits, {
+      const result = await app.applyTextRuns(pageIndex, runEdits, {
         fill: newFill,
         fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
         // A shared anchor only makes sense for one line — scaling a whole
@@ -717,6 +1042,18 @@ export function PageView({
         synthBold: boldOn || undefined,
         synthItalic: italicOn || undefined,
       });
+      if (!result.previewed) {
+        holdCommittedPreview(
+          edit,
+          committed,
+          colorHex,
+          fontSize,
+          family,
+          bold,
+          italic,
+          result.settled,
+        );
+      }
       setInlineEdit(null);
       return true;
     } catch {
@@ -798,6 +1135,17 @@ export function PageView({
       )}
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
+      {committedPreview && (
+        <InlineTextEditor
+          key={`committed-${committedPreview.id}`}
+          edit={committedPreview.edit}
+          saving
+          passive
+          initialFamily={committedPreview.family}
+          onCommit={async () => true}
+          onCancel={() => {}}
+        />
+      )}
       {inlineEdit && (
         <InlineTextEditor
           edit={inlineEdit}

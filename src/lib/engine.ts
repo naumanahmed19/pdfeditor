@@ -12,7 +12,14 @@
 import { init, type WrappedPdfiumModule } from "@embedpdf/pdfium";
 import wasmUrl from "@embedpdf/pdfium/pdfium.wasm?url";
 import type { OutlineNode } from "../types";
-import type { Matrix, ObjectStyle, PageObject, Rgba } from "./pdfium";
+import type {
+  FontInfo,
+  Matrix,
+  ObjectStyle,
+  PageObject,
+  Rgba,
+  TextObject,
+} from "./pdfium";
 
 const FPDF_ANNOT = 0x01;
 const FPDF_LCD_TEXT = 0x02;
@@ -90,6 +97,16 @@ function toHeap(mod: WrappedPdfiumModule, bytes: Uint8Array): number {
   const r = rt(mod);
   const ptr = r.wasmExports.malloc(bytes.length);
   r.HEAPU8.set(bytes, ptr);
+  return ptr;
+}
+
+/** Allocate a NUL-terminated UTF-16 string for PDFium editing APIs. */
+function allocUtf16(mod: WrappedPdfiumModule, value: string): number {
+  const r = rt(mod);
+  const ptr = r.wasmExports.malloc((value.length + 1) * 2);
+  const view = new Uint16Array(r.HEAPU8.buffer, ptr, value.length + 1);
+  for (let i = 0; i < value.length; i++) view[i] = value.charCodeAt(i);
+  view[value.length] = 0;
   return ptr;
 }
 
@@ -240,6 +257,9 @@ export interface CompatAnnotation {
 
 export class PdfPage {
   private textPage = 0;
+  private fontInfoCache = new Map<number, FontInfo>();
+  private objectCache: PageObject[] | null = null;
+  private textObjectCache: TextObject[] | null = null;
 
   constructor(
     private mod: WrappedPdfiumModule,
@@ -271,6 +291,8 @@ export class PdfPage {
       this.mod.FPDFText_ClosePage(this.textPage);
       this.textPage = 0;
     }
+    this.objectCache = null;
+    this.textObjectCache = null;
   }
 
   /**
@@ -279,12 +301,14 @@ export class PdfPage {
    * document reparse). Mirrors pdfium.ts's byte-based getPageObjects.
    */
   getObjects(): PageObject[] {
+    if (this.objectCache) return this.objectCache;
     const m = this.mod;
     const r = rt(m);
     const tp = this.text();
     const f4 = r.wasmExports.malloc(16);
     const fs = r.wasmExports.malloc(4);
     const c4 = r.wasmExports.malloc(16);
+    const m6 = r.wasmExports.malloc(24);
     const readColor = (
       get: (o: number, r: number, g: number, b: number, a: number) => boolean,
       obj: number,
@@ -315,16 +339,31 @@ export class PdfPage {
         let text = "";
         let fontSize = 0;
         let fontName = "";
+        let hasMatrix = false;
         if (type === FPDF_PAGEOBJ_TEXT) {
           const need = m.FPDFTextObj_GetText(obj, tp, 0, 0);
           if (need > 0) {
-            const b = r.wasmExports.malloc(need * 2);
+            // FPDFTextObj_GetText reports a UTF-16LE BYTE count (including
+            // the terminator), not a character count. Doubling it exposes
+            // unrelated heap contents after the NUL in the inline editor.
+            const b = r.wasmExports.malloc(need);
             m.FPDFTextObj_GetText(obj, tp, b, need);
-            text = readUtf16(m, b, need * 2);
+            text = readUtf16(m, b, need);
             r.wasmExports.free(b);
           }
           m.FPDFTextObj_GetFontSize(obj, fs);
-          fontSize = r.getValue(fs, "float");
+          const rawSize = r.getValue(fs, "float");
+          hasMatrix = m.FPDFPageObj_GetMatrix(obj, m6);
+          if (hasMatrix) {
+            const a = r.getValue(m6, "float");
+            const b = r.getValue(m6 + 4, "float");
+            const c = r.getValue(m6 + 8, "float");
+            const d = r.getValue(m6 + 12, "float");
+            const visualScale = Math.hypot(c, d) || Math.hypot(a, b) || 1;
+            fontSize = rawSize * visualScale;
+          } else {
+            fontSize = rawSize;
+          }
           const font = m.FPDFTextObj_GetFont(obj);
           if (font) {
             const n = m.FPDFFont_GetBaseFontName(font, 0, 0);
@@ -336,6 +375,8 @@ export class PdfPage {
             }
           }
         }
+        const left = r.getValue(f4, "float");
+        const bottom = r.getValue(f4 + 4, "float");
         out.push({
           index: i,
           kind:
@@ -345,8 +386,8 @@ export class PdfPage {
                 ? "image"
                 : "path",
           text,
-          left: r.getValue(f4, "float"),
-          bottom: r.getValue(f4 + 4, "float"),
+          left,
+          bottom,
           right: r.getValue(f4 + 8, "float"),
           top: r.getValue(f4 + 12, "float"),
           fontSize,
@@ -357,14 +398,154 @@ export class PdfPage {
               ? r.getValue(fs, "float")
               : 0,
           fontName,
+          originX: type === FPDF_PAGEOBJ_TEXT
+            ? hasMatrix
+              ? r.getValue(m6 + 16, "float")
+              : left
+            : undefined,
+          originY: type === FPDF_PAGEOBJ_TEXT
+            ? hasMatrix
+              ? r.getValue(m6 + 20, "float")
+              : bottom
+            : undefined,
         });
       }
+      this.objectCache = out;
       return out;
     } finally {
       r.wasmExports.free(f4);
       r.wasmExports.free(fs);
       r.wasmExports.free(c4);
+      r.wasmExports.free(m6);
     }
+  }
+
+  /** Editable text runs from the live page handle (no document reparse). */
+  getTextObjects(): TextObject[] {
+    if (this.textObjectCache) return this.textObjectCache;
+    const m = this.mod;
+    const r = rt(m);
+    const textPage = this.text();
+    const bounds = r.wasmExports.malloc(16);
+    const color = r.wasmExports.malloc(16);
+    const fontSizePtr = r.wasmExports.malloc(4);
+    const matrix = r.wasmExports.malloc(24);
+    const objects: TextObject[] = [];
+    try {
+      const count = m.FPDFPage_CountObjects(this.handle);
+      for (let index = 0; index < count; index++) {
+        const object = m.FPDFPage_GetObject(this.handle, index);
+        if (m.FPDFPageObj_GetType(object) !== FPDF_PAGEOBJ_TEXT) continue;
+        if (!m.FPDFPageObj_GetBounds(object, bounds, bounds + 4, bounds + 8, bounds + 12)) {
+          continue;
+        }
+
+        const needed = m.FPDFTextObj_GetText(object, textPage, 0, 0);
+        let text = "";
+        if (needed > 0) {
+          const textPtr = r.wasmExports.malloc(needed);
+          m.FPDFTextObj_GetText(object, textPage, textPtr, needed);
+          text = readUtf16(m, textPtr, needed);
+          r.wasmExports.free(textPtr);
+        }
+
+        m.FPDFPageObj_GetFillColor(object, color, color + 4, color + 8, color + 12);
+        m.FPDFTextObj_GetFontSize(object, fontSizePtr);
+        const rawSize = r.getValue(fontSizePtr, "float");
+        const hasMatrix = m.FPDFPageObj_GetMatrix(object, matrix);
+        let fontSize = rawSize;
+        if (hasMatrix) {
+          const a = r.getValue(matrix, "float");
+          const b = r.getValue(matrix + 4, "float");
+          const c = r.getValue(matrix + 8, "float");
+          const d = r.getValue(matrix + 12, "float");
+          fontSize *= Math.hypot(c, d) || Math.hypot(a, b) || 1;
+        }
+
+        let fontName = "";
+        const font = m.FPDFTextObj_GetFont(object);
+        if (font) {
+          const nameLength = m.FPDFFont_GetBaseFontName(font, 0, 0);
+          if (nameLength > 0) {
+            const namePtr = r.wasmExports.malloc(nameLength);
+            m.FPDFFont_GetBaseFontName(font, namePtr, nameLength);
+            fontName = readUtf8(m, namePtr, nameLength);
+            r.wasmExports.free(namePtr);
+          }
+        }
+
+        const left = r.getValue(bounds, "float");
+        const bottom = r.getValue(bounds + 4, "float");
+        objects.push({
+          index,
+          text,
+          left,
+          bottom,
+          right: r.getValue(bounds + 8, "float"),
+          top: r.getValue(bounds + 12, "float"),
+          fontSize,
+          color: [
+            r.getValue(color, "i32") & 0xff,
+            r.getValue(color + 4, "i32") & 0xff,
+            r.getValue(color + 8, "i32") & 0xff,
+            r.getValue(color + 12, "i32") & 0xff,
+          ],
+          fontName,
+          originX: hasMatrix ? r.getValue(matrix + 16, "float") : left,
+          originY: hasMatrix ? r.getValue(matrix + 20, "float") : bottom,
+        });
+      }
+      this.textObjectCache = objects;
+      return objects;
+    } finally {
+      r.wasmExports.free(bounds);
+      r.wasmExports.free(color);
+      r.wasmExports.free(fontSizePtr);
+      r.wasmExports.free(matrix);
+    }
+  }
+
+  /** Font program for one live text object, cached for this page. */
+  getFontInfo(objectIndex: number): FontInfo {
+    const cached = this.fontInfoCache.get(objectIndex);
+    if (cached) return cached;
+    const m = this.mod;
+    const r = rt(m);
+    const object = m.FPDFPage_GetObject(this.handle, objectIndex);
+    if (!object || m.FPDFPageObj_GetType(object) !== FPDF_PAGEOBJ_TEXT) {
+      throw new Error(`PDFium: object ${objectIndex} is not a text object`);
+    }
+    const font = m.FPDFTextObj_GetFont(object);
+    if (!font) return { name: "", data: null };
+
+    let name = "";
+    const nameLength = m.FPDFFont_GetBaseFontName(font, 0, 0);
+    if (nameLength > 0) {
+      const namePtr = r.wasmExports.malloc(nameLength);
+      m.FPDFFont_GetBaseFontName(font, namePtr, nameLength);
+      name = readUtf8(m, namePtr, nameLength);
+      r.wasmExports.free(namePtr);
+    }
+
+    let data: Uint8Array | null = null;
+    const lengthPtr = r.wasmExports.malloc(4);
+    try {
+      if (m.FPDFFont_GetFontData(font, 0, 0, lengthPtr)) {
+        const size = r.getValue(lengthPtr, "i32");
+        if (size > 0) {
+          const dataPtr = r.wasmExports.malloc(size);
+          if (m.FPDFFont_GetFontData(font, dataPtr, size, lengthPtr)) {
+            data = r.HEAPU8.slice(dataPtr, dataPtr + size);
+          }
+          r.wasmExports.free(dataPtr);
+        }
+      }
+    } finally {
+      r.wasmExports.free(lengthPtr);
+    }
+    const info = { name, data };
+    this.fontInfoCache.set(objectIndex, info);
+    return info;
   }
 
   /**
@@ -376,6 +557,60 @@ export class PdfPage {
     fn(this.mod, this.handle);
     this.mod.FPDFPage_GenerateContent(this.handle);
     this.resetText();
+  }
+
+  /** Mutate the live page without regenerating its content stream. PDFium can
+   * render the changed objects immediately while a worker persists them. */
+  private preview(fn: (m: WrappedPdfiumModule, page: number) => void): void {
+    fn(this.mod, this.handle);
+    this.resetText();
+  }
+
+  /** Move/scale immediately in the live renderer, without content generation. */
+  previewTransformObject(objectIndex: number, mtx: Matrix): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      m.FPDFPageObj_Transform(obj, mtx.a, mtx.b, mtx.c, mtx.d, mtx.e, mtx.f);
+    });
+  }
+
+  /** Delete immediately in the live renderer, without content generation. */
+  previewRemoveObject(objectIndex: number): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      if (m.FPDFPage_RemoveObject(page, obj)) m.FPDFPageObj_Destroy(obj);
+    });
+  }
+
+  /** Restyle immediately in the live renderer, without content generation. */
+  previewSetObjectStyle(objectIndex: number, style: ObjectStyle): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${objectIndex} not found`);
+      if (style.fill) m.FPDFPageObj_SetFillColor(obj, ...style.fill);
+      if (style.stroke) m.FPDFPageObj_SetStrokeColor(obj, ...style.stroke);
+      if (style.strokeWidth != null) m.FPDFPageObj_SetStrokeWidth(obj, style.strokeWidth);
+    });
+  }
+
+  /** Replace text immediately using the object's existing embedded face. */
+  previewSetText(objectIndex: number, value: string): void {
+    this.preview((m, page) => {
+      const obj = m.FPDFPage_GetObject(page, objectIndex);
+      if (!obj || m.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        throw new Error(`PDFium: object ${objectIndex} is not a text object`);
+      }
+      const ptr = allocUtf16(m, value);
+      try {
+        if (!m.FPDFText_SetText(obj, ptr)) {
+          throw new Error("PDFium: FPDFText_SetText failed");
+        }
+      } finally {
+        rt(m).wasmExports.free(ptr);
+      }
+    });
   }
 
   /** Move/scale the object at `objectIndex` by an affine matrix (page space). */
@@ -1002,9 +1237,39 @@ export class PdfDoc {
     return this.page(pageIndex).getObjects();
   }
 
+  /** Editable text objects on a page, read from the live handle. */
+  getTextObjects(pageIndex: number): TextObject[] {
+    return this.page(pageIndex).getTextObjects();
+  }
+
+  /** Font metadata for one live text object. */
+  getFontInfo(pageIndex: number, objectIndex: number): FontInfo {
+    return this.page(pageIndex).getFontInfo(objectIndex);
+  }
+
   /** In-place move/scale of an existing object. Renders on next repaint. */
   transformObject(pageIndex: number, objectIndex: number, m: Matrix): void {
     this.page(pageIndex).transformObject(objectIndex, m);
+  }
+
+  /** Optimistic move/scale; the worker persists it later. */
+  previewTransformObject(pageIndex: number, objectIndex: number, m: Matrix): void {
+    this.page(pageIndex).previewTransformObject(objectIndex, m);
+  }
+
+  /** Optimistic delete; the worker persists it later. */
+  previewRemoveObject(pageIndex: number, objectIndex: number): void {
+    this.page(pageIndex).previewRemoveObject(objectIndex);
+  }
+
+  /** Optimistic recolor/restroke; the worker persists it later. */
+  previewSetObjectStyle(pageIndex: number, objectIndex: number, style: ObjectStyle): void {
+    this.page(pageIndex).previewSetObjectStyle(objectIndex, style);
+  }
+
+  /** Optimistic text replacement with the object's existing face. */
+  previewSetText(pageIndex: number, objectIndex: number, value: string): void {
+    this.page(pageIndex).previewSetText(objectIndex, value);
   }
 
   /** In-place delete of an existing object. */

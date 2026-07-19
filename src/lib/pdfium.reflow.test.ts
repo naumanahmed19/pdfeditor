@@ -119,6 +119,26 @@ describe("reflowTextLines", () => {
     ).rejects.toThrow(/explicit text/);
   });
 
+  it("keeps replacement-font lines inside the paragraph column", async () => {
+    const bytes = await paraPdf();
+    const before = await readLines(bytes);
+    const maxWidth = 90;
+    const out = await reflowTextLines(bytes, 0, {
+      lines: before.map((line, i) => ({
+        objectIndexes: [line.index],
+        text: i === 0 ? "a replacement line that is much too wide" : line.text,
+      })),
+      extras: [],
+      templateIndex: before[0].index,
+      font: { standardName: "Helvetica" },
+      maxWidth,
+    });
+    const after = await readLines(out);
+    for (const line of after) {
+      expect(line.right - line.left).toBeLessThanOrEqual(maxWidth + 0.1);
+    }
+  });
+
   it("runs the full planReflow → spec pipeline like the commit path", async () => {
     const bytes = await paraPdf();
     const before = await readLines(bytes);

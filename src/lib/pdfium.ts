@@ -618,6 +618,42 @@ export interface TextObject {
   originY: number;
 }
 
+/**
+ * Font size after the text object's affine matrix is applied. Illustrator and
+ * other authoring tools commonly emit text at size 1 and put the real point
+ * size in the matrix, so FPDFTextObj_GetFontSize alone is not a visual size.
+ * The transformed font-height vector is (c,d); fall back to the baseline
+ * vector only for a degenerate matrix.
+ */
+export function effectiveFontSize(
+  rawSize: number,
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+): number {
+  const verticalScale = Math.hypot(c, d);
+  const scale = verticalScale > 1e-6 ? verticalScale : Math.hypot(a, b);
+  return rawSize * (scale > 1e-6 ? scale : 1);
+}
+
+/** Convert a requested visual point size back to the object's raw font size. */
+function rawSizeForVisualTarget(
+  rawSize: number,
+  matrix: number[],
+  visualTarget: number | undefined,
+): number {
+  if (visualTarget == null) return rawSize;
+  const current = effectiveFontSize(
+    rawSize,
+    matrix[0],
+    matrix[1],
+    matrix[2],
+    matrix[3],
+  );
+  return current > 1e-6 ? rawSize * (visualTarget / current) : visualTarget;
+}
+
 /** Write a JS string as a NUL-terminated UTF-16LE buffer; caller frees it. */
 function allocUtf16(mod: WrappedPdfiumModule, str: string): number {
   const rt = rtx(mod);
@@ -671,9 +707,10 @@ export async function getTextObjects(
         const need = mod.FPDFTextObj_GetText(obj, textPage, 0, 0);
         let text = "";
         if (need > 0) {
-          const buf = rt.wasmExports.malloc(need * 2);
+          // The returned size is already bytes (UTF-16LE + terminator).
+          const buf = rt.wasmExports.malloc(need);
           mod.FPDFTextObj_GetText(obj, textPage, buf, need);
-          text = readUtf16(mod, buf, need * 2);
+          text = readUtf16(mod, buf, need);
           rt.wasmExports.free(buf);
         }
 
@@ -711,7 +748,15 @@ export async function getTextObjects(
             rt.getValue(c4 + 8, "i32") & 0xff,
             rt.getValue(c4 + 12, "i32") & 0xff,
           ],
-          fontSize: rt.getValue(fs, "float"),
+          fontSize: hasMatrix
+            ? effectiveFontSize(
+                rt.getValue(fs, "float"),
+                rt.getValue(m6, "float"),
+                rt.getValue(m6 + 4, "float"),
+                rt.getValue(m6 + 8, "float"),
+                rt.getValue(m6 + 12, "float"),
+              )
+            : rt.getValue(fs, "float"),
           fontName,
         });
       }
@@ -809,6 +854,9 @@ export interface PageObject {
   strokeWidth: number;
   /** Base font name for text objects ("" otherwise). */
   fontName: string;
+  /** Text-matrix baseline origin. Present for text objects. */
+  originX?: number;
+  originY?: number;
 }
 
 /** A 2x3 affine matrix { a b c d e f } in PDF page space. */
@@ -836,6 +884,7 @@ export async function getPageObjects(
     const f4 = rt.wasmExports.malloc(16);
     const fs = rt.wasmExports.malloc(4);
     const c4 = rt.wasmExports.malloc(16); // 4 uints for a color read
+    const m6 = rt.wasmExports.malloc(24); // FS_MATRIX (6 floats)
     const readColor = (get: (o: number, r: number, g: number, b: number, a: number) => boolean, obj: number): Rgba => {
       if (!get(obj, c4, c4 + 4, c4 + 8, c4 + 12)) return null;
       const a = rt.getValue(c4 + 12, "i32") & 0xff;
@@ -865,13 +914,22 @@ export async function getPageObjects(
         if (type === FPDF_PAGEOBJ_TEXT) {
           const need = mod.FPDFTextObj_GetText(obj, textPage, 0, 0);
           if (need > 0) {
-            const b = rt.wasmExports.malloc(need * 2);
+            const b = rt.wasmExports.malloc(need);
             mod.FPDFTextObj_GetText(obj, textPage, b, need);
-            text = readUtf16(mod, b, need * 2);
+            text = readUtf16(mod, b, need);
             rt.wasmExports.free(b);
           }
           mod.FPDFTextObj_GetFontSize(obj, fs);
-          fontSize = rt.getValue(fs, "float");
+          const rawSize = rt.getValue(fs, "float");
+          fontSize = mod.FPDFPageObj_GetMatrix(obj, m6)
+            ? effectiveFontSize(
+                rawSize,
+                rt.getValue(m6, "float"),
+                rt.getValue(m6 + 4, "float"),
+                rt.getValue(m6 + 8, "float"),
+                rt.getValue(m6 + 12, "float"),
+              )
+            : rawSize;
         }
         let fontName = "";
         if (type === FPDF_PAGEOBJ_TEXT) {
@@ -886,6 +944,9 @@ export async function getPageObjects(
             }
           }
         }
+        const hasMatrix = type === FPDF_PAGEOBJ_TEXT && mod.FPDFPageObj_GetMatrix(obj, m6);
+        const left = rt.getValue(f4, "float");
+        const bottom = rt.getValue(f4 + 4, "float");
         out.push({
           index: i,
           kind:
@@ -895,8 +956,8 @@ export async function getPageObjects(
                 ? "image"
                 : "path",
           text,
-          left: rt.getValue(f4, "float"),
-          bottom: rt.getValue(f4 + 4, "float"),
+          left,
+          bottom,
           right: rt.getValue(f4 + 8, "float"),
           top: rt.getValue(f4 + 12, "float"),
           fontSize,
@@ -907,6 +968,16 @@ export async function getPageObjects(
               ? rt.getValue(fs, "float")
               : 0,
           fontName,
+          originX: type === FPDF_PAGEOBJ_TEXT
+            ? hasMatrix
+              ? rt.getValue(m6 + 16, "float")
+              : left
+            : undefined,
+          originY: type === FPDF_PAGEOBJ_TEXT
+            ? hasMatrix
+              ? rt.getValue(m6 + 20, "float")
+              : bottom
+            : undefined,
         });
       }
       return out;
@@ -914,6 +985,7 @@ export async function getPageObjects(
       rt.wasmExports.free(f4);
       rt.wasmExports.free(fs);
       rt.wasmExports.free(c4);
+      rt.wasmExports.free(m6);
       mod.FPDFText_ClosePage(textPage);
       mod.FPDF_ClosePage(page);
     }
@@ -1055,7 +1127,60 @@ export async function styleTextRuns(
 
       const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
       const fs = rt.wasmExports.malloc(4);
+      const bounds = rt.wasmExports.malloc(16);
       try {
+        // Capture collision limits before inserting/removing anything. Other
+        // runs in this same edit are ignored because merged/removed siblings
+        // make their horizontal room available to the replacement.
+        const edited = new Set(objs);
+        const objectCount = mod.FPDFPage_CountObjects(page);
+        const fitWidths = objs.map((obj) => {
+          if (!mod.FPDFPageObj_GetBounds(
+            obj,
+            bounds,
+            bounds + 4,
+            bounds + 8,
+            bounds + 12,
+          )) return undefined;
+          const left = rt.getValue(bounds, "float");
+          const bottom = rt.getValue(bounds + 4, "float");
+          const top = rt.getValue(bounds + 12, "float");
+          const height = Math.max(0.01, top - bottom);
+          let nextLeft = Number.POSITIVE_INFINITY;
+
+          for (let j = 0; j < objectCount; j++) {
+            const candidate = mod.FPDFPage_GetObject(page, j);
+            if (
+              !candidate ||
+              edited.has(candidate) ||
+              mod.FPDFPageObj_GetType(candidate) !== FPDF_PAGEOBJ_TEXT ||
+              !mod.FPDFPageObj_GetBounds(
+                candidate,
+                bounds,
+                bounds + 4,
+                bounds + 8,
+                bounds + 12,
+              )
+            ) continue;
+            const candidateLeft = rt.getValue(bounds, "float");
+            const candidateBottom = rt.getValue(bounds + 4, "float");
+            const candidateTop = rt.getValue(bounds + 12, "float");
+            const overlap = Math.min(top, candidateTop) - Math.max(bottom, candidateBottom);
+            const candidateHeight = Math.max(0.01, candidateTop - candidateBottom);
+            if (
+              // Also recognize a neighbor already overlapped by an earlier
+              // bad substitution; the next edit should heal that collision.
+              candidateLeft > left + 0.25 &&
+              overlap > 0.35 * Math.min(height, candidateHeight)
+            ) {
+              nextLeft = Math.min(nextLeft, candidateLeft);
+            }
+          }
+          if (!Number.isFinite(nextLeft)) return undefined;
+          const gap = Math.max(0.5, Math.min(2, height * 0.04));
+          return Math.max(0.5, nextLeft - left - gap);
+        });
+
         runs.forEach((r, i) => {
           if (r.text == null) {
             throw new Error("styleTextRuns: font replacement needs explicit text per run");
@@ -1067,15 +1192,19 @@ export async function styleTextRuns(
           }
           // Preserve the original placement (matrix), color and size.
           mod.FPDFPageObj_GetMatrix(obj, mPtr);
+          const matrix = Array.from({ length: 6 }, (_, j) =>
+            rt.getValue(mPtr + j * 4, "float"),
+          );
           const fill = style.fill ?? readFillColor(mod, obj);
           mod.FPDFTextObj_GetFontSize(obj, fs);
-          const size = style.fontSize ?? rt.getValue(fs, "float");
+          const rawSize = rt.getValue(fs, "float");
+          const size = rawSizeForVisualTarget(rawSize, matrix, style.fontSize);
 
           const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
           const sp = allocUtf16(mod, r.text);
           mod.FPDFText_SetText(next, sp);
           rt.wasmExports.free(sp);
-          mod.FPDFPageObj_SetMatrix(next, mPtr);
+          setFittedTextMatrix(mod, next, mPtr, bounds, matrix, fitWidths[i]);
           mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
           mod.FPDFPage_InsertObject(page, next);
           removeObj(obj);
@@ -1083,6 +1212,7 @@ export async function styleTextRuns(
       } finally {
         rt.wasmExports.free(mPtr);
         rt.wasmExports.free(fs);
+        rt.wasmExports.free(bounds);
       }
       return;
     }
@@ -1187,6 +1317,8 @@ export interface ReflowSpec {
   font?: TextFont;
   /** Absolute size (pt) for the font-replacement path. */
   fontSize?: number;
+  /** Paragraph column width used to contain wider replacement fonts. */
+  maxWidth?: number;
 }
 
 /**
@@ -1226,6 +1358,7 @@ export async function reflowTextLines(
 
     const mPtr = rt.wasmExports.malloc(24); // FS_MATRIX = 6 floats
     const fs = rt.wasmExports.malloc(4);
+    const bounds = rt.wasmExports.malloc(16);
     let loadedFont = 0;
     try {
       // Template properties FIRST — extras are created before any removal so
@@ -1260,15 +1393,13 @@ export async function reflowTextLines(
       const extraFont = spec.font ? loadedFont : mod.FPDFTextObj_GetFont(template);
       if (!extraFont) throw new Error("PDFium: template has no font");
 
-      const writeMatrix = (m: number[]) => {
-        for (let i = 0; i < 6; i++) rt.setValue(mPtr + i * 4, m[i], "float");
-      };
       const createLine = (
         text: string,
         font: number,
         size: number,
         matrix: number[],
         fill: [number, number, number, number],
+        maxWidth?: number,
       ) => {
         const next = mod.FPDFPageObj_CreateTextObj(doc, font, size);
         if (!next) throw new Error("PDFium: could not create text object");
@@ -1276,8 +1407,7 @@ export async function reflowTextLines(
         const ok = mod.FPDFText_SetText(next, sp);
         rt.wasmExports.free(sp);
         if (!ok) throw new Error("PDFium: FPDFText_SetText failed");
-        writeMatrix(matrix);
-        mod.FPDFPageObj_SetMatrix(next, mPtr);
+        setFittedTextMatrix(mod, next, mPtr, bounds, matrix, maxWidth);
         mod.FPDFPageObj_SetFillColor(next, fill[0], fill[1], fill[2], fill[3]);
         mod.FPDFPage_InsertObject(page, next);
       };
@@ -1290,9 +1420,10 @@ export async function reflowTextLines(
         createLine(
           extra.text,
           extraFont,
-          spec.fontSize ?? tSize,
+          rawSizeForVisualTarget(tSize, tMatrix, spec.fontSize),
           m,
           tFill,
+          spec.maxWidth,
         );
       }
 
@@ -1317,9 +1448,10 @@ export async function reflowTextLines(
             rt.getValue(mPtr + i * 4, "float"),
           );
           mod.FPDFTextObj_GetFontSize(first, fs);
-          const size = spec.fontSize ?? rt.getValue(fs, "float");
+          const rawSize = rt.getValue(fs, "float");
+          const size = rawSizeForVisualTarget(rawSize, m, spec.fontSize);
           const fill = spec.fill ?? readFillColor(mod, first);
-          createLine(line.text, loadedFont, size, m, fill);
+          createLine(line.text, loadedFont, size, m, fill, spec.maxWidth);
           objs.forEach(removeObj);
           return;
         }
@@ -1333,6 +1465,7 @@ export async function reflowTextLines(
     } finally {
       rt.wasmExports.free(mPtr);
       rt.wasmExports.free(fs);
+      rt.wasmExports.free(bounds);
     }
   });
 }
@@ -1441,6 +1574,123 @@ async function editPage(
   } finally {
     mod.FPDF_CloseDocument(doc);
     rt.wasmExports.free(filePtr);
+  }
+}
+
+/** Object-only mutation accepted by the batched worker path. */
+export type PageObjectMutation =
+  | {
+      type: "transformObject";
+      pageIndex: number;
+      objectIndex: number;
+      matrix: Matrix;
+    }
+  | {
+      type: "removeObject";
+      pageIndex: number;
+      objectIndex: number;
+    }
+  | {
+      type: "setObjectStyle";
+      pageIndex: number;
+      objectIndex: number;
+      style: ObjectStyle;
+    };
+
+/** Apply several object mutations in one open document and regenerate each
+ * touched page once. This turns a burst of moves into one expensive rewrite. */
+export async function editPageObjects(
+  bytes: Uint8Array,
+  operations: readonly PageObjectMutation[],
+): Promise<Uint8Array> {
+  if (!operations.length) return bytes;
+  const mod = await getPdfium();
+  const rt = rtx(mod);
+  const filePtr = toHeap(mod, bytes);
+  const doc = mod.FPDF_LoadMemDocument(filePtr, bytes.length, "");
+  if (!doc) {
+    rt.wasmExports.free(filePtr);
+    throw new Error(`PDFium: could not open document (err ${mod.FPDF_GetLastError()})`);
+  }
+  const pages = new Map<number, number>();
+  try {
+    const pageAt = (pageIndex: number) => {
+      const cached = pages.get(pageIndex);
+      if (cached) return cached;
+      const page = mod.FPDF_LoadPage(doc, pageIndex);
+      if (!page) throw new Error(`PDFium: could not load page ${pageIndex}`);
+      pages.set(pageIndex, page);
+      return page;
+    };
+    for (const operation of operations) {
+      const page = pageAt(operation.pageIndex);
+      const obj = mod.FPDFPage_GetObject(page, operation.objectIndex);
+      if (!obj) throw new Error(`PDFium: object ${operation.objectIndex} not found`);
+      if (operation.type === "transformObject") {
+        const m = operation.matrix;
+        mod.FPDFPageObj_Transform(obj, m.a, m.b, m.c, m.d, m.e, m.f);
+      } else if (operation.type === "removeObject") {
+        if (mod.FPDFPage_RemoveObject(page, obj)) mod.FPDFPageObj_Destroy(obj);
+      } else {
+        const style = operation.style;
+        if (style.fill) mod.FPDFPageObj_SetFillColor(obj, ...style.fill);
+        if (style.stroke) mod.FPDFPageObj_SetStrokeColor(obj, ...style.stroke);
+        if (style.strokeWidth != null) {
+          mod.FPDFPageObj_SetStrokeWidth(obj, style.strokeWidth);
+        }
+      }
+    }
+    for (const [pageIndex, page] of pages) {
+      if (!mod.FPDFPage_GenerateContent(page)) {
+        throw new Error(`PDFium: could not regenerate page ${pageIndex + 1}`);
+      }
+    }
+    return saveAsCopy(mod, doc);
+  } finally {
+    for (const page of pages.values()) mod.FPDF_ClosePage(page);
+    mod.FPDF_CloseDocument(doc);
+    rt.wasmExports.free(filePtr);
+  }
+}
+
+/** Apply a text matrix, condensing only its baseline vector when a wider
+ * replacement face would overflow the available horizontal space. */
+function setFittedTextMatrix(
+  mod: WrappedPdfiumModule,
+  object: number,
+  matrixPtr: number,
+  boundsPtr: number,
+  matrix: number[],
+  maxWidth: number | undefined,
+): void {
+  const rt = rtx(mod);
+  const apply = () => {
+    for (let i = 0; i < 6; i++) {
+      rt.setValue(matrixPtr + i * 4, matrix[i], "float");
+    }
+    mod.FPDFPageObj_SetMatrix(object, matrixPtr);
+  };
+  apply();
+  if (!(maxWidth && maxWidth > 0.5)) return;
+
+  // Two passes also cover mildly skewed matrices, where page-space width is
+  // not perfectly linear with the local horizontal scale.
+  for (let pass = 0; pass < 2; pass++) {
+    if (!mod.FPDFPageObj_GetBounds(
+      object,
+      boundsPtr,
+      boundsPtr + 4,
+      boundsPtr + 8,
+      boundsPtr + 12,
+    )) return;
+    const width = Math.abs(
+      rt.getValue(boundsPtr + 8, "float") - rt.getValue(boundsPtr, "float"),
+    );
+    if (width <= maxWidth + 0.05 || width < 0.01) return;
+    const factor = Math.max(0.05, Math.min(1, maxWidth / width));
+    matrix[0] *= factor;
+    matrix[1] *= factor;
+    apply();
   }
 }
 

@@ -466,13 +466,18 @@ export function ObjectLayer({
     }
     const vp = viewportRef.current;
     const box = d.box; // live box from the ref (not stale React state)
-    setDrag(null);
-    if (!vp || !box) return;
+    if (!vp || !box) {
+      setDrag(null);
+      return;
+    }
     const moved =
       Math.abs(box.left - d.obj.rect.left) > 1 ||
       Math.abs(box.top - d.obj.rect.top) > 1 ||
       Math.abs(box.width - d.obj.rect.width) > 1;
-    if (!moved) return;
+    if (!moved) {
+      setDrag(null);
+      return;
+    }
 
     setBusy(true);
     (async () => {
@@ -512,6 +517,9 @@ export function ObjectLayer({
       } catch {
         toast.error("Couldn't edit that object.");
       } finally {
+        // Keep the optimistic ghost visible while the worker regenerates a
+        // complex page; the real canvas replaces it when the commit resolves.
+        setDrag(null);
         setBusy(false);
       }
     })();
