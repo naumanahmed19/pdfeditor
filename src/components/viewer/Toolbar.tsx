@@ -192,7 +192,10 @@ const TOOL_FLYOUTS: Array<{
 ];
 
 const INITIAL_LAST_TOOL_BY_GROUP: Record<ToolFlyoutId, ToolKind> = {
-  text: "text",
+  // Editing existing text is the common path. The main half of the Text
+  // split button enters it immediately; the arrow still exposes Add text and
+  // Move objects.
+  text: "edittext",
   markup: "highlight",
   shapes: "rect",
   measure: "measuredist",
@@ -388,46 +391,61 @@ function ToolFlyoutButton({
   const active = !!activeTool;
   const displayTool = getTool(activeTool ?? lastTool ?? group.defaultTool);
   const Icon = displayTool.icon;
+  const buttonColors = active
+    ? "bg-primary text-primary-foreground"
+    : "text-muted-foreground hover:bg-muted hover:text-foreground";
 
   return (
-    <Menu>
+    <div className="inline-flex shrink-0 items-center">
       <Tip
-        label={active ? displayTool.name : group.label}
-        desc={active ? displayTool.desc : group.desc}
-        shortcut={active ? displayTool.shortcut : undefined}
+        label={displayTool.name}
+        desc={displayTool.desc}
+        shortcut={displayTool.shortcut}
       >
-        <MenuTrigger
+        <button
+          type="button"
           aria-label={group.label}
           aria-pressed={active}
+          onClick={() => onSelect(displayTool.key)}
           className={cn(
-            "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
-            active
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            "flex h-8 items-center justify-center gap-1.5 rounded-l-md py-0 pl-2 pr-1.5 text-xs font-medium transition-colors",
+            buttonColors,
           )}
         >
           <Icon className="h-4 w-4" />
           <span className="hidden sm:inline">{group.label}</span>
-          <ChevronDown className="h-3 w-3 opacity-70" />
-        </MenuTrigger>
+        </button>
       </Tip>
-      <MenuContent className="min-w-64">
-        <MenuGroup>
-          <MenuLabel>{group.label}</MenuLabel>
-          {group.tools.map((key) => {
-            const tool = getTool(key);
-            return (
-              <ToolMenuItem
-                key={key}
-                tool={tool}
-                active={activeTool === key}
-                onSelect={onSelect}
-              />
-            );
-          })}
-        </MenuGroup>
-      </MenuContent>
-    </Menu>
+      <Menu>
+        <Tip label={`More ${group.label} tools`} desc={group.desc}>
+          <MenuTrigger
+            aria-label={`${group.label} options`}
+            className={cn(
+              "flex h-8 w-5 items-center justify-center rounded-r-md border-l border-current/15 transition-colors",
+              buttonColors,
+            )}
+          >
+            <ChevronDown className="h-3 w-3 opacity-70" />
+          </MenuTrigger>
+        </Tip>
+        <MenuContent className="min-w-64">
+          <MenuGroup>
+            <MenuLabel>{group.label}</MenuLabel>
+            {group.tools.map((key) => {
+              const tool = getTool(key);
+              return (
+                <ToolMenuItem
+                  key={key}
+                  tool={tool}
+                  active={activeTool === key}
+                  onSelect={onSelect}
+                />
+              );
+            })}
+          </MenuGroup>
+        </MenuContent>
+      </Menu>
+    </div>
   );
 }
 
