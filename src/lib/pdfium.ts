@@ -853,6 +853,9 @@ export interface PageObject {
   strokeWidth: number;
   /** Base font name for text objects ("" otherwise). */
   fontName: string;
+  /** Text-matrix baseline origin. Present for text objects. */
+  originX?: number;
+  originY?: number;
 }
 
 /** A 2x3 affine matrix { a b c d e f } in PDF page space. */
@@ -940,6 +943,9 @@ export async function getPageObjects(
             }
           }
         }
+        const hasMatrix = type === FPDF_PAGEOBJ_TEXT && mod.FPDFPageObj_GetMatrix(obj, m6);
+        const left = rt.getValue(f4, "float");
+        const bottom = rt.getValue(f4 + 4, "float");
         out.push({
           index: i,
           kind:
@@ -949,8 +955,8 @@ export async function getPageObjects(
                 ? "image"
                 : "path",
           text,
-          left: rt.getValue(f4, "float"),
-          bottom: rt.getValue(f4 + 4, "float"),
+          left,
+          bottom,
           right: rt.getValue(f4 + 8, "float"),
           top: rt.getValue(f4 + 12, "float"),
           fontSize,
@@ -961,6 +967,16 @@ export async function getPageObjects(
               ? rt.getValue(fs, "float")
               : 0,
           fontName,
+          originX: type === FPDF_PAGEOBJ_TEXT
+            ? hasMatrix
+              ? rt.getValue(m6 + 16, "float")
+              : left
+            : undefined,
+          originY: type === FPDF_PAGEOBJ_TEXT
+            ? hasMatrix
+              ? rt.getValue(m6 + 20, "float")
+              : bottom
+            : undefined,
         });
       }
       return out;

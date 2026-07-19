@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { type InlineEdit, FONT_CSS } from "./textedit";
 import { activeInlineEdit } from "../../lib/activeInlineEdit";
 
@@ -15,6 +15,8 @@ export function InlineTextEditor({
   saving,
   onCommit,
   onCancel,
+  passive = false,
+  initialFamily = "original",
 }: {
   edit: InlineEdit;
   saving: boolean;
@@ -28,13 +30,16 @@ export function InlineTextEditor({
     italic: boolean,
   ) => Promise<boolean>;
   onCancel: () => void;
+  /** Non-interactive committed preview shown until the PDF worker catches up. */
+  passive?: boolean;
+  initialFamily?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [value, setValue] = useState(edit.original);
   const [colorHex, setColorHex] = useState(edit.colorHex);
   const [sizePt, setSizePt] = useState(Math.round(edit.fontSize));
   // "original" keeps the document's embedded face; replacement is explicit.
-  const [family, setFamily] = useState("original");
+  const [family, setFamily] = useState(initialFamily);
   const [bold, setBold] = useState(edit.bold);
   const [italic, setItalic] = useState(edit.italic);
   // CSS family name of the page's real embedded font, once it's registered as
@@ -70,33 +75,24 @@ export function InlineTextEditor({
     };
   }, [edit.embeddedFont]);
 
-  // Paragraph mode: the edit spans several visual lines, one textarea row per
-  // document line. In a reflowable edit (edit.reflow) added/removed breaks
-  // are soft — the commit re-wraps to the column — so the row count follows
-  // whatever the user typed; fixed-break edits keep the original count.
   const lineCount = edit.original.split("\n").length;
-  const valueLines = value.split("\n").length;
-  const rows = edit.reflow ? Math.max(lineCount, valueLines) : lineCount;
 
   useEffect(() => {
+    if (passive) return;
     window.getSelection()?.removeAllRanges();
     const t = ref.current;
     if (t) {
       t.focus({ preventScroll: true });
-      // Select-all invites replacing the text wholesale — right for a single
-      // line, an accident waiting to happen for a whole paragraph.
-      if (lineCount > 1) t.setSelectionRange(0, 0);
-      // Bare CFF/Type1 subsets cannot be registered with FontFace. Leave the
-      // original page paint visible and put the caret at the end instead of
-      // covering it with a blue select-all block in a substitute face.
-      else if (!edit.embeddedFont) t.setSelectionRange(t.value.length, t.value.length);
-      else t.select();
+      // Start where the user clicked. Selecting the whole run made a normal
+      // keystroke unexpectedly replace a title or paragraph.
+      t.setSelectionRange(edit.caretOffset, edit.caretOffset);
     }
-  }, []);
+  }, [edit.caretOffset, passive]);
 
   // Surface the style controls in the top toolbar's contextual row while this
   // inline edit is open (instead of a separate floating bar).
   useEffect(() => {
+    if (passive) return;
     activeInlineEdit.set({
       colorHex,
       sizePt,
@@ -111,8 +107,11 @@ export function InlineTextEditor({
       toggleBold: () => setBold((v) => !v),
       toggleItalic: () => setItalic((v) => !v),
     });
-  }, [colorHex, sizePt, family, bold, italic, saving, edit.fontName]);
-  useEffect(() => () => activeInlineEdit.set(null), []);
+  }, [colorHex, sizePt, family, bold, italic, saving, edit.fontName, passive]);
+  useEffect(() => {
+    if (passive) return;
+    return () => activeInlineEdit.set(null);
+  }, [passive]);
 
   // Commit once — guard against Enter followed by the unmount blur firing
   // twice. A rejected commit (e.g. glyphs missing from the embedded font)
@@ -132,14 +131,40 @@ export function InlineTextEditor({
   const pxPerPt = edit.fontPx / (edit.fontSize || 1);
   const fontPx = sizePt * pxPerPt;
   const baseH = Math.max(edit.height, fontPx * 1.25 * lineCount);
-  // Anchor on the ORIGINAL lines so they sit on the page's lines; rows added
-  // in a reflowable edit extend the box downward, like the reflow will.
   const top = edit.top + edit.height / 2 - baseH / 2;
-  // One textarea row per document line: row height = the paragraph's own
-  // leading, so the editor's lines sit on the page's lines.
   const lineH = lineCount > 1 ? baseH / lineCount : baseH;
-  const boxH = lineH * rows;
+  const baseWidth = Math.min(edit.maxWidth, Math.max(edit.width + 8, 60));
+  const [box, setBox] = useState(() => ({ width: baseWidth, height: baseH }));
+
+  // A paragraph keeps its column width and grows downward as browser wrapping
+  // adds lines. A fixed single line grows horizontally until the page edge.
+  // Measuring scrollWidth/scrollHeight after every keystroke avoids clipped
+  // text without guessing from character counts or font averages.
+  useLayoutEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    const width = edit.reflow
+      ? baseWidth
+      : Math.min(
+          edit.maxWidth,
+          Math.max(baseWidth, textarea.scrollWidth + 4),
+        );
+    textarea.style.width = `${width}px`;
+    textarea.style.height = "0px";
+    const height = Math.min(
+      edit.maxHeight,
+      Math.max(baseH, textarea.scrollHeight + 2),
+    );
+    textarea.style.height = `${height}px`;
+    setBox((current) =>
+      current.width === width && current.height === height
+        ? current
+        : { width, height },
+    );
+  }, [baseH, baseWidth, edit.maxHeight, edit.maxWidth, edit.reflow, embeddedFamily, value]);
+
   const originalPaintUnchanged =
+    !passive &&
     family === "original" &&
     !embeddedFamily &&
     value === edit.original &&
@@ -160,6 +185,7 @@ export function InlineTextEditor({
       // so those never act on a stale text-object index. `document.activeElement`
       // is a fallback for native controls whose blur reports no relatedTarget.
       onBlur={(e) => {
+        if (passive) return;
         const to = e.relatedTarget as HTMLElement | null;
         if (e.currentTarget.contains(to)) return;
         if (to?.closest?.("[data-inline-edit-controls]")) return;
@@ -170,16 +196,25 @@ export function InlineTextEditor({
       <textarea
         ref={ref}
         value={value}
-        disabled={saving}
+        readOnly={saving || passive}
+        aria-busy={saving}
+        aria-label={passive ? "Committed PDF text preview" : "Edit PDF text"}
+        aria-hidden={passive || undefined}
+        wrap={edit.reflow ? "soft" : "off"}
         spellCheck={false}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          if (saving) return;
+          if (
+            e.key === "Enter" &&
+            !e.shiftKey &&
+            (!edit.reflow || e.ctrlKey || e.metaKey)
+          ) {
             e.preventDefault();
             finish();
           } else if (e.key === "Enter" && !edit.reflow) {
-            // Fixed-break edit (line scope / mixed styles): the document's
-            // line breaks can't change, so Shift+Enter must not insert one.
+            // A fixed line cannot accept a hard break. Paragraph mode uses
+            // ordinary Enter for a new line and Ctrl/Cmd+Enter to finish.
             e.preventDefault();
           } else if (e.key === "Escape") {
             e.preventDefault();
@@ -187,10 +222,20 @@ export function InlineTextEditor({
             onCancel();
           }
         }}
-        className="block resize-none overflow-hidden whitespace-pre rounded-[2px] shadow-sm outline outline-2 outline-primary"
+        className={`block resize-none rounded-[2px] outline outline-2 ${
+          saving || passive
+            ? "pointer-events-none shadow-none outline-transparent"
+            : "shadow-sm outline-primary"
+        }`}
         style={{
-          width: Math.max(edit.width + 24, 60),
-          height: boxH,
+          width: box.width,
+          height: box.height,
+          maxWidth: edit.maxWidth,
+          maxHeight: edit.maxHeight,
+          overflowX: box.width >= edit.maxWidth ? "auto" : "hidden",
+          overflowY: box.height >= edit.maxHeight ? "auto" : "hidden",
+          whiteSpace: edit.reflow ? "pre-wrap" : "pre",
+          overflowWrap: edit.reflow ? "anywhere" : "normal",
           fontSize: fontPx,
           lineHeight: `${lineH}px`,
           // When the browser cannot load the real embedded font, an untouched

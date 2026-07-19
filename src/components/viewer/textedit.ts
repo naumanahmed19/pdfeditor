@@ -29,6 +29,8 @@ export interface ReflowMeta {
 }
 
 export interface InlineEdit {
+  /** Identifies this click session so deferred font hydration cannot update a later edit. */
+  id: number;
   /** All runs of the clicked visual line, left to right. */
   runs: InlineEditRun[];
   /** The joined line text shown in the editor. */
@@ -37,6 +39,11 @@ export interface InlineEdit {
   top: number;
   width: number;
   height: number;
+  /** Remaining page room available to a naturally growing editor. */
+  maxWidth: number;
+  maxHeight: number;
+  /** Approximate character position corresponding to the user's click. */
+  caretOffset: number;
   fontPx: number;
   /** Original ink color as an rgb() string (for on-screen display). */
   color: string;

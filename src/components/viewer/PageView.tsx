@@ -56,6 +56,13 @@ export function PageView({
   const [textLayerReady, setTextLayerReady] = useState(0);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const inlineEditSeq = useRef(0);
+  const committedPreviewSeq = useRef(0);
+  const [committedPreview, setCommittedPreview] = useState<{
+    id: number;
+    edit: InlineEdit;
+    family: string;
+  } | null>(null);
   // Highlighted while a palette field is dragged over this page.
   const [fieldDropActive, setFieldDropActive] = useState(false);
 
@@ -144,7 +151,7 @@ export function PageView({
       } catch {
         /* text layer optional */
       }
-    }, 60);
+    }, contentOnly ? 0 : 60);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -369,41 +376,6 @@ export function PageView({
       }
     }
 
-    // Load the clicked run's real embedded font so the on-screen editor shows
-    // the page's actual face and metrics — but only when that subset can render
-    // the current line's characters. When the raw program is unusable (bare
-    // CFF/Type1 subsets neither FontFace nor fontkit accept), the pdf.js-
-    // rebuilt program of the same face steps in; only if that fails too does
-    // the editor keep the CSS fallback.
-    let embeddedFont: Uint8Array | null = null;
-    try {
-      // Control characters (PDFium's stand-in for glyphs without a Unicode
-      // mapping) have no glyph in ANY font — they must not veto the real face.
-      const chars = [
-        ...new Set(joined.replace(/[\s\u0000-\u001f\u007f-\u009f]/g, "")),
-      ];
-      const fi = await app.getTextFontInfo(pageIndex, hit.index);
-      if (fi?.data) {
-        const miss = await missingGlyphs(fi.data, chars);
-        if (miss && miss.length === 0) embeddedFont = fi.data;
-      }
-      if (!embeddedFont && app.docBytes && app.docId) {
-        const { compiledFontsForPage, compiledCandidates } = await import(
-          "../../lib/fontcompile"
-        );
-        const fonts = await compiledFontsForPage(app.docId!, app.docBytes, pageIndex);
-        for (const cand of compiledCandidates(fonts, hit.fontName || "")) {
-          const miss = await missingGlyphs(cand.data, chars);
-          if (miss && miss.length === 0) {
-            embeddedFont = cand.data;
-            break;
-          }
-        }
-      }
-    } catch {
-      /* keep the CSS fallback */
-    }
-
     // Reflow eligibility: paragraph/block scope with ONE face and size across
     // every run. Mixed-style paragraphs (a bold word, a footnote mark) keep
     // fixed breaks — words crossing lines can't carry per-run styles yet.
@@ -439,20 +411,37 @@ export function PageView({
       };
     }
 
-    setInlineEdit({
+    const editId = ++inlineEditSeq.current;
+    const left = Math.min(vx1, vx2);
+    const top = Math.min(vy1, vy2);
+    const width = Math.max(Math.abs(vx2 - vx1), 24);
+    const hitRun = runs.find((run) => run.objectIndex === hit.index) ?? runs[0];
+    const hitFraction = Math.max(
+      0,
+      Math.min(1, (xPt - hit.left) / Math.max(hit.right - hit.left, 0.01)),
+    );
+    const caretOffset = Math.min(
+      joined.length,
+      hitRun.start + Math.round(hit.text.length * hitFraction),
+    );
+    const openedEdit: InlineEdit = {
+      id: editId,
       runs,
       original: joined,
-      left: Math.min(vx1, vx2),
-      top: Math.min(vy1, vy2),
-      width: Math.max(Math.abs(vx2 - vx1), 24),
+      left,
+      top,
+      width,
       height: Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale),
+      maxWidth: Math.max(width, w - left - 4),
+      maxHeight: Math.max(hit.fontSize * scale, h - top - 4),
+      caretOffset,
       fontPx: hit.fontSize * scale,
       color: `rgb(${r}, ${g}, ${b})`,
       colorHex: hex,
       fontSize: hit.fontSize,
       fontName: (hit.fontName || "").replace(/^[A-Z]{6}\+/, ""),
       fallbackFamily: f.family,
-      embeddedFont,
+      embeddedFont: null,
       bold: f.bold,
       italic: f.italic,
       anchor: [runs[0].originX, runs[0].originY],
@@ -460,7 +449,50 @@ export function PageView({
       faceIndexes,
       siblings,
       reflow,
-    });
+    };
+    // Put the caret on screen immediately. Embedded-font extraction and
+    // validation are preview enhancements and must never delay typing.
+    setInlineEdit(openedEdit);
+
+    void (async () => {
+      let embeddedFont: Uint8Array | null = null;
+      try {
+        // Control characters (PDFium's stand-in for glyphs without a Unicode
+        // mapping) have no glyph in any font and must not veto the real face.
+        const chars = [
+          ...new Set(joined.replace(/[\s\u0000-\u001f\u007f-\u009f]/g, "")),
+        ];
+        const info = await app.getTextFontInfo(pageIndex, hit.index);
+        if (info?.data) {
+          const missing = await missingGlyphs(info.data, chars);
+          if (missing && missing.length === 0) embeddedFont = info.data;
+        }
+        if (!embeddedFont && app.docBytes && app.docId) {
+          const { compiledFontsForPage, compiledCandidates } = await import(
+            "../../lib/fontcompile"
+          );
+          const fonts = await compiledFontsForPage(
+            app.docId,
+            app.docBytes,
+            pageIndex,
+          );
+          for (const candidate of compiledCandidates(fonts, hit.fontName || "")) {
+            const missing = await missingGlyphs(candidate.data, chars);
+            if (missing && missing.length === 0) {
+              embeddedFont = candidate.data;
+              break;
+            }
+          }
+        }
+      } catch {
+        /* keep the CSS fallback */
+      }
+      if (embeddedFont) {
+        setInlineEdit((current) =>
+          current?.id === editId ? { ...current, embeddedFont } : current,
+        );
+      }
+    })();
   };
 
   /**
@@ -575,6 +607,38 @@ export function PageView({
     return null;
   };
 
+  /** Leave committed text visually in place while a structural/font worker
+   * edit catches up, without keeping the editor or toolbar locked. */
+  const holdCommittedPreview = (
+    edit: InlineEdit,
+    text: string,
+    colorHex: string,
+    fontSize: number,
+    family: string,
+    bold: boolean,
+    italic: boolean,
+    settled: Promise<void>,
+  ) => {
+    const id = ++committedPreviewSeq.current;
+    setCommittedPreview({
+      id,
+      family,
+      edit: {
+        ...edit,
+        id,
+        original: text,
+        colorHex,
+        fontSize,
+        bold,
+        italic,
+        caretOffset: 0,
+      },
+    });
+    const clear = () =>
+      setCommittedPreview((current) => (current?.id === id ? null : current));
+    void settled.then(clear, clear);
+  };
+
   /**
    * Recreate the line's runs with a different face. Preference order: a face
    * of the same family+width the document already embeds, the exact font
@@ -636,7 +700,7 @@ export function PageView({
     } else if (!font) {
       font = await resolveTextFont(family, bold, italic);
     }
-    await app.applyTextRuns(pageIndex, withText, { font, fontSize, fill });
+    return app.applyTextRuns(pageIndex, withText, { font, fontSize, fill });
   };
 
   /** Returns true when the edit session is finished (editor should close). */
@@ -802,19 +866,51 @@ export function PageView({
           }
         }
 
-        await app.applyTextReflow(pageIndex, {
+        const result = await app.applyTextReflow(pageIndex, {
           lines,
           extras,
           templateIndex,
           fill: newFill,
           font,
         });
+        if (!result.previewed) {
+          holdCommittedPreview(
+            edit,
+            committed,
+            colorHex,
+            fontSize,
+            family,
+            bold,
+            italic,
+            result.settled,
+          );
+        }
         setInlineEdit(null);
         return true;
       }
 
       if (needsRecreate) {
-        await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic);
+        const result = await commitRecreate(
+          edit,
+          runEdits,
+          newFill,
+          newSize,
+          family,
+          bold,
+          italic,
+        );
+        if (!result.previewed) {
+          holdCommittedPreview(
+            edit,
+            committed,
+            colorHex,
+            fontSize,
+            family,
+            bold,
+            italic,
+            result.settled,
+          );
+        }
         setInlineEdit(null);
         return true;
       }
@@ -875,9 +971,29 @@ export function PageView({
         // it silently; nothing visible changes.
         const sys = await systemFaceCovering(badFace, changedChars);
         if (sys) {
-          await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic, true, {
-            bytes: sys,
-          });
+          const result = await commitRecreate(
+            edit,
+            runEdits,
+            newFill,
+            newSize,
+            family,
+            bold,
+            italic,
+            true,
+            { bytes: sys },
+          );
+          if (!result.previewed) {
+            holdCommittedPreview(
+              edit,
+              committed,
+              colorHex,
+              fontSize,
+              family,
+              bold,
+              italic,
+              result.settled,
+            );
+          }
           setInlineEdit(null);
           return true;
         }
@@ -893,12 +1009,33 @@ export function PageView({
         // Recreate only the edited runs — same-typeface faces from the page
         // first, then the closest bundled/standard family; the untouched
         // neighbors keep their original embedded fonts.
-        await commitRecreate(edit, runEdits, newFill, newSize, family, bold, italic, true);
+        const result = await commitRecreate(
+          edit,
+          runEdits,
+          newFill,
+          newSize,
+          family,
+          bold,
+          italic,
+          true,
+        );
+        if (!result.previewed) {
+          holdCommittedPreview(
+            edit,
+            committed,
+            colorHex,
+            fontSize,
+            family,
+            bold,
+            italic,
+            result.settled,
+          );
+        }
         setInlineEdit(null);
         return true;
       }
 
-      await app.applyTextRuns(pageIndex, runEdits, {
+      const result = await app.applyTextRuns(pageIndex, runEdits, {
         fill: newFill,
         fontScale: sizeChanged ? fontSize / edit.fontSize : undefined,
         // A shared anchor only makes sense for one line — scaling a whole
@@ -908,6 +1045,18 @@ export function PageView({
         synthBold: boldOn || undefined,
         synthItalic: italicOn || undefined,
       });
+      if (!result.previewed) {
+        holdCommittedPreview(
+          edit,
+          committed,
+          colorHex,
+          fontSize,
+          family,
+          bold,
+          italic,
+          result.settled,
+        );
+      }
       setInlineEdit(null);
       return true;
     } catch {
@@ -989,6 +1138,17 @@ export function PageView({
       )}
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
       <AnnotationLayer pageIndex={pageIndex} scale={scale} baseDims={baseDims} />
+      {committedPreview && (
+        <InlineTextEditor
+          key={`committed-${committedPreview.id}`}
+          edit={committedPreview.edit}
+          saving
+          passive
+          initialFamily={committedPreview.family}
+          onCommit={async () => true}
+          onCancel={() => {}}
+        />
+      )}
       {inlineEdit && (
         <InlineTextEditor
           edit={inlineEdit}
