@@ -224,11 +224,13 @@ export function ObjectLayer({
   pageIndex,
   scale,
   canvasRef,
+  onEditText,
 }: {
   pdf: PdfDoc;
   pageIndex: number;
   scale: number;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  onEditText: (objectIndex: number, clientX: number, clientY: number) => void;
 }) {
   const app = useApp();
   const layerRef = useRef<HTMLDivElement>(null);
@@ -379,6 +381,19 @@ export function ObjectLayer({
     return tmp.toDataURL();
   };
 
+  const objectAt = (px: number, py: number) =>
+    objects
+      .filter(
+        (o) =>
+          px >= o.rect.left &&
+          px <= o.rect.left + o.rect.width &&
+          py >= o.rect.top &&
+          py <= o.rect.top + o.rect.height,
+      )
+      .sort(
+        (a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height,
+      )[0];
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (busy) return;
     const lr = layerRef.current!.getBoundingClientRect();
@@ -410,15 +425,7 @@ export function ObjectLayer({
     }
 
     // Otherwise pick the smallest object under the point → select + move.
-    const hit = objects
-      .filter(
-        (o) =>
-          px >= o.rect.left &&
-          px <= o.rect.left + o.rect.width &&
-          py >= o.rect.top &&
-          py <= o.rect.top + o.rect.height,
-      )
-      .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0];
+    const hit = objectAt(px, py);
     if (!hit) {
       setSel(null);
       return;
@@ -446,6 +453,18 @@ export function ObjectLayer({
       box: hit.rect,
     };
     setDrag({ orig: hit.rect, box: hit.rect, ghost: cropGhost(hit.rect) });
+  };
+
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if (busy || !layerRef.current) return;
+    const lr = layerRef.current.getBoundingClientRect();
+    const hit = objectAt(e.clientX - lr.left, e.clientY - lr.top);
+    if (!hit || hit.kind !== "text") return;
+    e.stopPropagation();
+    e.preventDefault();
+    dragRef.current = null;
+    setDrag(null);
+    onEditText(hit.index, e.clientX, e.clientY);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -560,6 +579,7 @@ export function ObjectLayer({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onDoubleClick={onDoubleClick}
     >
       {/* Hover/selectable outlines for each object. */}
       {objects.map((o) => (

@@ -256,8 +256,17 @@ export function PageView({
   // uniform (one face/size) the commit may REFLOW it: edits that add/remove
   // breaks or overflow a line re-wrap to the column width (see reflow.ts);
   // mixed-style paragraphs and line scope keep the document's fixed breaks.
-  const onTextLayerClick = async (e: React.MouseEvent) => {
-    if (app.tool !== "edittext" || !app.docBytes || !wrapRef.current) return;
+  const openTextAtPoint = async (
+    clientX: number,
+    clientY: number,
+    options?: { force?: boolean; objectIndex?: number },
+  ) => {
+    if (
+      (!options?.force && app.tool !== "edittext") ||
+      !app.docBytes ||
+      !wrapRef.current
+    )
+      return;
     // A click while an edit is open (or still committing) is the gesture that
     // dismisses it — never a request to start another edit, and never worth a
     // "click a line" hint.
@@ -279,24 +288,30 @@ export function PageView({
     }
     // Click point in PDF page coordinates (handles rotation + crop origin).
     const [xPt, yPt] = viewport.convertToPdfPoint(
-      e.clientX - pr.left,
-      e.clientY - pr.top,
+      clientX - pr.left,
+      clientY - pr.top,
     );
-    // Smallest text run whose bounds contain the click point.
-    const hit = objs
-      .filter(
-        (o) =>
-          o.text.trim() &&
-          xPt >= o.left &&
-          xPt <= o.right &&
-          yPt >= o.bottom &&
-          yPt <= o.top,
-      )
-      .sort(
-        (a, b) =>
-          (a.right - a.left) * (a.top - a.bottom) -
-          (b.right - b.left) * (b.top - b.bottom),
-      )[0];
+    // A native-object double click supplies its exact PDFium object index.
+    // Direct Edit-text clicks still use the smallest run under the pointer.
+    const hit =
+      options?.objectIndex == null
+        ? objs
+            .filter(
+              (o) =>
+                o.text.trim() &&
+                xPt >= o.left &&
+                xPt <= o.right &&
+                yPt >= o.bottom &&
+                yPt <= o.top,
+            )
+            .sort(
+              (a, b) =>
+                (a.right - a.left) * (a.top - a.bottom) -
+                (b.right - b.left) * (b.top - b.bottom),
+            )[0]
+        : objs.find(
+            (o) => o.index === options.objectIndex && o.text.trim(),
+          );
     // A miss (margin, image, whitespace) simply does nothing — the tool's
     // hover affordance already shows what's editable, a toast would only nag.
     if (!hit) return;
@@ -495,6 +510,21 @@ export function PageView({
         );
       }
     })();
+  };
+
+  const onTextLayerClick = (e: React.MouseEvent) => {
+    void openTextAtPoint(e.clientX, e.clientY);
+  };
+
+  const onNativeTextDoubleClick = (
+    objectIndex: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    // Reflect the active interaction in the toolbar. `force` opens the editor
+    // immediately, without waiting for the tool-state update to render first.
+    app.setTool("edittext");
+    void openTextAtPoint(clientX, clientY, { force: true, objectIndex });
   };
 
   /**
@@ -1132,6 +1162,7 @@ export function PageView({
           pageIndex={pageIndex}
           scale={scale}
           canvasRef={canvasRef}
+          onEditText={onNativeTextDoubleClick}
         />
       )}
       <FormLayer pdf={pdf} pageIndex={pageIndex} scale={scale} visible={visible} />
