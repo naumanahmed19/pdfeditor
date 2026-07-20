@@ -199,6 +199,33 @@ For AI features, run a local model server:
   the dev server also proxies `/proxy/ollama` and `/proxy/lmstudio` as a CORS
   fallback.
 
+## Chrome extension
+
+The Manifest V3 extension uses the same React editor as the web and desktop
+apps. Its toolbar button opens the workbench in a full tab. The default build
+targets the current Chrome Stable release and opens PDFs through the normal
+file picker without manifest warnings.
+
+```bash
+npm run build:extension
+```
+
+The verified unpacked package is written to `dist-extension/`. To test it,
+open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
+and select that directory.
+
+Chrome 151 adds public `application/pdf` MIME handlers. To test automatic
+navigated and embedded PDF handling in Chrome 151 Beta or newer, build the
+separate version-gated preview package:
+
+```bash
+npm run build:extension:chrome151
+```
+
+That command writes to the same `dist-extension/` directory and declares
+Chrome 151 as its minimum version. If PickPDF cannot open a handled stream, it
+hands the document back to Chrome's native viewer.
+
 ## Desktop app (Tauri)
 
 The desktop app is a **frameless window** with custom minimize/maximize/close
@@ -243,11 +270,11 @@ commit with `!` (for example, `feat!:`) for a major release. Merge the generated
 Release Please pull request only when the accumulated changes are ready to ship.
 
 The workflow in `.github/workflows/release-desktop.yml` runs the type-check and
-tests, then produces a Windows Store
-`.msixupload`, a universal macOS `.dmg`, and Linux `.AppImage` and `.deb`
-packages. It generates SHA-256 checksums and attaches everything to one GitHub
-Release. It can still be started manually from the Actions tab for recovery;
-the selected ref must be the matching release tag.
+tests, then builds the Windows Store `.msixupload`, universal macOS `.dmg`,
+Linux `.AppImage` and `.deb`, and verified Chrome extension ZIP in parallel. It
+generates SHA-256 checksums and attaches everything to one GitHub Release. It
+can still be started manually from the Actions tab for recovery; the selected
+ref must be the matching release tag.
 
 The macOS build uses an ad-hoc signature until Apple Developer signing and
 notarization secrets are configured. Users must approve an ad-hoc signed build

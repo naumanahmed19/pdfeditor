@@ -180,7 +180,21 @@ body {
   background: rgba(249, 115, 22, 0.65);
 }
 
-/* ---------- bundled metric-compatible fonts ---------- */
+/* ---------- bundled brand and metric-compatible fonts ---------- */
+@font-face {
+  font-family: "Dongle";
+  src: url("/fonts/Dongle-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Dongle";
+  src: url("/fonts/Dongle-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 @font-face {
   font-family: "Carlito";
   src: url("/fonts/Carlito-Regular.ttf") format("truetype");

@@ -1,6 +1,7 @@
 import { createWorker, OEM } from "tesseract.js";
 import type { PdfDoc } from "./pdf";
 import { DEFAULT_OCR_LANGUAGE, normalizeOcrLanguage } from "./ocrLanguages";
+import { chromeExtensionAssetUrl } from "./chromeExtension";
 
 // The curated language list lives in ocrLanguages.ts (dependency-free, so UI
 // code can import it without dragging tesseract.js into the main bundle).
@@ -36,9 +37,10 @@ const RENDER_SCALE = 2;
 /**
  * Recognize text on every page of a PDF, returning per-page words with their
  * bounding boxes (in rasterized-pixel coordinates). The traineddata for the
- * requested language is fetched once from tesseract.js's default CDN and
- * cached; the recognition itself runs locally — page images never leave the
- * device.
+ * requested language is fetched once from tesseract.js's data CDN and cached;
+ * the recognition itself runs locally — page images never leave the device.
+ * The Chrome extension packages the executable worker and WASM core locally,
+ * as required by Manifest V3.
  */
 export async function runOcr(
   pdf: PdfDoc,
@@ -69,9 +71,20 @@ export async function runOcrPages(
   const total = indexes.length;
   if (!total) return [];
   onProgress(0, total, "prepare");
+  const extensionWorker = chromeExtensionAssetUrl("tesseract/worker.min.js");
+  const extensionCore = chromeExtensionAssetUrl(
+    "tesseract/tesseract-core-simd-lstm.js",
+  );
   const worker = await createWorker(normalizeOcrLanguage(lang), OEM.LSTM_ONLY, {
     logger: () => {},
     errorHandler: () => {},
+    ...(extensionWorker && extensionCore
+      ? {
+          workerPath: extensionWorker,
+          workerBlobURL: false,
+          corePath: extensionCore,
+        }
+      : {}),
   });
   const pages: OcrPage[] = [];
   try {

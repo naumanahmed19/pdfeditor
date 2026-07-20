@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "PickPDF — PDF Reader & Editor",
+  "version": "0.0.0",
+  "description": "Read, edit, organize, fill, sign, and export PDFs locally in Chrome.",
+  "icons": {
+    "128": "icon.png"
+  },
+  "action": {
+    "default_title": "Open PickPDF",
+    "default_icon": {
+      "128": "icon.png"
+    }
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self';"
+  },
+  "cross_origin_embedder_policy": {
+    "value": "require-corp"
+  },
+  "cross_origin_opener_policy": {
+    "value": "same-origin"
+  }
+}

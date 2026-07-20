@@ -380,3 +380,39 @@ lines. Explored ways to reduce the clutter (Photoshop-style):
       sector requirement (Section 508 / EN 301 549); minimum viable: preserve
       existing tags through save (verify we don't strip them today), then a
       reading-order checker
+
+### Chrome extension — post-MVP
+
+The initial Manifest V3 package, toolbar launch, version-gated Chrome 151 PDF
+MIME handler preview, native-viewer fallback, local extension builds, and
+package verifier live on the `codex/chrome-extension` branch. Follow-up work
+for a store-ready release:
+
+- [ ] Add an extension options screen with an explicit **Use PickPDF for PDFs**
+      toggle, plus an in-editor **Open with Chrome viewer** escape hatch
+- [ ] Add extension-aware document sources so MIME-stream documents clearly
+      say **Save a copy**, while picker-backed documents continue to say
+      **Save**; offer a reselect-original flow for local streamed files
+- [ ] Request narrowly scoped optional host permissions when users enable
+      Hugging Face, Ollama, LM Studio, OpenAI, Gemini, OpenRouter, or a custom
+      endpoint; remove the Vite-only localhost proxy fallback in extension mode
+- [ ] Build a compact embedded-document layout for PDFs inside iframe/embed/
+      object contexts (the MVP deliberately renders the complete workbench)
+- [ ] Add a PDF-link context-menu command and extension-specific onboarding
+- [x] Bundle the licensed Dongle brand font locally so the website, desktop
+      applications, and Chrome extension use the same offline typography
+- [ ] Add Playwright/Puppeteer tests that load the unpacked extension in Chrome
+      stable and beta and cover remote, local, authenticated, embedded,
+      encrypted, malformed, and large PDFs plus native-viewer fallback
+- [ ] Profile startup and memory on 50 MB, 250 MB, and 500 MB PDFs; reduce
+      duplicate ArrayBuffer copies and decide whether the 22 MB packaged ONNX
+      runtime should remain in the first Web Store release
+- [ ] Prepare the Chrome Web Store privacy disclosure, permission explanations,
+      screenshots, correctly sized icon set, support page, and release checklist
+- [x] Add extension version synchronization and verified ZIP publication to the
+      shared Windows/macOS/Linux/Chrome release workflow
+- [ ] Switch the shared release pipeline to the Chrome 151 MIME-handler build
+      after Chrome 151 reaches Stable; until then publish the warning-free
+      Chrome Stable toolbar/file-picker build
+- [ ] Add Chrome Web Store submission after Chrome 151 reaches stable; keep the
+      GitHub/R2 ZIP as the reproducible reviewed package
