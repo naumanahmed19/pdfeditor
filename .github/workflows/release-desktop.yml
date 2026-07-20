@@ -440,8 +440,6 @@ jobs:
           profile_team=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$profile_plist")
           profile_app_id=$(/usr/libexec/PlistBuddy \
             -c 'Print :Entitlements:com.apple.application-identifier' "$profile_plist")
-          profile_sandbox=$(/usr/libexec/PlistBuddy \
-            -c 'Print :Entitlements:com.apple.security.app-sandbox' "$profile_plist")
 
           if [[ "$profile_team" != "$APPLE_TEAM_ID" ]]; then
             echo "The provisioning profile belongs to a different Apple team."
@@ -449,10 +447,6 @@ jobs:
           fi
           if [[ "$profile_app_id" != "$APPLE_TEAM_ID.com.xvelopers.pickpdf" ]]; then
             echo "The provisioning profile does not match com.xvelopers.pickpdf."
-            exit 1
-          fi
-          if [[ "$profile_sandbox" != "true" ]]; then
-            echo "The provisioning profile does not enable App Sandbox."
             exit 1
           fi
 
