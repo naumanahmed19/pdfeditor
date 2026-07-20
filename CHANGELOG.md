@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.4.0...v0.5.0) (2026-07-20)
+
+
+### Features
+
+* add Chrome extension build ([71d1a75](https://github.com/naumanahmed19/pdfeditor/commit/71d1a75eef47a31f9b2eec848e04c722be4ceef9))
+* add Chrome extension build ([ae23a68](https://github.com/naumanahmed19/pdfeditor/commit/ae23a680fda471dde1144e599b2217c75a14402e))
+
 ## [0.4.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.3.0...v0.4.0) (2026-07-20)
 
 
