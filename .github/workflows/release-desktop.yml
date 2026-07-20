@@ -334,6 +334,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+          APPLE_EXPORT_COMPLIANCE_CODE: ${{ secrets.APPLE_EXPORT_COMPLIANCE_CODE }}
           APPLE_APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
           APPLE_APP_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_APP_CERTIFICATE_PASSWORD }}
           APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
@@ -346,6 +347,7 @@ jobs:
             APPLE_API_ISSUER
             APPLE_API_KEY_ID
             APPLE_API_PRIVATE_KEY_BASE64
+            APPLE_EXPORT_COMPLIANCE_CODE
             APPLE_APP_CERTIFICATE_BASE64
             APPLE_APP_CERTIFICATE_PASSWORD
             APPLE_INSTALLER_CERTIFICATE_BASE64
@@ -453,8 +455,21 @@ jobs:
       - name: Create App Store build configuration
         shell: bash
         env:
+          APPLE_EXPORT_COMPLIANCE_CODE: ${{ secrets.APPLE_EXPORT_COMPLIANCE_CODE }}
           STORE_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
         run: |
+          python3 - <<'PY'
+          import os
+          import plistlib
+
+          plist_path = "src-tauri/Info.plist"
+          with open(plist_path, "rb") as source:
+              info = plistlib.load(source)
+          info["ITSEncryptionExportComplianceCode"] = os.environ["APPLE_EXPORT_COMPLIANCE_CODE"]
+          with open(plist_path, "wb") as target:
+              plistlib.dump(info, target, sort_keys=False)
+          PY
+
           node -e 'const fs = require("fs"); const source = "src-tauri/tauri.appstore.conf.json"; const target = "src-tauri/tauri.appstore.ci.conf.json"; const config = JSON.parse(fs.readFileSync(source, "utf8")); config.bundle.macOS.bundleVersion = process.env.STORE_BUILD_NUMBER; fs.writeFileSync(target, JSON.stringify(config, null, 2) + "\n");'
 
       - name: Build signed Mac App Store application
