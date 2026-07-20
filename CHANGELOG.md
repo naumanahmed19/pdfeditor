@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.3.0...v0.4.0) (2026-07-20)
+
+
+### Features
+
+* validate PDF/A with veraPDF ([fb2d819](https://github.com/naumanahmed19/pdfeditor/commit/fb2d819ded73c5bdd165725c72d68d0f5659e1e2))
+* validate PDF/A with veraPDF ([f773bce](https://github.com/naumanahmed19/pdfeditor/commit/f773bce036bc99becad485b57f96a3fc674940e1))
+
 ## [0.3.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.2.1...v0.3.0) (2026-07-19)
 
 
