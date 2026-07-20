@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 import type { PdfaFinding, PdfaReport } from "../../lib/pdfa";
+import { isTauri } from "../../lib/tauri";
 
 /**
  * PDF/A-2b preflight for the open document. Presents a checklist of rule
@@ -20,6 +21,7 @@ export function PdfaScreen() {
   const app = useApp();
   const [report, setReport] = useState<PdfaReport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [validatorNotice, setValidatorNotice] = useState<string | null>(null);
 
   // Re-run automatically when the document (or an edit to it) changes.
   const bytes = app.docBytes;
@@ -28,11 +30,33 @@ export function PdfaScreen() {
     if (!bytes) return;
     let cancelled = false;
     setBusy(true);
+    setValidatorNotice(null);
     (async () => {
       try {
         const { checkPdfA } = await import("../../lib/pdfa");
-        const r = await checkPdfA(bytes);
-        if (!cancelled) setReport(r);
+        const preflight = await checkPdfA(bytes);
+        if (cancelled) return;
+        setReport(preflight);
+
+        if (isTauri) {
+          // Avoid launching the Java validator for every intermediate edit.
+          await new Promise((resolve) => window.setTimeout(resolve, 600));
+          if (cancelled) return;
+          const vera = await import("../../lib/verapdf");
+          try {
+            const validated = await vera.validatePdfAWithVeraPdf(bytes, "2b");
+            if (!cancelled) setReport(validated);
+          } catch (err) {
+            if (!cancelled) {
+              const detail = err instanceof Error ? err.message : "Unknown validation error";
+              setValidatorNotice(
+                err instanceof vera.VeraPdfUnavailableError
+                  ? `${detail} Showing PickPDF's built-in preflight instead.`
+                  : `veraPDF validation failed: ${detail} Showing the built-in preflight instead.`,
+              );
+            }
+          }
+        }
       } catch (err) {
         if (!cancelled) {
           setReport(null);
@@ -83,6 +107,12 @@ export function PdfaScreen() {
               {report.errors} error{report.errors === 1 ? "" : "s"} · {report.warnings} warning
               {report.warnings === 1 ? "" : "s"} · {report.infos} info
             </p>
+            {report.source === "verapdf" && (
+              <p className="pt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                Validated locally with veraPDF
+                {report.validatorVersion ? ` ${report.validatorVersion}` : ""}
+              </p>
+            )}
           </div>
           {busy && (
             <RefreshCw className="ml-auto h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
@@ -103,13 +133,37 @@ export function PdfaScreen() {
         </>
       )}
 
+      {validatorNotice && (
+        <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs leading-relaxed text-amber-900 dark:text-amber-200">
+          <p className="pb-1 font-medium">veraPDF is not active</p>
+          {validatorNotice}
+          <p className="pt-2">
+            After installing veraPDF, add its launcher to PATH or set the
+            <code className="mx-1 rounded bg-background/70 px-1 py-0.5">VERAPDF_EXECUTABLE</code>
+            environment variable, then restart PickPDF.
+          </p>
+        </div>
+      )}
+
       <div className="mt-6 rounded-xl border border-dashed bg-muted/30 p-4 text-xs leading-relaxed text-muted-foreground">
-        <p className="pb-1 font-medium text-foreground">This is a preflight check, not certification.</p>
-        It inspects the document's structure against a PDF/A-2b-oriented baseline (encryption,
-        font embedding, transparency, JavaScript, attachments, XFA, XMP metadata, OutputIntent,
-        annotation rules). It does not validate content streams, color spaces against the
-        OutputIntent, or XMP schema conformance — for formal compliance verification use a
-        dedicated validator such as veraPDF.
+        {report?.source === "verapdf" ? (
+          <>
+            <p className="pb-1 font-medium text-foreground">Standards validation by veraPDF</p>
+            The document was checked locally against {report.profileName ?? "PDF/A-2b"}. No file
+            was uploaded. A compliant result is a validator finding, not a legal certification.
+          </>
+        ) : (
+          <>
+            <p className="pb-1 font-medium text-foreground">
+              This is a preflight check, not certification.
+            </p>
+            It inspects the document's structure against a PDF/A-2b-oriented baseline (encryption,
+            font embedding, transparency, JavaScript, attachments, XFA, XMP metadata, OutputIntent,
+            annotation rules). It does not validate content streams, color spaces against the
+            OutputIntent, or XMP schema conformance
+            {isTauri ? "." : " — install the desktop app with veraPDF for full validation."}
+          </>
+        )}
       </div>
     </Shell>
   );
@@ -188,11 +242,11 @@ function Shell({ docName, children }: { docName?: string; children: React.ReactN
         <p className="pb-5 pt-1 text-sm text-muted-foreground">
           {docName ? (
             <>
-              Preflight <span className="font-medium text-foreground">{docName}</span> against a
-              PDF/A-2b baseline for archival readiness. Runs locally — nothing is uploaded.
+              Check <span className="font-medium text-foreground">{docName}</span> against PDF/A-2b
+              for archival readiness. Runs locally — nothing is uploaded.
             </>
           ) : (
-            "Preflight the open document against a PDF/A-2b baseline for archival readiness."
+            "Check the open document against PDF/A-2b for archival readiness."
           )}
         </p>
         {children}

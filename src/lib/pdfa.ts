@@ -48,6 +48,10 @@ export interface PdfaReport {
   /** True when no error-severity rule failed. */
   ready: boolean;
   verdict: string;
+  /** Whether this is PickPDF's heuristic check or an authoritative veraPDF run. */
+  source: "preflight" | "verapdf";
+  profileName?: string;
+  validatorVersion?: string;
 }
 
 /* ---------------- dict-walking helpers ---------------- */
@@ -433,5 +437,5 @@ export async function checkPdfA(bytes: Uint8Array): Promise<PdfaReport> {
       : "No blocking issues found for PDF/A-2b."
     : `Not PDF/A-ready: ${errors} error${errors === 1 ? "" : "s"}${warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}.`;
 
-  return { findings, errors, warnings, infos, ready, verdict };
+  return { findings, errors, warnings, infos, ready, verdict, source: "preflight" };
 }
