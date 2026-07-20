@@ -38,7 +38,10 @@ export function PdfaScreen() {
         if (cancelled) return;
         setReport(preflight);
 
-        if (isTauri) {
+        if (
+          isTauri &&
+          import.meta.env.VITE_DISTRIBUTION_CHANNEL !== "mac-app-store"
+        ) {
           // Avoid launching the Java validator for every intermediate edit.
           await new Promise((resolve) => window.setTimeout(resolve, 600));
           if (cancelled) return;

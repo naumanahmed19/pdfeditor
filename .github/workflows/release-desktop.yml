@@ -5,6 +5,12 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Upload to stores and publish the GitHub release
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,7 +60,10 @@ jobs:
             throw "Tag $releaseTag does not match the application version $appVersion."
           }
 
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+          if (
+            "${{ github.event_name }}" -eq "workflow_dispatch" -and
+            "${{ inputs.publish_release }}" -eq "true"
+          ) {
             $existingTagCommit = git rev-list -n 1 $releaseTag 2>$null
             if ($LASTEXITCODE -ne 0) {
               # A first release has no tag yet. Reset the native exit code so
@@ -96,6 +105,7 @@ jobs:
   windows:
     name: Build Windows Store package
     needs: [prepare, test]
+    if: github.event_name == 'push' || inputs.publish_release
     runs-on: windows-2022
 
     steps:
@@ -155,6 +165,7 @@ jobs:
   linux:
     name: Build Linux packages
     needs: [prepare, test]
+    if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-22.04
 
     steps:
@@ -225,6 +236,7 @@ jobs:
   macos:
     name: Build universal macOS package
     needs: [prepare, test]
+    if: github.event_name == 'push' || inputs.publish_release
     runs-on: macos-14
 
     steps:
@@ -289,9 +301,272 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  macos_app_store:
+    name: Sign and upload Mac App Store package
+    needs: [prepare, test]
+    runs-on: macos-14
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate Apple secrets
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+          APPLE_APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
+          APPLE_APP_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_APP_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          required=(
+            APPLE_API_ISSUER
+            APPLE_API_KEY_ID
+            APPLE_API_PRIVATE_KEY_BASE64
+            APPLE_APP_CERTIFICATE_BASE64
+            APPLE_APP_CERTIFICATE_PASSWORD
+            APPLE_INSTALLER_CERTIFICATE_BASE64
+            APPLE_INSTALLER_CERTIFICATE_PASSWORD
+            APPLE_KEYCHAIN_PASSWORD
+            APPLE_PROVISIONING_PROFILE_BASE64
+            APPLE_TEAM_ID
+          )
+
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required repository secret is missing or empty: $name"
+              exit 1
+            fi
+          done
+
+          if [[ "$APPLE_TEAM_ID" != "X9DX8SWR84" ]]; then
+            echo "APPLE_TEAM_ID does not match the App ID and entitlements."
+            exit 1
+          fi
+
+      - name: Import Apple signing certificates
+        shell: bash
+        env:
+          APPLE_APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
+          APPLE_APP_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_APP_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          app_certificate="$RUNNER_TEMP/pickpdf-apple-distribution.p12"
+          installer_certificate="$RUNNER_TEMP/pickpdf-installer-distribution.p12"
+          keychain_path="$RUNNER_TEMP/pickpdf-signing.keychain-db"
+
+          printf '%s' "$APPLE_APP_CERTIFICATE_BASE64" | base64 --decode > "$app_certificate"
+          printf '%s' "$APPLE_INSTALLER_CERTIFICATE_BASE64" | base64 --decode > "$installer_certificate"
+
+          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$app_certificate" \
+            -P "$APPLE_APP_CERTIFICATE_PASSWORD" \
+            -A -k "$keychain_path"
+          security import "$installer_certificate" \
+            -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" \
+            -A -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$APPLE_KEYCHAIN_PASSWORD" "$keychain_path"
+
+          existing_keychains=$(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user -s "$keychain_path" $existing_keychains
+
+          app_identity=$(security find-identity -v -p codesigning "$keychain_path" \
+            | awk -F'"' '/Apple Distribution:/{print $2; exit}')
+          installer_identity=$(security find-certificate -a \
+            -c "3rd Party Mac Developer Installer" -Z "$keychain_path" \
+            | awk '/SHA-1 hash:/{print $3; exit}')
+
+          if [[ -z "$app_identity" ]]; then
+            echo "The app P12 does not contain an Apple Distribution identity and private key."
+            exit 1
+          fi
+          if [[ -z "$installer_identity" ]]; then
+            echo "The installer P12 does not contain a 3rd Party Mac Developer Installer certificate."
+            exit 1
+          fi
+
+          echo "APPLE_SIGNING_IDENTITY=$app_identity" >> "$GITHUB_ENV"
+          echo "INSTALLER_SIGNING_IDENTITY=$installer_identity" >> "$GITHUB_ENV"
+          echo "APPLE_SIGNING_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+
+      - name: Install and verify App Store credentials
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          profile_path="src-tauri/PickPDF.provisionprofile"
+          profile_plist="$RUNNER_TEMP/pickpdf-profile.plist"
+          api_key_dir="$HOME/.appstoreconnect/private_keys"
+          api_key_path="$api_key_dir/AuthKey_${APPLE_API_KEY_ID}.p8"
+
+          printf '%s' "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$profile_path"
+          mkdir -p "$api_key_dir"
+          printf '%s' "$APPLE_API_PRIVATE_KEY_BASE64" | base64 --decode > "$api_key_path"
+          chmod 600 "$api_key_path"
+
+          security cms -D -i "$profile_path" > "$profile_plist"
+          profile_team=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$profile_plist")
+          profile_app_id=$(/usr/libexec/PlistBuddy \
+            -c 'Print :Entitlements:com.apple.application-identifier' "$profile_plist")
+
+          if [[ "$profile_team" != "$APPLE_TEAM_ID" ]]; then
+            echo "The provisioning profile belongs to a different Apple team."
+            exit 1
+          fi
+          if [[ "$profile_app_id" != "$APPLE_TEAM_ID.com.xvelopers.pickpdf" ]]; then
+            echo "The provisioning profile does not match com.xvelopers.pickpdf."
+            exit 1
+          fi
+
+      - name: Create App Store build configuration
+        shell: bash
+        env:
+          STORE_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          node -e 'const fs = require("fs"); const source = "src-tauri/tauri.appstore.conf.json"; const target = "src-tauri/tauri.appstore.ci.conf.json"; const config = JSON.parse(fs.readFileSync(source, "utf8")); config.bundle.macOS.bundleVersion = process.env.STORE_BUILD_NUMBER; fs.writeFileSync(target, JSON.stringify(config, null, 2) + "\n");'
+
+      - name: Build signed Mac App Store application
+        env:
+          VITE_DISTRIBUTION_CHANNEL: mac-app-store
+        run: >-
+          bun run tauri build --ci
+          --target universal-apple-darwin
+          --bundles app
+          --config src-tauri/tauri.appstore.ci.conf.json
+
+      - name: Verify signed application and create installer package
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          app_bundle="src-tauri/target/universal-apple-darwin/release/bundle/macos/PickPDF.app"
+          signed_entitlements="$RUNNER_TEMP/pickpdf-signed-entitlements.plist"
+          package_dir="app-store-artifacts"
+          package_path="$package_dir/PickPDF-${APP_VERSION}-macOS-AppStore.pkg"
+
+          if [[ ! -d "$app_bundle" ]]; then
+            echo "Expected application bundle was not created: $app_bundle"
+            exit 1
+          fi
+          if [[ ! -f "$app_bundle/Contents/embedded.provisionprofile" ]]; then
+            echo "The application does not contain embedded.provisionprofile."
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app_bundle"
+          codesign -d --entitlements :- "$app_bundle" > "$signed_entitlements"
+
+          signed_app_id=$(/usr/libexec/PlistBuddy \
+            -c 'Print :com.apple.application-identifier' "$signed_entitlements")
+          signed_sandbox=$(/usr/libexec/PlistBuddy \
+            -c 'Print :com.apple.security.app-sandbox' "$signed_entitlements")
+          if [[ "$signed_app_id" != "$APPLE_TEAM_ID.com.xvelopers.pickpdf" ]]; then
+            echo "The signed application identifier is incorrect."
+            exit 1
+          fi
+          if [[ "$signed_sandbox" != "true" ]]; then
+            echo "The signed application is missing App Sandbox."
+            exit 1
+          fi
+
+          mkdir -p "$package_dir"
+          xcrun productbuild \
+            --sign "$INSTALLER_SIGNING_IDENTITY" \
+            --keychain "$APPLE_SIGNING_KEYCHAIN" \
+            --component "$app_bundle" /Applications \
+            "$package_path"
+          pkgutil --check-signature "$package_path"
+          echo "APP_STORE_PACKAGE=$package_path" >> "$GITHUB_ENV"
+
+      - name: Validate package with App Store Connect
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: >-
+          xcrun altool --validate-app
+          --type macos
+          --file "$APP_STORE_PACKAGE"
+          --apiKey "$APPLE_API_KEY_ID"
+          --apiIssuer "$APPLE_API_ISSUER"
+
+      - name: Keep validated App Store package
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-macos-universal
+          path: app-store-artifacts/*.pkg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload package to App Store Connect
+        if: github.event_name == 'push' || inputs.publish_release
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: >-
+          xcrun altool --upload-app
+          --type macos
+          --file "$APP_STORE_PACKAGE"
+          --apiKey "$APPLE_API_KEY_ID"
+          --apiIssuer "$APPLE_API_ISSUER"
+
+      - name: Remove temporary Apple credentials
+        if: always()
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          keychain_path="${APPLE_SIGNING_KEYCHAIN:-$RUNNER_TEMP/pickpdf-signing.keychain-db}"
+          if [[ -f "$keychain_path" ]]; then
+            security delete-keychain "$keychain_path" || true
+          fi
+          rm -f \
+            "$RUNNER_TEMP/pickpdf-apple-distribution.p12" \
+            "$RUNNER_TEMP/pickpdf-installer-distribution.p12" \
+            "$RUNNER_TEMP/pickpdf-profile.plist" \
+            "$RUNNER_TEMP/pickpdf-signed-entitlements.plist" \
+            "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8" \
+            "src-tauri/PickPDF.provisionprofile" \
+            "src-tauri/tauri.appstore.ci.conf.json"
+
   chrome:
     name: Build Chrome extension
     needs: [prepare, test]
+    if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-22.04
 
     steps:
@@ -341,6 +616,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [prepare, windows, linux, macos, chrome]
+    if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-22.04
     permissions:
       contents: write

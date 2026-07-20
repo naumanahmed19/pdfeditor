@@ -5,5 +5,13 @@ dist-extension/
 .DS_Store
 src-tauri/target/
 
+# Apple signing material must only live in the CI secret store.
+*.cer
+*.p8
+*.p12
+*.provisionprofile
+*.certSigningRequest
+src-tauri/tauri.appstore.ci.conf.json
+
 # Use bun.lock only; npm lock (esp. Windows-generated) breaks Linux rollup native deps
 package-lock.json
