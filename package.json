@@ -9,6 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc && vite build",
+    "build:extension": "tsc && vite build --config vite.extension.config.ts && node scripts/verify-extension.mjs",
+    "build:extension:chrome151": "tsc && vite build --config vite.extension.config.ts --mode chrome151 && node scripts/verify-extension.mjs --expect-mime-handler",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri",
     "msix": "powershell -ExecutionPolicy Bypass -File scripts/build-msix.ps1",

@@ -55,6 +55,7 @@ import { CompareScreen } from "./components/tools/CompareScreen";
 import { DocToPdfScreen, ImagesToPdfScreen } from "./components/tools/CreatePdfScreen";
 import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
+import { ChromeExtensionBridge } from "./components/ChromeExtensionBridge";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
@@ -570,6 +571,7 @@ function Shell() {
       <CalibrateModal />
       <DropZone />
       <UpdateNotifier />
+      <ChromeExtensionBridge />
       <Toaster />
     </div>
   );

@@ -1,4 +1,4 @@
-name: Prepare desktop release
+name: Prepare application release
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
 
       # Tags created with GITHUB_TOKEN do not start tag-triggered workflows.
       # Dispatch the builder explicitly at the new immutable release tag.
-      - name: Start desktop release build
+      - name: Start application release build
         if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
