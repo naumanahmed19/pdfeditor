@@ -1,5 +1,6 @@
 mod fonts;
 mod native_menu;
+mod verapdf;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,7 +12,8 @@ pub fn run() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
       fonts::match_system_font,
-      native_menu::sync_native_menu_state
+      native_menu::sync_native_menu_state,
+      verapdf::validate_pdfa_with_verapdf
     ])
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_opener::init())

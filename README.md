@@ -211,6 +211,24 @@ bun run tauri dev      # run in development (hot reload)
 bun run tauri build    # Windows installer (NSIS .exe + .msi) in src-tauri/target/release/bundle/
 ```
 
+### veraPDF validation
+
+The desktop PDF/A screen uses [veraPDF](https://verapdf.org/software/) for full
+PDF/A-2b validation when its launcher is installed. Without it, and in the web
+build, PickPDF transparently falls back to its built-in structural preflight.
+
+Install the stable veraPDF release, then either add `verapdf` (`verapdf.bat` on
+Windows) to `PATH`, install it in the default `~/verapdf` directory, or set an
+explicit launcher path before starting PickPDF:
+
+```powershell
+$env:VERAPDF_EXECUTABLE = "C:\Tools\verapdf\verapdf.bat"
+bun run tauri dev
+```
+
+PDFs are written to a uniquely named temporary file for the validator and
+deleted immediately after each run. Validation stays local.
+
 ## Desktop releases
 
 Release Please maintains a release pull request whenever conventional commits
