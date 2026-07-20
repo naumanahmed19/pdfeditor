@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.0...v0.5.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* mark Store encryption as export exempt ([930d2fd](https://github.com/naumanahmed19/pdfeditor/commit/930d2fdc2bd4b5c09f53e0242be1cbb3efe9801c))
+* validate sandbox on signed Mac app ([d64a966](https://github.com/naumanahmed19/pdfeditor/commit/d64a966f87f733f42d7f76444d02be590c86a4b9))
+
 ## [0.5.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.4.0...v0.5.0) (2026-07-20)
 
 
