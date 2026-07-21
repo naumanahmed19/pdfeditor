@@ -265,9 +265,19 @@ versions in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`,
 creates the matching `vMAJOR.MINOR.PATCH` tag and starts the desktop release
 workflow automatically.
 
-Use `fix:` for patch releases, `feat:` for minor releases, and a conventional
-commit with `!` (for example, `feat!:`) for a major release. Merge the generated
-Release Please pull request only when the accumulated changes are ready to ship.
+Both the pull request title and every authored commit subject must use
+Conventional Commit syntax: `<type>[(scope)][!]: <summary>`. Use `fix:` for
+patch releases, `feat:` for minor releases, and `!` (for example, `feat!:`) for
+major releases. Types such as `ci:`, `docs:`, `test:`, and `chore:` record
+non-release work without choosing the next application version. The pull
+request validation workflow rejects non-conventional titles and commits before
+they reach `main`.
+
+GitHub-generated `Merge pull request ...` commits may appear as harmless parser
+warnings; Release Please uses the conventional commits contained in the merge.
+After a release tag is created, those commits are consumed and are not included
+again in the next release. Merge the generated Release Please pull request only
+when the accumulated changes are ready to ship.
 
 The workflow in `.github/workflows/release-desktop.yml` runs the type-check and
 tests, then builds the Windows Store `.msixupload`, universal macOS `.dmg`,
