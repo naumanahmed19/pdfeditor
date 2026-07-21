@@ -31,6 +31,7 @@ import {
 import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
 import { UpdateNotifier } from "./components/layout/UpdateNotifier";
+import { OnboardingTour } from "./components/layout/OnboardingTour";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DropZone } from "./components/layout/DropZone";
 import { CommandPalette } from "./components/command/CommandPalette";
@@ -572,6 +573,19 @@ function Shell() {
       <DropZone />
       <UpdateNotifier />
       <ChromeExtensionBridge />
+      <OnboardingTour
+        hasDocument={Boolean(app.pdf)}
+        onOpenDocument={() => void app.requestOpen()}
+        onChooseComment={() => {
+          app.setScreen("viewer");
+          app.setEditMode(true);
+          app.setTool("note");
+        }}
+        onOpenSplit={() => app.setScreen("split")}
+        onOpenCommandPalette={() =>
+          window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
+        }
+      />
       <Toaster />
     </div>
   );

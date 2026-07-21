@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Combine,
   Command as CommandIcon,
+  CircleHelp,
   Crop,
   Download,
   Droplets,
@@ -65,6 +66,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { PrintModal } from "../viewer/PrintModal";
 import { BrandLogo } from "./BrandLogo";
 import { Tip } from "../ui/tooltip";
+import { ONBOARDING_TOUR_EVENT } from "./OnboardingTour";
 
 // Memoized: it has no props, so it ignores parent (Shell) re-renders and only
 // re-renders when its own selected store fields change.
@@ -812,6 +814,17 @@ function TitleBarImpl() {
           onClick={() => app.setScreen("settings")}
         >
           <Settings className="h-4 w-4" />
+        </Button>
+      </Tip>
+      <Tip label="Getting started">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          aria-label="Start quick tour"
+          onClick={() => window.dispatchEvent(new CustomEvent(ONBOARDING_TOUR_EVENT))}
+        >
+          <CircleHelp className="h-4 w-4" />
         </Button>
       </Tip>
 
