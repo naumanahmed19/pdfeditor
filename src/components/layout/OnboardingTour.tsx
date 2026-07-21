@@ -1,20 +1,66 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Command, FileUp, MessageSquare, Scissors, X } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Command,
+  FileUp,
+  MessageSquare,
+  Play,
+  Scissors,
+  Search,
+  Sparkles,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog";
 import { cn } from "../../lib/utils";
 import { isTauriMacOS } from "../../lib/tauri";
 
 export const ONBOARDING_TOUR_EVENT = "pickpdf:start-onboarding-tour";
+export const TUTORIAL_CENTER_EVENT = "pickpdf:open-tutorial-center";
 export const ONBOARDING_TOUR_STORAGE_KEY = "pickpdf.onboarding-tour.v2.complete";
+
+type TutorialId = "getting-started" | "find-replace" | "comments" | "split-extract";
 
 type Props = {
   hasDocument: boolean;
   onOpenDocument: () => void;
   onChooseComment: () => void;
+  onOpenComments: () => void;
+  onFocusSearch: () => void;
+  onOpenReplace: () => void;
   onOpenSplit: () => void;
   onOpenCommandPalette: () => void;
   nativeMacMenu?: boolean;
+};
+
+type TutorialStep = {
+  title: string;
+  description: string;
+  selector: string;
+  icon: LucideIcon;
+  actionLabel?: string;
+  action?: () => void;
+  onEnter?: () => void;
+  requiresDocument?: boolean;
+};
+
+type TutorialDefinition = {
+  id: TutorialId;
+  title: string;
+  summary: string;
+  icon: LucideIcon;
+  steps: TutorialStep[];
 };
 
 type TargetRect = {
@@ -29,6 +75,16 @@ type TargetRect = {
 const CARD_WIDTH = 304;
 const CARD_GAP = 14;
 const EDGE_GAP = 12;
+const TUTORIAL_IDS: TutorialId[] = [
+  "getting-started",
+  "find-replace",
+  "comments",
+  "split-extract",
+];
+
+function tutorialStorageKey(id: TutorialId): string {
+  return `pickpdf.tutorial.${id}.complete`;
+}
 
 function hasFinishedTour(): boolean {
   try {
@@ -38,9 +94,20 @@ function hasFinishedTour(): boolean {
   }
 }
 
-function rememberTour(): void {
+function completedTutorials(): TutorialId[] {
   try {
-    localStorage.setItem(ONBOARDING_TOUR_STORAGE_KEY, "1");
+    return TUTORIAL_IDS.filter((id) => localStorage.getItem(tutorialStorageKey(id)) === "1");
+  } catch {
+    return [];
+  }
+}
+
+function rememberTutorial(id: TutorialId): void {
+  try {
+    localStorage.setItem(tutorialStorageKey(id), "1");
+    if (id === "getting-started") {
+      localStorage.setItem(ONBOARDING_TOUR_STORAGE_KEY, "1");
+    }
   } catch {
     // Storage can be unavailable in privacy-restricted browser contexts.
   }
@@ -62,17 +129,34 @@ export function OnboardingTour({
   hasDocument,
   onOpenDocument,
   onChooseComment,
+  onOpenComments,
+  onFocusSearch,
+  onOpenReplace,
   onOpenSplit,
   onOpenCommandPalette,
   nativeMacMenu = isTauriMacOS,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [topicId, setTopicId] = useState<TutorialId>("getting-started");
   const [step, setStep] = useState(0);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const [layoutTick, setLayoutTick] = useState(0);
+  const [completed, setCompleted] = useState<TutorialId[]>(completedTutorials);
 
-  const steps = useMemo(() => {
-    const commonSteps = [
+  const tutorials = useMemo<TutorialDefinition[]>(() => {
+    const documentStep: TutorialStep = {
+      title: hasDocument ? "Your PDF is ready" : "Open a PDF to continue",
+      description: hasDocument
+        ? "This tutorial uses the document you already have open."
+        : "Open a PDF first so the controls in this tutorial are available.",
+      selector: hasDocument ? "[data-tour='document-header']" : "[data-tour='open-pdf']",
+      icon: hasDocument ? Check : FileUp,
+      actionLabel: hasDocument ? undefined : "Open PDF",
+      action: hasDocument ? undefined : onOpenDocument,
+    };
+
+    const gettingStartedSteps: TutorialStep[] = [
       {
         title: hasDocument ? "Your PDF is ready" : "Open your first PDF",
         description: hasDocument
@@ -97,66 +181,181 @@ export function OnboardingTour({
     ];
 
     if (nativeMacMenu) {
-      return [
-        ...commonSteps,
+      gettingStartedSteps.push({
+        title: "Split or find any tool",
+        description:
+          "On Mac, choose Tools → Split & Extract in the system menu bar. Or open the command palette here and type “split”.",
+        selector: "[data-tour='command-palette']",
+        icon: Scissors,
+        actionLabel: "Open command palette",
+        action: onOpenCommandPalette,
+      });
+    } else {
+      gettingStartedSteps.push(
         {
-          title: "Split or find any tool",
+          title: "Split or extract pages",
           description:
-            "On Mac, choose Tools → Split & Extract in the system menu bar. Or open the command palette here and type “split”.",
-          selector: "[data-tour='command-palette']",
+            "Document actions such as Split & extract are grouped under Tools, so the main workspace stays uncluttered.",
+          selector: "[data-tour='tools-menu']",
           icon: Scissors,
+          actionLabel: "Open Split & extract",
+          action: onOpenSplit,
+        },
+        {
+          title: "Find every tool fast",
+          description:
+            "Use the command palette whenever you know what you want to do but not where the control is.",
+          selector: "[data-tour='command-palette']",
+          icon: Command,
           actionLabel: "Open command palette",
           action: onOpenCommandPalette,
         },
-      ];
+      );
     }
 
     return [
-      ...commonSteps,
       {
-        title: "Split or extract pages",
-        description:
-          "Document actions such as Split & extract are grouped under Tools, so the main workspace stays uncluttered.",
-        selector: "[data-tour='tools-menu']",
-        icon: Scissors,
-        actionLabel: "Open Split & extract",
-        action: onOpenSplit,
+        id: "getting-started",
+        title: "Getting started",
+        summary: "Open a PDF, add a comment, and find common tools.",
+        icon: Sparkles,
+        steps: gettingStartedSteps,
       },
       {
-        title: "Find every tool fast",
-        description:
-          "Use the command palette whenever you know what you want to do but not where the control is.",
-        selector: "[data-tour='command-palette']",
-        icon: Command,
-        actionLabel: "Open command palette",
-        action: onOpenCommandPalette,
+        id: "find-replace",
+        title: "Find & replace",
+        summary: "Search document text and replace one or every match.",
+        icon: Search,
+        steps: [
+          documentStep,
+          {
+            title: "Find text in your document",
+            description:
+              "Type a word or phrase here. Enter moves forward through matches; Shift+Enter moves back.",
+            selector: "[data-tour='document-search']",
+            icon: Search,
+            actionLabel: "Focus search",
+            action: onFocusSearch,
+            requiresDocument: true,
+          },
+          {
+            title: "Replace one match or all",
+            description:
+              "Open Replace, enter the new text, then choose Replace for the current match or All for every match.",
+            selector: "[data-tour='replace-toggle']",
+            icon: Search,
+            actionLabel: "Open replace",
+            action: onOpenReplace,
+            requiresDocument: true,
+          },
+        ],
+      },
+      {
+        id: "comments",
+        title: "Comments",
+        summary: "Add sticky notes and review every comment in one place.",
+        icon: MessageSquare,
+        steps: [
+          documentStep,
+          {
+            title: "Place a comment",
+            description:
+              "Open Markup, choose Comment, and click the page where the note belongs.",
+            selector: hasDocument ? "[data-tour='comment-tools']" : "[data-tour='open-pdf']",
+            icon: MessageSquare,
+            actionLabel: hasDocument ? "Choose Comment" : "Open PDF first",
+            action: hasDocument ? onChooseComment : onOpenDocument,
+            requiresDocument: true,
+          },
+          {
+            title: "Review all comments",
+            description:
+              "Open the Comments panel to see every note by page and jump directly to one.",
+            selector: "[data-tour='comments-list']",
+            icon: BookOpen,
+            onEnter: onOpenComments,
+            requiresDocument: true,
+          },
+        ],
+      },
+      {
+        id: "split-extract",
+        title: "Split & extract",
+        summary: "Extract page ranges or split a PDF into separate files.",
+        icon: Scissors,
+        steps: [
+          documentStep,
+          nativeMacMenu
+            ? {
+                title: "Open Split & Extract on Mac",
+                description:
+                  "Choose Tools → Split & Extract in the system menu bar, or open the command palette and type “split”.",
+                selector: "[data-tour='command-palette']",
+                icon: Command,
+                actionLabel: "Open command palette",
+                action: onOpenCommandPalette,
+                requiresDocument: true,
+              }
+            : {
+                title: "Open Split & extract",
+                description:
+                  "Choose Split & extract under Tools, then select a page range or split every page into its own file.",
+                selector: "[data-tour='tools-menu']",
+                icon: Scissors,
+                actionLabel: "Open Split & extract",
+                action: onOpenSplit,
+                requiresDocument: true,
+              },
+        ],
       },
     ];
   }, [
     hasDocument,
     nativeMacMenu,
     onChooseComment,
+    onFocusSearch,
     onOpenCommandPalette,
+    onOpenComments,
     onOpenDocument,
+    onOpenReplace,
     onOpenSplit,
   ]);
 
+  const tutorial = tutorials.find((item) => item.id === topicId) ?? tutorials[0];
+  const steps = tutorial.steps;
+
   const finish = useCallback(() => {
-    rememberTour();
+    rememberTutorial(topicId);
+    setCompleted((items) => (items.includes(topicId) ? items : [...items, topicId]));
     setOpen(false);
     setTargetRect(null);
+  }, [topicId]);
+
+  const startTutorial = useCallback((id: TutorialId) => {
+    setTopicId(id);
+    setStep(0);
+    setTargetRect(null);
+    setLibraryOpen(false);
+    setOpen(true);
   }, []);
 
   useEffect(() => {
-    if (!hasFinishedTour()) setOpen(true);
+    if (!hasFinishedTour()) startTutorial("getting-started");
 
-    const restart = () => {
-      setStep(0);
-      setOpen(true);
+    const restart = () => startTutorial("getting-started");
+    const openLibrary = () => {
+      setCompleted(completedTutorials());
+      setOpen(false);
+      setTargetRect(null);
+      setLibraryOpen(true);
     };
     window.addEventListener(ONBOARDING_TOUR_EVENT, restart);
-    return () => window.removeEventListener(ONBOARDING_TOUR_EVENT, restart);
-  }, []);
+    window.addEventListener(TUTORIAL_CENTER_EVENT, openLibrary);
+    return () => {
+      window.removeEventListener(ONBOARDING_TOUR_EVENT, restart);
+      window.removeEventListener(TUTORIAL_CENTER_EVENT, openLibrary);
+    };
+  }, [startTutorial]);
 
   useEffect(() => {
     if (!open) return;
@@ -168,12 +367,18 @@ export function OnboardingTour({
   }, [finish, open]);
 
   useEffect(() => {
-    if (!open || step !== steps.length - 1) return;
+    if (
+      !open ||
+      step !== steps.length - 1 ||
+      steps[step].selector !== "[data-tour='command-palette']"
+    ) {
+      return;
+    }
     const finishWhenOpened = () => finish();
     window.addEventListener("pdfwb:open-command-palette", finishWhenOpened);
     return () =>
       window.removeEventListener("pdfwb:open-command-palette", finishWhenOpened);
-  }, [finish, open, step, steps.length]);
+  }, [finish, open, step, steps]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -204,7 +409,60 @@ export function OnboardingTour({
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };
-  }, [hasDocument, layoutTick, open, step]);
+  }, [hasDocument, layoutTick, open, step, topicId]);
+
+  if (libraryOpen) {
+    return (
+      <Dialog open onOpenChange={(next) => setLibraryOpen(next)}>
+        <DialogContent aria-label="PickPDF tutorials" className="max-w-xl">
+          <DialogHeader>
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <BookOpen className="h-5 w-5" />
+            </div>
+            <DialogTitle>Learn PickPDF</DialogTitle>
+            <DialogDescription>
+              Choose a short tutorial. Each one points to the real controls while you work.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 pt-2 sm:grid-cols-2">
+            {tutorials.map((item) => {
+              const Icon = item.icon;
+              const isComplete = completed.includes(item.id);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-label={`Start ${item.title} tutorial`}
+                  onClick={() => startTutorial(item.id)}
+                  className="group flex min-h-32 flex-col rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/40"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Icon className="h-4.5 w-4.5" />
+                    </span>
+                    {isComplete && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                        <Check className="h-3.5 w-3.5" />
+                        Completed
+                      </span>
+                    )}
+                  </div>
+                  <span className="mt-3 text-sm font-semibold">{item.title}</span>
+                  <span className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {item.summary}
+                  </span>
+                  <span className="mt-auto inline-flex items-center gap-1 pt-3 text-xs font-medium text-primary">
+                    <Play className="h-3 w-3 fill-current" />
+                    {item.steps.length} steps
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   if (!open || typeof document === "undefined") return null;
 
@@ -237,7 +495,10 @@ export function OnboardingTour({
       Math.max(EDGE_GAP, targetRect.left + targetRect.width / 2 - CARD_WIDTH / 2),
     );
     const top = side === "below" ? targetRect.bottom + CARD_GAP : targetRect.top - CARD_GAP;
-    const arrowLeft = Math.min(CARD_WIDTH - 24, Math.max(24, targetRect.left + targetRect.width / 2 - left));
+    const arrowLeft = Math.min(
+      CARD_WIDTH - 24,
+      Math.max(24, targetRect.left + targetRect.width / 2 - left),
+    );
     return { top, left, side, arrowLeft };
   })();
 
@@ -248,7 +509,7 @@ export function OnboardingTour({
   };
 
   return createPortal(
-    <div aria-label="Getting started with PickPDF">
+    <div aria-label={`${tutorial.title} tutorial`}>
       {paddedTarget ? (
         <div
           className="pointer-events-none fixed z-[45] rounded-lg border-2 border-primary ring-2 ring-background transition-all duration-200"
@@ -267,7 +528,7 @@ export function OnboardingTour({
 
       <button
         type="button"
-        aria-label="Close tour"
+        aria-label="Close tutorial"
         onClick={finish}
         className="fixed right-4 top-4 z-[60] flex h-9 w-9 items-center justify-center rounded-full bg-background/95 text-foreground shadow-lg transition-colors hover:bg-accent"
       >
@@ -277,7 +538,7 @@ export function OnboardingTour({
       <section
         role="dialog"
         aria-modal="false"
-        aria-labelledby="onboarding-tour-title"
+        aria-labelledby="tutorial-step-title"
         className="fixed z-[60] w-[min(304px,calc(100vw-24px))] rounded-lg border bg-popover p-4 text-popover-foreground shadow-2xl"
         style={{
           left: card.left,
@@ -288,7 +549,9 @@ export function OnboardingTour({
           <span
             className={cn(
               "absolute h-3 w-3 rotate-45 border bg-popover",
-              card.side === "below" ? "-top-1.5 border-b-0 border-r-0" : "-bottom-1.5 border-l-0 border-t-0",
+              card.side === "below"
+                ? "-top-1.5 border-b-0 border-r-0"
+                : "-bottom-1.5 border-l-0 border-t-0",
             )}
             style={{ left: card.arrowLeft - 6 }}
             aria-hidden="true"
@@ -296,10 +559,13 @@ export function OnboardingTour({
         )}
 
         <div className="relative">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-primary">
+            {tutorial.title}
+          </p>
           <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <Icon className="h-4.5 w-4.5" />
           </div>
-          <h2 id="onboarding-tour-title" className="text-base font-semibold leading-snug">
+          <h2 id="tutorial-step-title" className="text-base font-semibold leading-snug">
             {current.title}
           </h2>
           <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
@@ -332,7 +598,12 @@ export function OnboardingTour({
                 disabled={Boolean(current.requiresDocument && !hasDocument)}
                 onClick={() => {
                   if (lastStep) finish();
-                  else setStep((value) => value + 1);
+                  else {
+                    const nextStep = step + 1;
+                    steps[nextStep].onEnter?.();
+                    setStep(nextStep);
+                    setLayoutTick((value) => value + 1);
+                  }
                 }}
               >
                 {lastStep ? "Finish" : "Next"}

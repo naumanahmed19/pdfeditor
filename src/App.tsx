@@ -587,6 +587,22 @@ function Shell() {
           app.setEditMode(true);
           app.setTool("note");
         }}
+        onOpenComments={() => {
+          app.setScreen("viewer");
+          app.setSidebarOpen(true);
+          if (app.isMobile) app.setAiOpen(false);
+          window.dispatchEvent(
+            new CustomEvent("pdfwb:open-sidebar-panel", {
+              detail: { panel: "comments" },
+            }),
+          );
+        }}
+        onFocusSearch={() =>
+          window.dispatchEvent(new CustomEvent("pdfwb:focus-document-search"))
+        }
+        onOpenReplace={() =>
+          window.dispatchEvent(new CustomEvent("pdfwb:open-replace"))
+        }
         onOpenSplit={() => app.setScreen("split")}
         onOpenCommandPalette={() =>
           window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))

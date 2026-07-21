@@ -66,7 +66,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { PrintModal } from "../viewer/PrintModal";
 import { BrandLogo } from "./BrandLogo";
 import { Tip } from "../ui/tooltip";
-import { ONBOARDING_TOUR_EVENT } from "./OnboardingTour";
+import { TUTORIAL_CENTER_EVENT } from "./OnboardingTour";
 
 // Memoized: it has no props, so it ignores parent (Shell) re-renders and only
 // re-renders when its own selected store fields change.
@@ -556,6 +556,7 @@ function TitleBarImpl() {
       />
 
       <form
+        data-tour="document-search"
         ref={searchFormRef}
         onSubmit={submitSearch}
         className="mx-auto hidden h-7 w-full max-w-md items-center gap-1 rounded-md border border-sidebar-border bg-background/70 px-2 sm:flex"
@@ -685,6 +686,7 @@ function TitleBarImpl() {
         <Popover open={replaceOpen} onOpenChange={setReplaceOpen}>
           <Tip label="Toggle replace">
             <PopoverTrigger
+              data-tour="replace-toggle"
               type="button"
               aria-label="Toggle replace"
               className={optionButtonClass(replaceOpen)}
@@ -821,13 +823,13 @@ function TitleBarImpl() {
           <Settings className="h-4 w-4" />
         </Button>
       </Tip>
-      <Tip label="Getting started">
+      <Tip label="Tutorials">
         <Button
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          aria-label="Start quick tour"
-          onClick={() => window.dispatchEvent(new CustomEvent(ONBOARDING_TOUR_EVENT))}
+          aria-label="Open tutorials"
+          onClick={() => window.dispatchEvent(new CustomEvent(TUTORIAL_CENTER_EVENT))}
         >
           <CircleHelp className="h-4 w-4" />
         </Button>
