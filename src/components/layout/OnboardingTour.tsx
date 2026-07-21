@@ -7,7 +7,6 @@ import {
   Command,
   FileUp,
   MessageSquare,
-  Play,
   ScanText,
   Scissors,
   Search,
@@ -21,12 +20,12 @@ import {
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "../ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../ui/sheet";
 import { cn } from "../../lib/utils";
 import { isTauriMacOS } from "../../lib/tauri";
 
@@ -520,21 +519,22 @@ export function OnboardingTour({
 
   if (libraryOpen) {
     return (
-      <Dialog open onOpenChange={(next) => setLibraryOpen(next)}>
-        <DialogContent
+      <Sheet open onOpenChange={(next) => setLibraryOpen(next)}>
+        <SheetContent
           aria-label="PickPDF tutorials"
-          className="max-h-[80vh] max-w-xl overflow-y-auto"
+          side="right"
+          className="p-0"
         >
-          <DialogHeader>
+          <SheetHeader className="shrink-0 border-b px-6 pb-5 pt-6 pr-14">
             <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <BookOpen className="h-5 w-5" />
             </div>
-            <DialogTitle>Learn PickPDF</DialogTitle>
-            <DialogDescription>
+            <SheetTitle>Learn PickPDF</SheetTitle>
+            <SheetDescription>
               Choose a short tutorial. Each one points to the real controls while you work.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-2 pt-2 sm:grid-cols-2">
+            </SheetDescription>
+          </SheetHeader>
+          <div className="scrollbar-soft min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {tutorials.map((item) => {
               const Icon = item.icon;
               const isComplete = completed.includes(item.id);
@@ -544,33 +544,35 @@ export function OnboardingTour({
                   type="button"
                   aria-label={`Start ${item.title} tutorial`}
                   onClick={() => startTutorial(item.id)}
-                  className="group flex min-h-32 flex-col rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/40"
+                  className="group flex w-full items-center gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/50 hover:bg-accent/50"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                      <Icon className="h-4.5 w-4.5" />
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold">{item.title}</span>
+                      {isComplete && (
+                        <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                          <Check className="h-3 w-3" />
+                          Done
+                        </span>
+                      )}
                     </span>
-                    {isComplete && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-                        <Check className="h-3.5 w-3.5" />
-                        Completed
-                      </span>
-                    )}
-                  </div>
-                  <span className="mt-3 text-sm font-semibold">{item.title}</span>
-                  <span className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {item.summary}
+                    <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                      {item.summary}
+                    </span>
+                    <span className="mt-1 block text-[11px] font-medium text-primary">
+                      {item.steps.length} steps
+                    </span>
                   </span>
-                  <span className="mt-auto inline-flex items-center gap-1 pt-3 text-xs font-medium text-primary">
-                    <Play className="h-3 w-3 fill-current" />
-                    {item.steps.length} steps
-                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
                 </button>
               );
             })}
           </div>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
     );
   }
 
