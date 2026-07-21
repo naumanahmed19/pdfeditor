@@ -16,6 +16,11 @@ on:
         required: true
         type: boolean
         default: false
+      publish_snap_store:
+        description: Build and publish only the Linux Snap package
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -170,7 +175,7 @@ jobs:
   linux:
     name: Build Linux packages
     needs: [prepare, test]
-    if: github.event_name == 'push' || inputs.publish_release
+    if: github.event_name == 'push' || inputs.publish_release || inputs.publish_snap_store
     runs-on: ubuntu-22.04
 
     steps:
@@ -627,9 +632,72 @@ jobs:
           CHROME_WEBSTORE_PACKAGE: release-artifacts/PickPDF-${{ needs.prepare.outputs.app_version }}-chrome.zip
         run: bun scripts/publish-chrome-extension.mjs "$CHROME_WEBSTORE_PACKAGE"
 
+  snap:
+    name: Build and publish Snap package
+    needs: [prepare, test, linux]
+    if: github.event_name == 'push' || inputs.publish_release || inputs.publish_snap_store
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download Debian package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux-x64
+          path: linux-artifacts
+
+      - name: Prepare Snap source
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+        run: |
+          mapfile -t deb_packages < <(find linux-artifacts -maxdepth 1 -type f -name '*.deb')
+          if [[ ${#deb_packages[@]} -ne 1 ]]; then
+            printf 'Expected one Debian package; found %s\n' "${#deb_packages[@]}"
+            printf '%s\n' "${deb_packages[@]}"
+            exit 1
+          fi
+
+          mkdir -p snap/local/pickpdf/usr/share/applications
+          dpkg-deb --extract "${deb_packages[0]}" snap/local/pickpdf
+          install -m 0644 snap/gui/pickpdf.desktop \
+            snap/local/pickpdf/usr/share/applications/pickpdf.desktop
+          sed -i "s/^version: .*/version: \"${APP_VERSION}\"/" snap/snapcraft.yaml
+
+      - name: Build Snap package
+        id: snapcraft
+        uses: snapcore/action-build@v1
+
+      - name: Create Snap checksum
+        shell: bash
+        env:
+          SNAP_PACKAGE: ${{ steps.snapcraft.outputs.snap }}
+        run: |
+          mkdir -p release-artifacts
+          cp "$SNAP_PACKAGE" release-artifacts/
+          (cd release-artifacts && sha256sum *.snap > SHA256SUMS-snap-amd64.txt)
+
+      - name: Upload Snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-snap-amd64
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish Snap to stable channel
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.snapcraft.outputs.snap }}
+          release: stable
+
   publish:
     name: Publish GitHub Release
-    needs: [prepare, windows, linux, macos, chrome]
+    needs: [prepare, windows, linux, macos, chrome, snap]
     if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-22.04
     permissions:
@@ -671,7 +739,7 @@ jobs:
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           mkdir -p r2-artifacts
           find release-artifacts -maxdepth 1 -type f \
-            \( -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.deb' \
+            \( -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.deb' -o -name '*.snap' \
                -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \
                -o -name '*-chrome.zip' \
                -o -name 'SHA256SUMS-*.txt' \) \
