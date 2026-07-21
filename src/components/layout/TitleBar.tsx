@@ -57,7 +57,7 @@ import {
 import { Checkbox } from "../ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { cn } from "../../lib/utils";
-import { isTauri, isTauriMacOS } from "../../lib/tauri";
+import { isTauriDesktop, isTauriMacOS } from "../../lib/tauri";
 import { WindowControls } from "./WindowControls";
 import { AboutModal } from "./AboutModal";
 import { PasswordModal } from "./PasswordModal";
@@ -473,7 +473,7 @@ function TitleBarImpl() {
       data-tauri-drag-region
       className={cn(
         "relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3",
-        isTauri && !isTauriMacOS && "pr-0 sm:pr-0",
+        isTauriDesktop && !isTauriMacOS && "pr-0 sm:pr-0",
         isTauriMacOS && "pl-[76px] sm:pl-[76px]",
       )}
     >
@@ -816,7 +816,7 @@ function TitleBarImpl() {
       </Tip>
 
       {/* Frameless-window controls — desktop shell only */}
-      {isTauri && !isTauriMacOS && <WindowControls />}
+      {isTauriDesktop && !isTauriMacOS && <WindowControls />}
 
       {/* Mobile full-width search overlay */}
       {mobileSearch && (

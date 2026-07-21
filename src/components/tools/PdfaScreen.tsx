@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 import type { PdfaFinding, PdfaReport } from "../../lib/pdfa";
-import { isTauri } from "../../lib/tauri";
+import { isTauriDesktop } from "../../lib/tauri";
 
 /**
  * PDF/A-2b preflight for the open document. Presents a checklist of rule
@@ -39,7 +39,7 @@ export function PdfaScreen() {
         setReport(preflight);
 
         if (
-          isTauri &&
+          isTauriDesktop &&
           import.meta.env.VITE_DISTRIBUTION_CHANNEL !== "mac-app-store"
         ) {
           // Avoid launching the Java validator for every intermediate edit.
@@ -164,7 +164,7 @@ export function PdfaScreen() {
             font embedding, transparency, JavaScript, attachments, XFA, XMP metadata, OutputIntent,
             annotation rules). It does not validate content streams, color spaces against the
             OutputIntent, or XMP schema conformance
-            {isTauri ? "." : " — install the desktop app with veraPDF for full validation."}
+            {isTauriDesktop ? "." : " — use the desktop app with veraPDF for full validation."}
           </>
         )}
       </div>

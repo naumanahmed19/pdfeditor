@@ -13,6 +13,10 @@
     "build:extension:chrome151": "tsc && vite build --config vite.extension.config.ts --mode chrome151 && node scripts/verify-extension.mjs --expect-mime-handler",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:apk": "tauri android build --apk --split-per-abi",
+    "android:aab": "tauri android build --aab",
     "msix": "powershell -ExecutionPolicy Bypass -File scripts/build-msix.ps1",
     "msix:store": "powershell -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -StoreUpload -Unsigned"
   },
@@ -25,6 +29,7 @@
     "@pdf-lib/fontkit": "^1.1.1",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-fs": "~2",
+    "@tauri-apps/plugin-dialog": "~2",
     "@tauri-apps/plugin-opener": "~2",
     "@tauri-apps/plugin-process": "~2",
     "@tauri-apps/plugin-sql": "~2",

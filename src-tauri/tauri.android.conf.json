@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "android": {
+      "minSdkVersion": 24
+    },
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "mimeType": "application/pdf",
+        "name": "PDF document",
+        "role": "Editor",
+        "androidIntentActionFilters": ["view", "send", "sendMultiple"]
+      }
+    ]
+  }
+}
