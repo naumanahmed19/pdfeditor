@@ -32,6 +32,9 @@ if (manifest.manifest_version !== 3) throw new Error("Extension must use Manifes
 if (manifest.version !== packageJson.version) {
   throw new Error("Extension version does not match package.json");
 }
+if (/\bchrome\b/i.test(manifest.description ?? "")) {
+  throw new Error("Extension description must stay browser-neutral");
+}
 if (expectMimeHandler) {
   if (!manifest.mime_types_handler?.["application/pdf"]) {
     throw new Error("Chrome 151 build does not register the PDF MIME handler");

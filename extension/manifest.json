@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PickPDF — PDF Reader & Editor",
   "version": "0.0.0",
-  "description": "Read, edit, organize, fill, sign, and export PDFs locally in Chrome.",
+  "description": "Read, edit, organize, fill, sign, and export PDFs locally in your browser.",
   "icons": {
     "128": "icon.png"
   },
