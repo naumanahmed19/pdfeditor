@@ -8,7 +8,7 @@ description: |
 base: core24
 grade: stable
 confinement: strict
-icon: src-tauri/icons/128x128.png
+icon: snap/gui/icon.png
 
 platforms:
   amd64:
