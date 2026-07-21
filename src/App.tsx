@@ -324,7 +324,10 @@ function ContentHeader() {
   // mobile the panes stack vertically, so the tab row stays evenly split.
   if (app.screen === "viewer" && app.panes.length >= 2) {
     return (
-      <div className="sticky top-0 z-20 flex h-11 shrink-0 items-stretch overflow-hidden rounded-tl-lg border-b bg-background/95 backdrop-blur">
+      <div
+        data-tour="document-header"
+        className="sticky top-0 z-20 flex h-11 shrink-0 items-stretch overflow-hidden rounded-tl-lg border-b bg-background/95 backdrop-blur"
+      >
         {app.panes.map((pane, i) => {
           const size = !app.isMobile ? app.paneSizes[i] : undefined;
           return (
@@ -348,7 +351,10 @@ function ContentHeader() {
   // Viewer screen with a single document open: name + status + doc actions.
   if (app.screen === "viewer" && app.pdf) {
     return (
-      <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-3 backdrop-blur">
+      <div
+        data-tour="document-header"
+        className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-3 backdrop-blur"
+      >
         <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
         <DocName />
         {app.hasAnnotations && (

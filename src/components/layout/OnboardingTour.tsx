@@ -1,26 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Command,
-  FileUp,
-  MessageSquare,
-  Scissors,
-  Sparkles,
-} from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, Command, FileUp, MessageSquare, Scissors, X } from "lucide-react";
+import { createPortal } from "react-dom";
 import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "../ui/dialog";
 import { cn } from "../../lib/utils";
 
 export const ONBOARDING_TOUR_EVENT = "pickpdf:start-onboarding-tour";
-export const ONBOARDING_TOUR_STORAGE_KEY = "pickpdf.onboarding-tour.v1.complete";
+export const ONBOARDING_TOUR_STORAGE_KEY = "pickpdf.onboarding-tour.v2.complete";
 
 type Props = {
   hasDocument: boolean;
@@ -30,40 +15,18 @@ type Props = {
   onOpenCommandPalette: () => void;
 };
 
-const STEPS = [
-  {
-    eyebrow: "Welcome to PickPDF",
-    title: "The basics, one step at a time",
-    description:
-      "This quick tour covers the few things you need to start. Everything else can wait until you need it.",
-    icon: Sparkles,
-    color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
-  },
-  {
-    eyebrow: "Step 1",
-    title: "Open a PDF and move around",
-    description:
-      "Open a file, then use the page controls at the bottom to move and zoom. Your file stays on your device.",
-    icon: FileUp,
-    color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-  },
-  {
-    eyebrow: "Step 2",
-    title: "Add a comment",
-    description:
-      "Choose Comment in the editing toolbar, then click anywhere on the page. Type your note and click outside it to finish.",
-    icon: MessageSquare,
-    color: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  {
-    eyebrow: "Step 3",
-    title: "Split a file — and find anything else",
-    description:
-      "Split & extract lives in Tools. If you cannot find an action later, the command palette searches every available tool.",
-    icon: Scissors,
-    color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-] as const;
+type TargetRect = {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+  width: number;
+  height: number;
+};
+
+const CARD_WIDTH = 304;
+const CARD_GAP = 14;
+const EDGE_GAP = 12;
 
 function hasFinishedTour(): boolean {
   try {
@@ -81,6 +44,18 @@ function rememberTour(): void {
   }
 }
 
+function readRect(element: Element): TargetRect {
+  const rect = element.getBoundingClientRect();
+  return {
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    left: rect.left,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
 export function OnboardingTour({
   hasDocument,
   onOpenDocument,
@@ -90,6 +65,59 @@ export function OnboardingTour({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
+  const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
+  const [layoutTick, setLayoutTick] = useState(0);
+
+  const steps = useMemo(
+    () => [
+      {
+        title: hasDocument ? "Your PDF is ready" : "Open your first PDF",
+        description: hasDocument
+          ? "The document name and save controls live here while you work."
+          : "Start by opening a PDF. You can also drag a file anywhere onto this screen.",
+        selector: hasDocument ? "[data-tour='document-header']" : "[data-tour='open-pdf']",
+        icon: hasDocument ? Check : FileUp,
+        actionLabel: hasDocument ? undefined : "Open PDF",
+        action: hasDocument ? undefined : onOpenDocument,
+      },
+      {
+        title: "Add a comment",
+        description: hasDocument
+          ? "Open Markup and choose Comment, then click anywhere on the page to leave a note."
+          : "Open a PDF first and PickPDF will show you exactly where the Comment tool lives.",
+        selector: hasDocument ? "[data-tour='comment-tools']" : "[data-tour='open-pdf']",
+        icon: MessageSquare,
+        actionLabel: hasDocument ? "Choose Comment" : "Open PDF first",
+        action: hasDocument ? onChooseComment : onOpenDocument,
+        requiresDocument: true,
+      },
+      {
+        title: "Split or extract pages",
+        description:
+          "Document actions such as Split & extract are grouped under Tools, so the main workspace stays uncluttered.",
+        selector: "[data-tour='tools-menu']",
+        icon: Scissors,
+        actionLabel: "Open Split & extract",
+        action: onOpenSplit,
+      },
+      {
+        title: "Find every tool fast",
+        description:
+          "Use the command palette whenever you know what you want to do but not where the control is.",
+        selector: "[data-tour='command-palette']",
+        icon: Command,
+        actionLabel: "Open command palette",
+        action: onOpenCommandPalette,
+      },
+    ],
+    [hasDocument, onChooseComment, onOpenCommandPalette, onOpenDocument, onOpenSplit],
+  );
+
+  const finish = useCallback(() => {
+    rememberTour();
+    setOpen(false);
+    setTargetRect(null);
+  }, []);
 
   useEffect(() => {
     if (!hasFinishedTour()) setOpen(true);
@@ -102,181 +130,191 @@ export function OnboardingTour({
     return () => window.removeEventListener(ONBOARDING_TOUR_EVENT, restart);
   }, []);
 
-  const finish = useCallback(() => {
-    rememberTour();
-    setOpen(false);
-  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") finish();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [finish, open]);
 
-  const handleOpenChange = (next: boolean) => {
-    if (next) setOpen(true);
-    else finish();
+  useEffect(() => {
+    if (!open || step !== steps.length - 1) return;
+    const finishWhenOpened = () => finish();
+    window.addEventListener("pdfwb:open-command-palette", finishWhenOpened);
+    return () =>
+      window.removeEventListener("pdfwb:open-command-palette", finishWhenOpened);
+  }, [finish, open, step, steps.length]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    let target: Element | null = null;
+    let frame = 0;
+    let observer: ResizeObserver | undefined;
+
+    const update = () => {
+      target = document.querySelector(steps[step].selector);
+      setTargetRect(target ? readRect(target) : null);
+    };
+
+    frame = requestAnimationFrame(() => {
+      update();
+      if (target) {
+        (target as HTMLElement).scrollIntoView?.({ block: "nearest", inline: "center" });
+        if (typeof ResizeObserver !== "undefined") {
+          observer = new ResizeObserver(update);
+          observer.observe(target);
+        }
+      }
+    });
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [hasDocument, layoutTick, open, step]);
+
+  if (!open || typeof document === "undefined") return null;
+
+  const current = steps[step];
+  const Icon = current.icon;
+  const lastStep = step === steps.length - 1;
+  const paddedTarget = targetRect
+    ? {
+        top: Math.max(6, targetRect.top - 6),
+        left: Math.max(6, targetRect.left - 6),
+        width: targetRect.width + 12,
+        height: targetRect.height + 12,
+      }
+    : null;
+
+  const card = (() => {
+    if (!targetRect) {
+      return {
+        top: Math.max(70, window.innerHeight / 2 - 130),
+        left: Math.max(EDGE_GAP, (window.innerWidth - CARD_WIDTH) / 2),
+        side: "center" as const,
+        arrowLeft: 0,
+      };
+    }
+
+    const roomBelow = window.innerHeight - targetRect.bottom;
+    const side = roomBelow >= 245 || targetRect.top < 245 ? "below" : "above";
+    const left = Math.min(
+      window.innerWidth - CARD_WIDTH - EDGE_GAP,
+      Math.max(EDGE_GAP, targetRect.left + targetRect.width / 2 - CARD_WIDTH / 2),
+    );
+    const top = side === "below" ? targetRect.bottom + CARD_GAP : targetRect.top - CARD_GAP;
+    const arrowLeft = Math.min(CARD_WIDTH - 24, Math.max(24, targetRect.left + targetRect.width / 2 - left));
+    return { top, left, side, arrowLeft };
+  })();
+
+  const runAction = () => {
+    current.action?.();
+    setLayoutTick((value) => value + 1);
+    if (lastStep) finish();
   };
 
-  const current = STEPS[step];
-  const Icon = current.icon;
-  const isLast = step === STEPS.length - 1;
+  return createPortal(
+    <div aria-label="Getting started with PickPDF">
+      {paddedTarget ? (
+        <div
+          className="pointer-events-none fixed z-[45] rounded-lg border-2 border-primary ring-2 ring-background transition-all duration-200"
+          style={{
+            top: paddedTarget.top,
+            left: paddedTarget.left,
+            width: paddedTarget.width,
+            height: paddedTarget.height,
+            boxShadow: "0 0 0 9999px rgb(9 9 11 / 72%)",
+          }}
+          aria-hidden="true"
+        />
+      ) : (
+        <div className="pointer-events-none fixed inset-0 z-[45] bg-zinc-950/70" aria-hidden="true" />
+      )}
 
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        aria-label="Getting started with PickPDF"
-        className="max-w-2xl overflow-hidden p-0"
-        showCloseButton={false}
+      <button
+        type="button"
+        aria-label="Close tour"
+        onClick={finish}
+        className="fixed right-4 top-4 z-[60] flex h-9 w-9 items-center justify-center rounded-full bg-background/95 text-foreground shadow-lg transition-colors hover:bg-accent"
       >
-        <div className="grid min-h-[390px] sm:grid-cols-[180px_1fr]">
-          <aside className="relative overflow-hidden border-b bg-muted/45 p-5 sm:border-b-0 sm:border-r">
-            <div className="absolute -left-16 -top-16 h-40 w-40 rounded-full bg-primary/10 blur-2xl" />
-            <div className="relative flex h-full flex-row items-center justify-between gap-4 sm:flex-col sm:items-stretch">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
-                  Quick tour
-                </p>
-                <p className="mt-2 hidden text-sm leading-relaxed text-muted-foreground sm:block">
-                  Learn just enough to make your first edit.
-                </p>
-              </div>
-              <ol className="flex gap-2 sm:flex-col" aria-label="Tour progress">
-                {STEPS.map((item, index) => (
-                  <li key={item.title} className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "flex h-7 w-7 items-center justify-center rounded-full border text-xs font-semibold transition-colors",
-                        index < step && "border-primary bg-primary text-primary-foreground",
-                        index === step && "border-primary bg-background text-primary ring-2 ring-primary/15",
-                        index > step && "border-border bg-background/70 text-muted-foreground",
-                      )}
-                      aria-current={index === step ? "step" : undefined}
-                    >
-                      {index < step ? <Check className="h-3.5 w-3.5" /> : index + 1}
-                    </span>
-                    <span
-                      className={cn(
-                        "hidden text-xs sm:inline",
-                        index === step ? "font-medium text-foreground" : "text-muted-foreground",
-                      )}
-                    >
-                      {index === 0 ? "Welcome" : item.title.split(" ")[0]}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </aside>
+        <X className="h-5 w-5" />
+      </button>
 
-          <section className="flex min-w-0 flex-col p-6 sm:p-8">
-            <DialogHeader>
-              <div className={cn("mb-4 flex h-12 w-12 items-center justify-center rounded-2xl", current.color)}>
-                <Icon className="h-6 w-6" />
-              </div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">
-                {current.eyebrow}
-              </p>
-              <DialogTitle className="pt-1 text-2xl leading-tight">{current.title}</DialogTitle>
-              <DialogDescription className="max-w-md pt-2 text-sm leading-relaxed">
-                {current.description}
-              </DialogDescription>
-            </DialogHeader>
+      <section
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="onboarding-tour-title"
+        className="fixed z-[60] w-[min(304px,calc(100vw-24px))] rounded-lg border bg-popover p-4 text-popover-foreground shadow-2xl"
+        style={{
+          left: card.left,
+          ...(card.side === "above" ? { bottom: window.innerHeight - card.top } : { top: card.top }),
+        }}
+      >
+        {card.side !== "center" && (
+          <span
+            className={cn(
+              "absolute h-3 w-3 rotate-45 border bg-popover",
+              card.side === "below" ? "-top-1.5 border-b-0 border-r-0" : "-bottom-1.5 border-l-0 border-t-0",
+            )}
+            style={{ left: card.arrowLeft - 6 }}
+            aria-hidden="true"
+          />
+        )}
 
-            <div className="mt-6 min-h-16">
-              {step === 0 && (
-                <div className="grid grid-cols-3 gap-2" aria-label="Tour topics">
-                  {[
-                    [FileUp, "Open"],
-                    [MessageSquare, "Comment"],
-                    [Scissors, "Split"],
-                  ].map(([TopicIcon, label]) => {
-                    const Topic = TopicIcon as typeof FileUp;
-                    return (
-                      <div key={label as string} className="rounded-lg border bg-muted/25 px-2 py-3 text-center">
-                        <Topic className="mx-auto h-4 w-4 text-muted-foreground" />
-                        <p className="mt-1.5 text-xs font-medium">{label as string}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+        <div className="relative">
+          <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Icon className="h-4.5 w-4.5" />
+          </div>
+          <h2 id="onboarding-tour-title" className="text-base font-semibold leading-snug">
+            {current.title}
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+            {current.description}
+          </p>
 
-              {step === 1 && (
-                hasDocument ? (
-                  <div className="inline-flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-sm font-medium">
-                    <Check className="h-4 w-4 text-emerald-600" />
-                    PDF ready
-                  </div>
-                ) : (
-                  <Button variant="outline" onClick={onOpenDocument}>
-                    <FileUp className="h-4 w-4" />
-                    Open a PDF
-                  </Button>
-                )
-              )}
+          {current.actionLabel && (
+            <button
+              type="button"
+              onClick={runAction}
+              className="mt-3 text-xs font-semibold text-primary hover:underline"
+            >
+              {current.actionLabel}
+            </button>
+          )}
 
-              {step === 2 && (
-                <div>
-                  <Button
-                    variant="outline"
-                    onClick={hasDocument ? onChooseComment : onOpenDocument}
-                  >
-                    {hasDocument ? <MessageSquare className="h-4 w-4" /> : <FileUp className="h-4 w-4" />}
-                    {hasDocument ? "Choose the Comment tool" : "Open a PDF first"}
-                  </Button>
-                  {hasDocument && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      We’ll arm the tool for you. After the tour, click the page to place your note.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {step === 3 && (
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={onOpenSplit}>
-                    <Scissors className="h-4 w-4" />
-                    Show Split &amp; extract
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      finish();
-                      onOpenCommandPalette();
-                    }}
-                  >
-                    <Command className="h-4 w-4" />
-                    Search all tools
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-auto flex items-center justify-between border-t pt-5">
-              <button
-                type="button"
-                className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                onClick={finish}
-              >
-                Skip tour
-              </button>
-              <div className="flex items-center gap-2">
-                {step > 0 && (
-                  <Button variant="ghost" size="sm" onClick={() => setStep((value) => value - 1)}>
-                    <ChevronLeft className="h-4 w-4" />
-                    Back
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    if (isLast) finish();
-                    else setStep((value) => value + 1);
-                  }}
-                >
-                  {isLast ? "Finish" : "Next"}
-                  {!isLast && <ChevronRight className="h-4 w-4" />}
+          <div className="mt-4 flex items-center justify-between border-t pt-3">
+            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+              {step + 1}/{steps.length}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {step > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => setStep((value) => value - 1)}>
+                  <ChevronLeft className="h-4 w-4" />
+                  Back
                 </Button>
-              </div>
+              )}
+              <Button
+                size="sm"
+                disabled={Boolean(current.requiresDocument && !hasDocument)}
+                onClick={() => {
+                  if (lastStep) finish();
+                  else setStep((value) => value + 1);
+                }}
+              >
+                {lastStep ? "Finish" : "Next"}
+                {!lastStep && <ChevronRight className="h-4 w-4" />}
+              </Button>
             </div>
-          </section>
+          </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </section>
+    </div>,
+    document.body,
   );
 }

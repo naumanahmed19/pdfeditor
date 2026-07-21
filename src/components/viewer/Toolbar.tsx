@@ -395,6 +395,7 @@ function ToolFlyoutButton({
         shortcut={active ? displayTool.shortcut : undefined}
       >
         <MenuTrigger
+          data-tour={group.id === "markup" ? "comment-tools" : undefined}
           aria-label={group.label}
           aria-pressed={active}
           className={cn(

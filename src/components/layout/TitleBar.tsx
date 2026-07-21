@@ -514,7 +514,11 @@ function TitleBarImpl() {
             <MenuContent className="min-w-52">{fileItems}</MenuContent>
           </Menu>
           <Menu>
-            <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="Tools menu">
+            <MenuTrigger
+              data-tour="tools-menu"
+              className={cn(triggerCls, "gap-1.5")}
+              aria-label="Tools menu"
+            >
               <Wrench className="h-4 w-4 sm:hidden" />
               <span className="hidden sm:inline">Tools</span>
             </MenuTrigger>
@@ -818,6 +822,7 @@ function TitleBarImpl() {
       </Tip>
       <Tip label="Getting started">
         <Button
+          data-tour="command-palette"
           variant="ghost"
           size="icon"
           className="h-7 w-7"
