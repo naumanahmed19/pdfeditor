@@ -3,6 +3,7 @@ import { Check, ChevronLeft, ChevronRight, Command, FileUp, MessageSquare, Sciss
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
+import { isTauriMacOS } from "../../lib/tauri";
 
 export const ONBOARDING_TOUR_EVENT = "pickpdf:start-onboarding-tour";
 export const ONBOARDING_TOUR_STORAGE_KEY = "pickpdf.onboarding-tour.v2.complete";
@@ -13,6 +14,7 @@ type Props = {
   onChooseComment: () => void;
   onOpenSplit: () => void;
   onOpenCommandPalette: () => void;
+  nativeMacMenu?: boolean;
 };
 
 type TargetRect = {
@@ -62,14 +64,15 @@ export function OnboardingTour({
   onChooseComment,
   onOpenSplit,
   onOpenCommandPalette,
+  nativeMacMenu = isTauriMacOS,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const [layoutTick, setLayoutTick] = useState(0);
 
-  const steps = useMemo(
-    () => [
+  const steps = useMemo(() => {
+    const commonSteps = [
       {
         title: hasDocument ? "Your PDF is ready" : "Open your first PDF",
         description: hasDocument
@@ -91,6 +94,25 @@ export function OnboardingTour({
         action: hasDocument ? onChooseComment : onOpenDocument,
         requiresDocument: true,
       },
+    ];
+
+    if (nativeMacMenu) {
+      return [
+        ...commonSteps,
+        {
+          title: "Split or find any tool",
+          description:
+            "On Mac, choose Tools → Split & Extract in the system menu bar. Or open the command palette here and type “split”.",
+          selector: "[data-tour='command-palette']",
+          icon: Scissors,
+          actionLabel: "Open command palette",
+          action: onOpenCommandPalette,
+        },
+      ];
+    }
+
+    return [
+      ...commonSteps,
       {
         title: "Split or extract pages",
         description:
@@ -109,9 +131,15 @@ export function OnboardingTour({
         actionLabel: "Open command palette",
         action: onOpenCommandPalette,
       },
-    ],
-    [hasDocument, onChooseComment, onOpenCommandPalette, onOpenDocument, onOpenSplit],
-  );
+    ];
+  }, [
+    hasDocument,
+    nativeMacMenu,
+    onChooseComment,
+    onOpenCommandPalette,
+    onOpenDocument,
+    onOpenSplit,
+  ]);
 
   const finish = useCallback(() => {
     rememberTour();

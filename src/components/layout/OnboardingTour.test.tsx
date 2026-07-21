@@ -78,4 +78,22 @@ describe("OnboardingTour", () => {
     expect(callbacks.onOpenCommandPalette).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.queryByText("Find every tool fast")).toBeNull());
   });
+
+  it("uses the visible command palette instead of the native Tools menu on Mac", async () => {
+    render(<OnboardingTour hasDocument nativeMacMenu {...callbacks} />);
+
+    expect(await screen.findByText("Your PDF is ready")).toBeTruthy();
+    expect(screen.getByText("1/3")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(screen.getByText("Split or find any tool")).toBeTruthy();
+    expect(screen.getByText("3/3")).toBeTruthy();
+    expect(screen.getByText(/Tools → Split & Extract/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }));
+
+    expect(callbacks.onOpenCommandPalette).toHaveBeenCalledOnce();
+    expect(callbacks.onOpenSplit).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText("Split or find any tool")).toBeNull());
+  });
 });
