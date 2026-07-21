@@ -1,0 +1,57 @@
+name: Validate release commit format
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  conventional-commits:
+    name: Require Conventional Commits
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Validate pull request and commit titles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          conventional='^[a-z][a-z0-9-]*(\([^)]+\))?!?: .+'
+          failed=0
+
+          if [[ ! "$PR_TITLE" =~ $conventional ]]; then
+            echo "::error::Pull request title is not a Conventional Commit: $PR_TITLE"
+            failed=1
+          fi
+
+          while IFS= read -r subject; do
+            # A branch may contain a merge from main; Release Please ignores
+            # merge commits and evaluates the commits contained within it.
+            if [[ "$subject" == Merge\ * ]]; then
+              continue
+            fi
+            if [[ ! "$subject" =~ $conventional ]]; then
+              echo "::error::Commit title is not a Conventional Commit: $subject"
+              failed=1
+            fi
+          done < <(
+            gh api --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100" \
+              --jq '.[].commit.message | split("\n")[0]'
+          )
+
+          if (( failed )); then
+            echo "Use titles such as 'fix: correct PDF loading' or 'feat(editor): add crop tool'."
+            exit 1
+          fi
