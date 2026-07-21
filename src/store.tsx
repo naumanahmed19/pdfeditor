@@ -62,6 +62,7 @@ import {
   type EncryptRecipe,
 } from "./lib/reprotect";
 import { isHandheldDevice } from "./lib/device";
+import { isTauriMobile } from "./lib/tauri";
 import { downloadBytes, uid } from "./lib/utils";
 import {
   getStoredDoc,
@@ -3527,50 +3528,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await writable.close();
         toast.success(`Saved to ${current.name}${locked}`);
       } else {
-        // No handle yet — prefer acquiring one via the save-file picker so the
-        // write can be AWAITED before the doc is marked saved (and so future
-        // saves write straight to the file).
-        const picker = (
-          window as unknown as {
-            showSaveFilePicker?: (opts: unknown) => Promise<FileSystemFileHandle>;
-          }
-        ).showSaveFilePicker;
-        let newHandle: FileSystemFileHandle | null = null;
-        if (picker) {
-          try {
-            newHandle = await picker.call(window, {
-              suggestedName: current.name,
-              types: [
-                {
-                  description: "PDF document",
-                  accept: { "application/pdf": [".pdf"] },
-                },
-              ],
-            });
-          } catch (err) {
-            // The user cancelled the picker: abort the save entirely — the doc
-            // stays dirty and nothing is downloaded behind their back.
-            if ((err as DOMException)?.name === "AbortError") return;
-            // Any other picker failure: fall back to the anchor download.
-          }
-        }
-        if (newHandle) {
-          const writable = await newHandle.createWritable();
-          await writable.write(out as unknown as BufferSource);
-          await writable.close();
-          docHandles.current.set(active.id, newHandle);
-          toast.success(`Saved to ${newHandle.name || current.name}${locked}`);
+        if (isTauriMobile) {
+          const { saveMobileFile } = await import("./lib/mobileFile");
+          const path = await saveMobileFile(out, current.name);
+          if (!path) return;
+          toast.success(`Saved ${current.name}${locked}`);
         } else {
-          // Anchor-download fallback (no File System Access API): the browser
-          // gives NO completion signal for an <a download> click, so there is
-          // no successful write result. The downloaded copy is useful, but
-          // the open document must remain dirty.
-          downloadBytes(out, `${current.name.replace(/\.pdf$/i, "")}-edited.pdf`);
-          toast.info(`PDF copy downloaded${locked}`, {
-            description:
-              "The browser cannot confirm that the file was written, so this document remains unsaved.",
-          });
-          return;
+          // No handle yet — prefer acquiring one via the save-file picker so the
+          // write can be AWAITED before the doc is marked saved (and so future
+          // saves write straight to the file).
+          const picker = (
+            window as unknown as {
+              showSaveFilePicker?: (opts: unknown) => Promise<FileSystemFileHandle>;
+            }
+          ).showSaveFilePicker;
+          let newHandle: FileSystemFileHandle | null = null;
+          if (picker) {
+            try {
+              newHandle = await picker.call(window, {
+                suggestedName: current.name,
+                types: [
+                  {
+                    description: "PDF document",
+                    accept: { "application/pdf": [".pdf"] },
+                  },
+                ],
+              });
+            } catch (err) {
+              // The user cancelled the picker: abort the save entirely — the doc
+              // stays dirty and nothing is downloaded behind their back.
+              if ((err as DOMException)?.name === "AbortError") return;
+              // Any other picker failure: fall back to the anchor download.
+            }
+          }
+          if (newHandle) {
+            const writable = await newHandle.createWritable();
+            await writable.write(out as unknown as BufferSource);
+            await writable.close();
+            docHandles.current.set(active.id, newHandle);
+            toast.success(`Saved to ${newHandle.name || current.name}${locked}`);
+          } else {
+            // Anchor-download fallback (no File System Access API): the browser
+            // gives NO completion signal for an <a download> click, so there is
+            // no successful write result. The downloaded copy is useful, but
+            // the open document must remain dirty.
+            downloadBytes(out, `${current.name.replace(/\.pdf$/i, "")}-edited.pdf`);
+            toast.info(`PDF copy downloaded${locked}`, {
+              description:
+                "The browser cannot confirm that the file was written, so this document remains unsaved.",
+            });
+            return;
+          }
         }
       }
       // Commit in-app state to the saved bytes.

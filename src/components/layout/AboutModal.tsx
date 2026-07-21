@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import packageInfo from "../../../package.json";
-import { isTauri } from "../../lib/tauri";
+import { isTauri, isTauriMobile } from "../../lib/tauri";
 import { isAppUpdaterEnabled, requestAppUpdateCheck } from "../../lib/updater";
 import { Button } from "../ui/button";
 import { BrandLogo } from "./BrandLogo";
@@ -55,7 +55,7 @@ export function AboutModal({ open, onClose }: Props) {
 
         <p className="text-xs text-muted-foreground">
           Version {version}
-          {isTauri ? " - Desktop" : " - Web"}
+          {isTauriMobile ? " - Mobile" : isTauri ? " - Desktop" : " - Web"}
         </p>
 
         {isAppUpdaterEnabled() && (

@@ -6,11 +6,9 @@
 // Desktop (Tauri) only: the browser preview has no filesystem access, so
 // every call resolves to null there and callers fall through.
 
-const cache = new Map<string, Promise<Uint8Array | null>>();
+import { isTauriDesktop } from "./tauri";
 
-function inTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+const cache = new Map<string, Promise<Uint8Array | null>>();
 
 /**
  * Full program of the installed font matching a PDF base font name (subset
@@ -20,7 +18,7 @@ function inTauri(): boolean {
  */
 export function findSystemFont(baseFontName: string): Promise<Uint8Array | null> {
   const name = baseFontName.replace(/^[A-Z]{6}\+/, "").trim();
-  if (!name || !inTauri()) return Promise.resolve(null);
+  if (!name || !isTauriDesktop) return Promise.resolve(null);
   let hit = cache.get(name);
   if (!hit) {
     hit = lookup(name);

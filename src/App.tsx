@@ -56,6 +56,7 @@ import { DocToPdfScreen, ImagesToPdfScreen } from "./components/tools/CreatePdfS
 import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 import { ChromeExtensionBridge } from "./components/ChromeExtensionBridge";
+import { AndroidFileOpenBridge } from "./components/AndroidFileOpenBridge";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
@@ -572,6 +573,7 @@ function Shell() {
       <DropZone />
       <UpdateNotifier />
       <ChromeExtensionBridge />
+      <AndroidFileOpenBridge />
       <Toaster />
     </div>
   );

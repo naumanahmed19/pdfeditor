@@ -1,5 +1,5 @@
 import type { PdfaFinding, PdfaReport } from "./pdfa";
-import { isTauri } from "./tauri";
+import { isTauriDesktop } from "./tauri";
 
 interface NativeVeraPdfOutput {
   executable: string;
@@ -19,7 +19,7 @@ export async function validatePdfAWithVeraPdf(
   bytes: Uint8Array,
   flavour = "2b",
 ): Promise<PdfaReport> {
-  if (!isTauri) {
+  if (!isTauriDesktop) {
     throw new VeraPdfUnavailableError("veraPDF is only available in the desktop app.");
   }
 

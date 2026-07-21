@@ -1,10 +1,10 @@
-import { isTauri } from "./tauri";
+import { isTauriDesktop } from "./tauri";
 
 export const UPDATE_CHECK_EVENT = "pickpdf:check-for-updates";
 
 export function isAppUpdaterEnabled() {
   return (
-    isTauri &&
+    isTauriDesktop &&
     import.meta.env.PROD &&
     import.meta.env.VITE_ENABLE_UPDATER === "true" &&
     import.meta.env.VITE_DISTRIBUTION_CHANNEL !== "microsoft-store"
