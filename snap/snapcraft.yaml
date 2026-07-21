@@ -1,0 +1,32 @@
+name: pickpdf
+title: PickPDF
+version: "0.0.0"
+summary: Private, local-first PDF reader and editor
+description: |
+  PickPDF is a fast, privacy-focused PDF reader and editor. Open, annotate,
+  organize, and export PDF documents while keeping your files on your device.
+base: core24
+grade: stable
+confinement: strict
+icon: src-tauri/icons/128x128.png
+
+platforms:
+  amd64:
+
+apps:
+  pickpdf:
+    command: usr/bin/app
+    desktop: usr/share/applications/pickpdf.desktop
+    extensions: [gnome]
+    plugs:
+      - browser-support
+      - home
+      - network
+      - removable-media
+
+parts:
+  pickpdf:
+    plugin: dump
+    source: snap/local/pickpdf
+    stage-packages:
+      - libwebkit2gtk-4.1-0
