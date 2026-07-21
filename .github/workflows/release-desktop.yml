@@ -11,6 +11,11 @@ on:
         required: true
         type: boolean
         default: false
+      publish_chrome_store:
+        description: Upload only the Chrome extension to the Chrome Web Store
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -566,7 +571,7 @@ jobs:
   chrome:
     name: Build Chrome extension
     needs: [prepare, test]
-    if: github.event_name == 'push' || inputs.publish_release
+    if: github.event_name == 'push' || inputs.publish_release || inputs.publish_chrome_store
     runs-on: ubuntu-22.04
 
     steps:
@@ -612,6 +617,14 @@ jobs:
           path: release-artifacts/*
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload and publish Chrome extension
+        env:
+          CHROME_WEBSTORE_SERVICE_ACCOUNT_JSON: ${{ secrets.CHROME_WEBSTORE_SERVICE_ACCOUNT_JSON }}
+          CHROME_WEBSTORE_PUBLISHER_ID: ${{ secrets.CHROME_WEBSTORE_PUBLISHER_ID }}
+          CHROME_WEBSTORE_EXTENSION_ID: ${{ secrets.CHROME_WEBSTORE_EXTENSION_ID }}
+          CHROME_WEBSTORE_PACKAGE: release-artifacts/PickPDF-${{ needs.prepare.outputs.app_version }}-chrome.zip
+        run: bun scripts/publish-chrome-extension.mjs "$CHROME_WEBSTORE_PACKAGE"
 
   publish:
     name: Publish GitHub Release
