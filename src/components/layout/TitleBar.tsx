@@ -528,6 +528,7 @@ function TitleBarImpl() {
       )}
       <Tip label="Command palette">
         <Button
+          data-tour="command-palette"
           variant="ghost"
           size="icon"
           className="h-7 w-7"
@@ -822,7 +823,6 @@ function TitleBarImpl() {
       </Tip>
       <Tip label="Getting started">
         <Button
-          data-tour="command-palette"
           variant="ghost"
           size="icon"
           className="h-7 w-7"
