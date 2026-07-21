@@ -309,6 +309,7 @@ jobs:
   macos_app_store:
     name: Sign and upload Mac App Store package
     needs: [prepare, test]
+    if: github.event_name == 'push' || inputs.publish_release
     runs-on: macos-14
 
     steps:
