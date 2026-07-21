@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.1...v0.5.2) (2026-07-21)
+
+
+### Bug Fixes
+
+* load built-in AI in Chrome extensions ([5e08353](https://github.com/naumanahmed19/pdfeditor/commit/5e08353ead66be9db9e0df3ec1b25423973401ff))
+* recover Gemma extension patch release ([467d1a3](https://github.com/naumanahmed19/pdfeditor/commit/467d1a386e101ac4ed463147264c8f00a58f6f18))
+
 ## [0.5.1](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.0...v0.5.1) (2026-07-20)
 
 
