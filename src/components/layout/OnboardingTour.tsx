@@ -8,9 +8,13 @@ import {
   FileUp,
   MessageSquare,
   Play,
+  ScanText,
   Scissors,
   Search,
+  Signature,
   Sparkles,
+  SquareSlash,
+  TextCursorInput,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -30,7 +34,15 @@ export const ONBOARDING_TOUR_EVENT = "pickpdf:start-onboarding-tour";
 export const TUTORIAL_CENTER_EVENT = "pickpdf:open-tutorial-center";
 export const ONBOARDING_TOUR_STORAGE_KEY = "pickpdf.onboarding-tour.v2.complete";
 
-type TutorialId = "getting-started" | "find-replace" | "comments" | "split-extract";
+type TutorialId =
+  | "getting-started"
+  | "find-replace"
+  | "comments"
+  | "split-extract"
+  | "edit-text"
+  | "sign"
+  | "redact"
+  | "ocr";
 
 type Props = {
   hasDocument: boolean;
@@ -40,6 +52,10 @@ type Props = {
   onFocusSearch: () => void;
   onOpenReplace: () => void;
   onOpenSplit: () => void;
+  onChooseEditText: () => void;
+  onOpenSignature: () => void;
+  onChooseRedact: () => void;
+  onRunOcr: () => void;
   onOpenCommandPalette: () => void;
   nativeMacMenu?: boolean;
 };
@@ -80,6 +96,10 @@ const TUTORIAL_IDS: TutorialId[] = [
   "find-replace",
   "comments",
   "split-extract",
+  "edit-text",
+  "sign",
+  "redact",
+  "ocr",
 ];
 
 function tutorialStorageKey(id: TutorialId): string {
@@ -133,6 +153,10 @@ export function OnboardingTour({
   onFocusSearch,
   onOpenReplace,
   onOpenSplit,
+  onChooseEditText,
+  onOpenSignature,
+  onChooseRedact,
+  onRunOcr,
   onOpenCommandPalette,
   nativeMacMenu = isTauriMacOS,
 }: Props) {
@@ -308,6 +332,85 @@ export function OnboardingTour({
               },
         ],
       },
+      {
+        id: "edit-text",
+        title: "Edit existing text",
+        summary: "Retype PDF text and change its font, size, or color.",
+        icon: TextCursorInput,
+        steps: [
+          documentStep,
+          {
+            title: "Choose Edit text",
+            description:
+              "Open Text and choose Edit text, then click a line in the PDF to retype or restyle it.",
+            selector: hasDocument ? "[data-tour='text-tools']" : "[data-tour='open-pdf']",
+            icon: TextCursorInput,
+            actionLabel: hasDocument ? "Choose Edit text" : "Open PDF first",
+            action: hasDocument ? onChooseEditText : onOpenDocument,
+            requiresDocument: true,
+          },
+        ],
+      },
+      {
+        id: "sign",
+        title: "Sign a PDF",
+        summary: "Draw, type, upload, and reuse your signature.",
+        icon: Signature,
+        steps: [
+          documentStep,
+          {
+            title: "Create or reuse a signature",
+            description:
+              "Choose Sign to draw, type, or upload a signature. After choosing one, click the page to place it.",
+            selector: hasDocument ? "[data-tour='sign-document']" : "[data-tour='open-pdf']",
+            icon: Signature,
+            actionLabel: hasDocument ? "Open signature picker" : "Open PDF first",
+            action: hasDocument ? onOpenSignature : onOpenDocument,
+            requiresDocument: true,
+          },
+        ],
+      },
+      {
+        id: "redact",
+        title: "Redact sensitive information",
+        summary: "Permanently remove text and images from selected areas.",
+        icon: SquareSlash,
+        steps: [
+          documentStep,
+          {
+            title: "Choose Redact carefully",
+            description:
+              "Open Cleanup and choose Redact. Draw boxes over sensitive content, review them, then use Apply redactions.",
+            selector: hasDocument ? "[data-tour='cleanup-tools']" : "[data-tour='open-pdf']",
+            icon: SquareSlash,
+            actionLabel: hasDocument ? "Choose Redact" : "Open PDF first",
+            action: hasDocument ? onChooseRedact : onOpenDocument,
+            requiresDocument: true,
+          },
+        ],
+      },
+      {
+        id: "ocr",
+        title: "Make scans searchable",
+        summary: "Run OCR so scanned text can be searched, copied, and read by AI.",
+        icon: ScanText,
+        steps: [
+          documentStep,
+          {
+            title: "Run OCR on a scanned PDF",
+            description: nativeMacMenu
+              ? "On Mac, choose Tools → Make Searchable (OCR) in the system menu bar, or start it here."
+              : "Make Searchable (OCR) lives under Tools. Choose a language, then PickPDF adds a searchable text layer.",
+            selector: nativeMacMenu
+              ? "[data-tour='command-palette']"
+              : "[data-tour='tools-menu']",
+            icon: ScanText,
+            actionLabel: hasDocument ? "Start OCR" : "Open PDF first",
+            action: hasDocument ? onRunOcr : onOpenDocument,
+            requiresDocument: true,
+          },
+        ],
+      },
     ];
   }, [
     hasDocument,
@@ -319,6 +422,10 @@ export function OnboardingTour({
     onOpenDocument,
     onOpenReplace,
     onOpenSplit,
+    onOpenSignature,
+    onRunOcr,
+    onChooseEditText,
+    onChooseRedact,
   ]);
 
   const tutorial = tutorials.find((item) => item.id === topicId) ?? tutorials[0];
@@ -414,7 +521,10 @@ export function OnboardingTour({
   if (libraryOpen) {
     return (
       <Dialog open onOpenChange={(next) => setLibraryOpen(next)}>
-        <DialogContent aria-label="PickPDF tutorials" className="max-w-xl">
+        <DialogContent
+          aria-label="PickPDF tutorials"
+          className="max-h-[80vh] max-w-xl overflow-y-auto"
+        >
           <DialogHeader>
             <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <BookOpen className="h-5 w-5" />

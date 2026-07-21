@@ -15,6 +15,10 @@ const callbacks = {
   onFocusSearch: vi.fn(),
   onOpenReplace: vi.fn(),
   onOpenSplit: vi.fn(),
+  onChooseEditText: vi.fn(),
+  onOpenSignature: vi.fn(),
+  onChooseRedact: vi.fn(),
+  onRunOcr: vi.fn(),
   onOpenCommandPalette: vi.fn(),
 };
 
@@ -31,6 +35,9 @@ beforeEach(() => {
     <div data-tour="comments-list">Comments list</div>
     <div data-tour="document-search">Search</div>
     <button data-tour="replace-toggle">Replace</button>
+    <button data-tour="text-tools">Text tools</button>
+    <button data-tour="sign-document">Sign</button>
+    <button data-tour="cleanup-tools">Cleanup</button>
     <button data-tour="tools-menu">Tools</button>
     <button data-tour="command-palette">Commands</button>
   `;
@@ -112,6 +119,12 @@ describe("OnboardingTour", () => {
     expect(await screen.findByText("Learn PickPDF")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start Find & replace tutorial" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start Comments tutorial" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start Edit existing text tutorial" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start Sign a PDF tutorial" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Start Redact sensitive information tutorial" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start Make scans searchable tutorial" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Find & replace tutorial" }));
     expect(screen.getByText("Your PDF is ready")).toBeTruthy();
@@ -139,5 +152,26 @@ describe("OnboardingTour", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(callbacks.onOpenComments).toHaveBeenCalledOnce();
     expect(screen.getByText("Review all comments")).toBeTruthy();
+  });
+
+  it("launches the editing and document action tutorials", async () => {
+    localStorage.setItem(ONBOARDING_TOUR_STORAGE_KEY, "1");
+    render(<OnboardingTour hasDocument {...callbacks} />);
+
+    window.dispatchEvent(new CustomEvent(TUTORIAL_CENTER_EVENT));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start Edit existing text tutorial" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose Edit text" }));
+    expect(callbacks.onChooseEditText).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(new CustomEvent(TUTORIAL_CENTER_EVENT));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start Redact sensitive information tutorial" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose Redact" }));
+    expect(callbacks.onChooseRedact).toHaveBeenCalledOnce();
   });
 });

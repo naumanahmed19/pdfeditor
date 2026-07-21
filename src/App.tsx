@@ -604,6 +604,24 @@ function Shell() {
           window.dispatchEvent(new CustomEvent("pdfwb:open-replace"))
         }
         onOpenSplit={() => app.setScreen("split")}
+        onChooseEditText={() => {
+          app.setScreen("viewer");
+          app.setEditMode(true);
+          app.setTool("edittext");
+        }}
+        onOpenSignature={() => {
+          app.setScreen("viewer");
+          app.setSignatureModalOpen(true);
+        }}
+        onChooseRedact={() => {
+          app.setScreen("viewer");
+          app.setEditMode(true);
+          app.setTool("redact");
+        }}
+        onRunOcr={() => {
+          app.setScreen("viewer");
+          void app.runOcrText();
+        }}
         onOpenCommandPalette={() =>
           window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
         }
