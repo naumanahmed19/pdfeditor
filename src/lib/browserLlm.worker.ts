@@ -23,7 +23,18 @@ import type { BrowserModelConfig } from "./modelConfig";
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(env.backends as any).onnx.wasm.proxy = false;
+const onnxWasm = (env.backends as any).onnx.wasm;
+onnxWasm.proxy = false;
+
+// Transformers.js normally preloads ONNX Runtime's WASM factory into a blob:
+// URL. Chrome extension workers do not expose `chrome.runtime`, so the
+// library cannot detect that its blob module will be rejected by Manifest V3's
+// extension CSP. Use the ONNX factory and WASM asset bundled by Vite instead.
+// The regular web and desktop builds keep Transformers.js's normal cache path.
+if (self.location.protocol === "chrome-extension:") {
+  env.useWasmCache = false;
+  onnxWasm.wasmPaths = undefined;
+}
 
 // Persistence is handled by ./modelCache, so disable the built-in Cache Storage.
 env.useBrowserCache = false;

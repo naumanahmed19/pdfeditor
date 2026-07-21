@@ -55,6 +55,13 @@ const assets = fs.readdirSync(path.join(output, "assets"));
 if (!assets.some((name) => name.endsWith(".wasm") && name.startsWith("pdfium-"))) {
   throw new Error("Extension package is missing PDFium WASM");
 }
+if (
+  !assets.some(
+    (name) => name.startsWith("ort-wasm-simd-threaded") && name.endsWith(".wasm"),
+  )
+) {
+  throw new Error("Extension package is missing the bundled ONNX Runtime WASM");
+}
 if (!assets.some((name) => name.includes("pdfEdit.worker"))) {
   throw new Error("Extension package is missing the PDF edit worker");
 }
