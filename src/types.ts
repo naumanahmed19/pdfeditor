@@ -46,7 +46,8 @@ export interface BaseAnnotation {
   h: number;
   /** Annotations sharing a groupId are deleted together (e.g. whiteout + retyped text). */
   groupId?: string;
-  /** Locked annotations can't be selected or moved (clicks pass through). */
+  /** Locked annotations ignore canvas editing; the Objects panel can still
+   *  select them deliberately so the user can inspect or unlock them. */
   locked?: boolean;
   /** Rotation in degrees, clockwise on screen, about the box center. */
   rotation?: number;

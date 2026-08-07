@@ -23,6 +23,7 @@ import {
   LandPlot,
   Link2,
   Lock,
+  LockOpen,
   MessageSquare,
   MessageSquareQuote,
   Minus,
@@ -602,7 +603,7 @@ export function EditorToolbar() {
       : null;
 
   const patchSelectedText = (patch: Partial<TextAnnotation>) => {
-    if (selectedText && app.selected) {
+    if (selectedText && app.selected && !selectedText.locked) {
       if (activeBoxDraft) {
         activeBoxDraft.patchBox(patch);
         bumpSel();
@@ -624,7 +625,7 @@ export function EditorToolbar() {
   })();
 
   const patchSelectedFormField = (patch: Partial<FormFieldAnnotation>) => {
-    if (selectedFormField && app.selected) {
+    if (selectedFormField && app.selected && !selectedFormField.locked) {
       app.updateAnnotation(app.selected.page, {
         ...selectedFormField,
         ...patch,
@@ -660,10 +661,12 @@ export function EditorToolbar() {
   const selectedKind = selectedAnn ? KIND_CHIP[selectedAnn.kind] : undefined;
 
   // Group-aware (copies a callout's arrow + text together) — lives in the store.
-  const duplicateSelected = () => app.duplicateSelectedAnnotation();
+  const duplicateSelected = () => {
+    if (!selectedAnn?.locked) app.duplicateSelectedAnnotation();
+  };
 
   const rotateSelected = () => {
-    if (!selectedAnn || !app.selected) return;
+    if (!selectedAnn || !app.selected || selectedAnn.locked) return;
     const next = ((selectedAnn.rotation ?? 0) + 90) % 360;
     app.updateAnnotation(app.selected.page, {
       ...selectedAnn,
@@ -672,9 +675,18 @@ export function EditorToolbar() {
   };
 
   const deleteSelected = () => {
-    if (!selectedAnn || !app.selected) return;
+    if (!selectedAnn || !app.selected || selectedAnn.locked) return;
     app.removeAnnotation(app.selected.page, selectedAnn.id);
     app.setSelected(null);
+  };
+
+  const toggleSelectedLock = () => {
+    if (!selectedAnn || !app.selected) return;
+    app.setMultiSelected(null);
+    app.updateAnnotation(app.selected.page, {
+      ...selectedAnn,
+      locked: selectedAnn.locked ? undefined : true,
+    });
   };
 
   // When a box is being edited, the B/I/U/S/font/size/color controls reflect
@@ -737,7 +749,7 @@ export function EditorToolbar() {
   const styleColorLabel =
     styleAnn?.kind === "whiteout" ? "Patch" : styleHasStroke ? "Stroke" : "Color";
   const patchStyleAnn = (p: Partial<ShapeAnnotation>) => {
-    if (styleAnn && app.selected) {
+    if (styleAnn && app.selected && !styleAnn.locked) {
       app.updateAnnotation(app.selected.page, { ...styleAnn, ...p } as Annotation);
     }
   };
@@ -746,7 +758,7 @@ export function EditorToolbar() {
   // contextual row (same controls as the armed tool).
   const selectedMark = selectedAnn?.kind === "mark" ? selectedAnn : null;
   const patchSelectedMark = (p: Partial<MarkAnnotation>) => {
-    if (selectedMark && app.selected) {
+    if (selectedMark && app.selected && !selectedMark.locked) {
       app.updateAnnotation(app.selected.page, { ...selectedMark, ...p } as Annotation);
     }
   };
@@ -1067,7 +1079,12 @@ export function EditorToolbar() {
             <Separator orientation="vertical" className="mx-0.5 h-6 shrink-0" />
           </>
         )}
-        {app.tool === "edittext" ? (
+        {selectedAnn?.locked ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Lock className="h-3.5 w-3.5 text-amber-600" />
+            Locked · unlock to edit this object
+          </span>
+        ) : app.tool === "edittext" ? (
           inlineEdit ? (
             // Editing a real text run: same look as TextStyleControls (family ·
             // size | B I | color), but on NATIVE controls (see NativeSelect) so
@@ -1546,7 +1563,28 @@ export function EditorToolbar() {
       </DragScroll>
         {selectedAnn && (
           <div className="flex shrink-0 items-center gap-1">
-            {ROTATABLE_KINDS.has(selectedAnn.kind) && (
+            <Tip label={selectedAnn.locked ? "Unlock object" : "Lock object"}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "h-8 w-8",
+                  selectedAnn.locked
+                    ? "bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+                    : "text-muted-foreground",
+                )}
+                aria-label={selectedAnn.locked ? "Unlock object" : "Lock object"}
+                aria-pressed={!!selectedAnn.locked}
+                onClick={toggleSelectedLock}
+              >
+                {selectedAnn.locked ? (
+                  <Lock className="h-4 w-4" />
+                ) : (
+                  <LockOpen className="h-4 w-4" />
+                )}
+              </Button>
+            </Tip>
+            {!selectedAnn.locked && ROTATABLE_KINDS.has(selectedAnn.kind) && (
               <Tip label="Rotate 90°" desc="Or drag the round handle above the selection">
                 <Button
                   variant="ghost"
@@ -1559,7 +1597,7 @@ export function EditorToolbar() {
                 </Button>
               </Tip>
             )}
-            <Tip label="Duplicate">
+            {!selectedAnn.locked && <Tip label="Duplicate">
               <Button
                 variant="ghost"
                 size="icon"
@@ -1569,8 +1607,8 @@ export function EditorToolbar() {
               >
                 <Copy className="h-4 w-4" />
               </Button>
-            </Tip>
-            <Tip label="Delete">
+            </Tip>}
+            {!selectedAnn.locked && <Tip label="Delete">
               <Button
                 variant="ghost"
                 size="icon"
@@ -1580,7 +1618,7 @@ export function EditorToolbar() {
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
-            </Tip>
+            </Tip>}
           </div>
         )}
       </div>

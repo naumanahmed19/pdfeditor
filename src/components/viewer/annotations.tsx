@@ -1,5 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Calendar, Check, Link2, MessageSquare, PenLine, Trash2, X } from "lucide-react";
+import {
+  Calendar,
+  Check,
+  Link2,
+  Lock,
+  MessageSquare,
+  PenLine,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { cn, uid, ROTATABLE_KINDS } from "../../lib/utils";
@@ -1956,11 +1965,14 @@ function AnnotationItem({
       tabIndex={isSelected && !editing ? 0 : undefined}
       style={style}
       className={cn(
+        "group/annotation",
         // Text boxes draw their own selection chrome; in a multi-selection the
         // non-primary text members still need the membership ring.
         (ann.kind !== "text" ? isSelected || isMulti : isMulti && !isSelected) &&
           !previewing &&
-          "ring-2 ring-blue-500 ring-offset-1",
+          (ann.locked
+            ? "ring-2 ring-amber-500 ring-offset-1"
+            : "ring-2 ring-blue-500 ring-offset-1"),
         hasActiveSearchHit
           ? "annotation-search-hit-active"
           : hasSearchHit && "annotation-search-hit",
@@ -1981,7 +1993,7 @@ function AnnotationItem({
         if (erasable && e.buttons & 1) app.removeAnnotation(pageIndex, ann.id);
       }}
       onDoubleClick={(e) => {
-        if (ann.kind === "text") {
+        if (ann.kind === "text" && !ann.locked) {
           e.stopPropagation();
           textEditSnapshotRef.current = ann;
           setEditing(true);
@@ -2010,6 +2022,16 @@ function AnnotationItem({
         </div>
       )}
       {body}
+      {selectable && !editing && !previewing && (
+        <CanvasLockControl
+          visible={isSelected}
+          onLock={() => {
+            app.setMultiSelected(null);
+            app.updateAnnotation(pageIndex, { ...ann, locked: true });
+            app.setSelected({ page: pageIndex, id: ann.id });
+          }}
+        />
+      )}
       {textChrome && (
         <>
           {/* Selection frame drawn just outside the text so glyphs never
@@ -2017,7 +2039,11 @@ function AnnotationItem({
           <div
             className={cn(
               "pointer-events-none absolute -inset-1 rounded-[3px] border shadow-[0_0_0_1px_rgba(255,255,255,0.55)]",
-              textCollision ? "border-red-500" : "border-blue-500",
+              textCollision
+                ? "border-red-500"
+                : ann.locked
+                  ? "border-amber-500 border-dashed"
+                  : "border-blue-500",
             )}
           />
           {/* Grab band: an invisible ~10px zone around the frame. The whole
@@ -2082,7 +2108,7 @@ function AnnotationItem({
           <Link2 className="h-3 w-3 text-blue-600/90" />
         </div>
       )}
-      {isSelected && !previewing && ann.kind !== "note" && (
+      {isSelected && !previewing && !ann.locked && ann.kind !== "note" && (
         // Corner resize handles; the corner opposite the grabbed one anchors.
         <>
           {(["nw", "ne", "sw", "se"] as const).map((c) => (
@@ -2101,7 +2127,7 @@ function AnnotationItem({
           ))}
         </>
       )}
-      {isSelected && !previewing && ann.kind === "text" && (
+      {isSelected && !previewing && !ann.locked && ann.kind === "text" && (
         <>
           {(["n", "e", "s", "w"] as const).map((edge) => (
             <div
@@ -2124,7 +2150,7 @@ function AnnotationItem({
           ))}
         </>
       )}
-      {isSelected && ROTATABLE_KINDS.has(ann.kind) && (
+      {isSelected && !ann.locked && ROTATABLE_KINDS.has(ann.kind) && (
         <>
           {/* stem + grab-knob above the top edge; rotates with the element */}
           <div className="pointer-events-none absolute -top-5 left-1/2 h-5 w-px -translate-x-1/2 bg-blue-400/80" />
@@ -2138,7 +2164,7 @@ function AnnotationItem({
           </Tip>
         </>
       )}
-      {ann.kind === "formfield" && !previewing && (
+      {ann.kind === "formfield" && !previewing && !ann.locked && (
         <Popover
           open={isSelected}
           onOpenChange={(o: boolean) => {
@@ -2166,7 +2192,7 @@ function AnnotationItem({
           </PopoverContent>
         </Popover>
       )}
-      {ann.kind !== "formfield" && !previewing && (
+      {ann.kind !== "formfield" && !previewing && !ann.locked && (
         // Floating align/distribute bar for a multi-selection whose primary
         // member is a regular annotation (form fields use their side popover).
         // Kept open while the selection lives — dismissal is selection-driven
@@ -2289,5 +2315,40 @@ function AnnotationItem({
         </Popover>
       )}
     </div>
+  );
+}
+
+export function CanvasLockControl({
+  visible,
+  onLock,
+}: {
+  visible: boolean;
+  onLock: () => void;
+}) {
+  return (
+    <Tip label="Lock object" desc="Prevent accidental changes">
+      <button
+        type="button"
+        data-ann-controls
+        aria-label="Lock object"
+        className={cn(
+          "absolute -top-8 left-0 z-20 flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground opacity-0 shadow-md transition-[color,background-color,opacity] hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/annotation:opacity-100",
+          visible && "opacity-100",
+        )}
+        onPointerDown={(e) => {
+          // The control sits inside the draggable wrapper, so consume the
+          // press before AnnotationItem can interpret it as a move.
+          e.stopPropagation();
+          e.preventDefault();
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onLock();
+        }}
+      >
+        <Lock className="h-3.5 w-3.5" />
+      </button>
+    </Tip>
   );
 }
