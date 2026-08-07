@@ -204,9 +204,55 @@ function friendlyError(err: unknown): Error {
   return err instanceof Error ? err : new Error(raw);
 }
 
-/** The chat template accepts system/user/assistant turns directly. */
+/**
+ * Browser models apply their own chat templates. Gemma 3 is deliberately
+ * strict: after an optional leading system prompt, turns must start with user
+ * and alternate user/assistant. PDF context is represented as a user message,
+ * so it can otherwise sit immediately before the user's question and trip that
+ * validation. Stored conversations may contain the same shape after an
+ * interrupted/empty response.
+ *
+ * Coalesce adjacent equal-role turns at the model boundary. This preserves all
+ * context while producing a valid transcript for every built-in model.
+ */
+export function normalizeBrowserMessages(messages: ChatMessage[]): ChatMessage[] {
+  const system: string[] = [];
+  const turns: ChatMessage[] = [];
+
+  for (const message of messages) {
+    const content = message.content.trim();
+    if (!content) continue;
+    if (message.role === "system") {
+      system.push(content);
+      continue;
+    }
+
+    // A truncated stored-history window can begin on an assistant response.
+    // It has no preceding user turn and cannot be represented validly, so omit
+    // it; the current user question remains intact later in the sequence.
+    if (!turns.length && message.role === "assistant") continue;
+
+    const previous = turns[turns.length - 1];
+    if (previous?.role === message.role) {
+      previous.content += `\n\n${content}`;
+    } else {
+      turns.push({ role: message.role, content });
+    }
+  }
+
+  return [
+    ...(system.length
+      ? [{ role: "system" as const, content: system.join("\n\n") }]
+      : []),
+    ...turns,
+  ];
+}
+
 function toChat(messages: ChatMessage[]) {
-  return messages.map((m) => ({ role: m.role, content: m.content }));
+  return normalizeBrowserMessages(messages).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
 }
 
 function fmtBytes(b: number): string {
