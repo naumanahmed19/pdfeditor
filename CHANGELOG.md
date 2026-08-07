@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.3](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.2...v0.5.3) (2026-08-07)
+
+
+### Bug Fixes
+
+* **editor:** improve PDF text editing ([68d9fab](https://github.com/naumanahmed19/pdfeditor/commit/68d9fab81a4edf241b0dfdb82cb11f88a7aa9550))
+* **editor:** improve PDF text editing ([4facca8](https://github.com/naumanahmed19/pdfeditor/commit/4facca820ffc90c1215acfd39b59321956f6cbb4))
+
 ## [0.5.2](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.1...v0.5.2) (2026-07-21)
 
 
