@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  Boxes,
   Check,
   ChevronDown,
   ChevronRight,
@@ -18,6 +19,8 @@ import {
   FormInput,
   History,
   Layers,
+  Lock,
+  LockOpen,
   Loader2,
   MessageSquare,
   MoreVertical,
@@ -40,7 +43,7 @@ import type { OutlineInput } from "../../lib/pdftools";
 import type { AttachmentInfo } from "../../lib/pdfium";
 import type { LayerInfo } from "../../lib/ocg";
 import type { SignatureInfo } from "../../lib/signatures";
-import type { FolderNode, NoteAnnotation, OutlineNode } from "../../types";
+import type { Annotation, FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Button } from "../ui/button";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
@@ -74,6 +77,7 @@ function SidebarImpl() {
         panel !== "attachments" &&
         panel !== "signatures" &&
         panel !== "layers" &&
+        panel !== "objects" &&
         panel !== "form"
       ) {
         return;
@@ -150,6 +154,8 @@ function SidebarImpl() {
           <SignaturesPanel />
         ) : app.pdf && activeTab === "layers" ? (
           <LayersPanel />
+        ) : app.pdf && activeTab === "objects" ? (
+          <ObjectsPanel />
         ) : app.pdf && activeTab === "form" ? (
           <FormBuilderSidebar />
         ) : (
@@ -211,6 +217,174 @@ function CommentsPanel() {
             </span>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+const OBJECT_KIND_LABEL: Record<Annotation["kind"], string> = {
+  text: "Text",
+  highlight: "Highlight",
+  markup: "Text markup",
+  note: "Comment",
+  whiteout: "Whiteout",
+  redact: "Redaction",
+  rect: "Rectangle",
+  ellipse: "Ellipse",
+  line: "Line",
+  arrow: "Arrow",
+  polygon: "Polygon",
+  polyline: "Polyline",
+  measure: "Measurement",
+  ink: "Drawing",
+  image: "Image",
+  mark: "Mark",
+  link: "Link",
+  formfield: "Form field",
+};
+
+export function annotationObjectLabel(ann: Annotation): string {
+  const detail =
+    ann.kind === "text" || ann.kind === "note"
+      ? ann.text.trim()
+      : ann.kind === "formfield"
+        ? ann.fieldName
+        : ann.kind === "link"
+          ? ann.value
+          : ann.kind === "mark"
+            ? ann.symbol === "check"
+              ? "Check mark"
+              : "Cross mark"
+            : "";
+  return detail || OBJECT_KIND_LABEL[ann.kind];
+}
+
+export function collectAnnotationObjects(
+  annotations: Record<number, Annotation[]> | Record<string, Annotation[]>,
+): Array<{ page: number; ann: Annotation }> {
+  return Object.entries(annotations)
+    .flatMap(([page, list]) =>
+      list.map((ann) => ({ page: Number(page), ann })),
+    )
+    .sort(
+      (a, b) =>
+        a.page - b.page ||
+        a.ann.y - b.ann.y ||
+        a.ann.x - b.ann.x ||
+        a.ann.id.localeCompare(b.ann.id),
+    );
+}
+
+/** User-added page elements. Locked rows remain selectable here so they can
+ * be inspected or unlocked even though canvas clicks intentionally pass through. */
+function ObjectsPanel() {
+  const app = useAppSelector(
+    (s) => ({
+      annotations: s.annotations,
+      selected: s.selected,
+      currentPage: s.currentPage,
+      scrollToPage: s.scrollToPage,
+      setSelected: s.setSelected,
+      setMultiSelected: s.setMultiSelected,
+      updateAnnotation: s.updateAnnotation,
+      isMobile: s.isMobile,
+      setSidebarOpen: s.setSidebarOpen,
+    }),
+    shallowEqual,
+  );
+  const objects = collectAnnotationObjects(app.annotations);
+
+  if (!objects.length) {
+    return (
+      <div className="px-4 py-4 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">No added objects yet</p>
+        <p className="mt-1 leading-relaxed">
+          Text boxes, images, shapes, comments, and other added elements will
+          appear here. Lock an object to prevent accidental edits.
+        </p>
+      </div>
+    );
+  }
+
+  let lastPage = -1;
+  return (
+    <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div className="mb-2 flex items-center justify-between px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span>{objects.length} object{objects.length === 1 ? "" : "s"}</span>
+        <span>Lock to protect</span>
+      </div>
+      <div className="flex flex-col gap-1">
+        {objects.map(({ page, ann }) => {
+          const selected = app.selected?.page === page && app.selected.id === ann.id;
+          const showPage = page !== lastPage;
+          lastPage = page;
+          const label = annotationObjectLabel(ann);
+          const kind = OBJECT_KIND_LABEL[ann.kind];
+          return (
+            <Fragment key={ann.id}>
+              {showPage && (
+                <div className="px-1 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground first:pt-0">
+                  Page {page + 1}
+                  {page === app.currentPage ? " · Current" : ""}
+                </div>
+              )}
+              <div
+                className={cn(
+                  "group flex items-center gap-2 rounded-md border px-2 py-1.5 transition-colors",
+                  selected
+                    ? "border-primary/50 bg-primary/10"
+                    : "border-transparent hover:border-sidebar-border hover:bg-accent/60",
+                  ann.locked && "bg-muted/40",
+                )}
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  aria-label={`Select ${kind}: ${label}`}
+                  onClick={() => {
+                    app.scrollToPage(page);
+                    app.setMultiSelected(null);
+                    app.setSelected({ page, id: ann.id });
+                    if (app.isMobile) app.setSidebarOpen(false);
+                  }}
+                >
+                  <span className="block truncate text-xs font-medium">{label}</span>
+                  <span className="block truncate text-[10px] text-muted-foreground">
+                    {kind}
+                    {ann.locked ? " · Locked" : ""}
+                  </span>
+                </button>
+                <Tip label={ann.locked ? "Unlock object" : "Lock object"}>
+                  <button
+                    type="button"
+                    aria-label={`${ann.locked ? "Unlock" : "Lock"} ${label}`}
+                    aria-pressed={!!ann.locked}
+                    className={cn(
+                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
+                      ann.locked
+                        ? "bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
+                        : "text-muted-foreground opacity-70 hover:bg-background hover:text-foreground group-hover:opacity-100",
+                    )}
+                    onClick={() => {
+                      app.updateAnnotation(page, {
+                        ...ann,
+                        locked: ann.locked ? undefined : true,
+                      });
+                      app.setMultiSelected(null);
+                      app.setSelected({ page, id: ann.id });
+                    }}
+                  >
+                    {ann.locked ? (
+                      <Lock className="h-3.5 w-3.5" />
+                    ) : (
+                      <LockOpen className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </Tip>
+              </div>
+            </Fragment>
+          );
+        })}
       </div>
     </div>
   );
@@ -554,6 +728,7 @@ type SidebarTab =
   | "attachments"
   | "signatures"
   | "layers"
+  | "objects"
   | "form"
   | "recent";
 
@@ -566,6 +741,7 @@ const MORE_TABS: Array<{
   { key: "attachments", label: "Attachments", icon: Paperclip },
   { key: "signatures", label: "Signatures", icon: FileSignature },
   { key: "layers", label: "Layers", icon: Layers },
+  { key: "objects", label: "Objects", icon: Boxes },
   { key: "form", label: "Form builder", icon: FormInput },
 ];
 

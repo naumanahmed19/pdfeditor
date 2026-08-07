@@ -352,28 +352,45 @@ function ViewerImpl() {
         target.tagName === "TEXTAREA" ||
         target.isContentEditable;
       if (inField) return;
+      const selectedAnn = app.selected
+        ? (app.annotations[app.selected.page] ?? []).find(
+            (annotation) => annotation.id === app.selected!.id,
+          )
+        : null;
       // A live multi-selection routes delete/nudge to every member at once.
       const multi =
         app.multiSelected && app.multiSelected.ids.length > 1
           ? app.multiSelected
           : null;
+      const unlockedMultiIds = multi
+        ? multi.ids.filter(
+            (id) =>
+              !(app.annotations[multi.page] ?? []).find(
+                (annotation) => annotation.id === id,
+              )?.locked,
+          )
+        : [];
       if (
         (e.key === "Delete" || e.key === "Backspace") &&
         app.selected &&
-        app.editMode
+        app.editMode &&
+        selectedAnn &&
+        !selectedAnn.locked
       ) {
-        if (multi) app.removeAnnotations(multi.page, multi.ids);
+        if (multi && unlockedMultiIds.length) {
+          app.removeAnnotations(multi.page, unlockedMultiIds);
+        }
         else app.removeAnnotation(app.selected.page, app.selected.id);
       }
       if (
         app.selected &&
         app.editMode &&
+        selectedAnn &&
+        !selectedAnn.locked &&
         ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)
       ) {
         e.preventDefault();
-        const ann = (app.annotations[app.selected.page] ?? []).find(
-          (a) => a.id === app.selected!.id,
-        );
+        const ann = selectedAnn;
         // A selected text box uses Shift+Arrow for precise resizing. Plain
         // arrows still nudge it; other annotation kinds retain the familiar
         // Shift = 10pt fast-nudge behavior.
@@ -400,11 +417,11 @@ function ViewerImpl() {
                     : 0),
             ),
           });
-        } else if (multi) {
+        } else if (multi && unlockedMultiIds.length) {
           const step = e.shiftKey ? 10 : 1;
           const dx = e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0;
           const dy = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
-          app.translateAnnotations(multi.page, multi.ids, dx, dy);
+          app.translateAnnotations(multi.page, unlockedMultiIds, dx, dy);
         } else if (ann) {
           const step = e.shiftKey ? 10 : 1;
           const dx = e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0;
@@ -419,11 +436,11 @@ function ViewerImpl() {
       if (
         app.selected &&
         app.editMode &&
+        selectedAnn &&
+        !selectedAnn.locked &&
         (e.key === "Enter" || e.key === "F2")
       ) {
-        const ann = (app.annotations[app.selected.page] ?? []).find(
-          (a) => a.id === app.selected!.id,
-        );
+        const ann = selectedAnn;
         if (ann?.kind === "text") {
           e.preventDefault();
           app.setEditRequestId(ann.id);
@@ -475,7 +492,13 @@ function ViewerImpl() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && app.editMode) {
         app.pasteAnnotationClipboard();
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d" && app.selected && app.editMode) {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key.toLowerCase() === "d" &&
+        app.selected &&
+        app.editMode &&
+        !selectedAnn?.locked
+      ) {
         e.preventDefault();
         app.duplicateSelectedAnnotation();
       }

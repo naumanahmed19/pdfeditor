@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   BookOpen,
+  Boxes,
   CaseSensitive,
   Check,
   Circle,
@@ -592,7 +593,15 @@ export function CommandPalette() {
   };
 
   const openSidebarPanel = (
-    panel: "pages" | "outline" | "comments" | "attachments" | "form" | "signatures" | "layers",
+    panel:
+      | "pages"
+      | "outline"
+      | "comments"
+      | "attachments"
+      | "form"
+      | "signatures"
+      | "layers"
+      | "objects",
   ) => {
     app.setScreen("viewer");
     app.setSidebarOpen(true);
@@ -869,6 +878,16 @@ export function CommandPalette() {
         disabledReason: hasPdfReason,
         aliases: ["digital signatures", "verify", "certificate"],
         action: () => openSidebarPanel("signatures"),
+      },
+      {
+        id: "objects-panel",
+        group: "sidebar",
+        label: "Objects panel",
+        description: "Select and lock added page objects.",
+        icon: Boxes,
+        disabledReason: hasPdfReason,
+        aliases: ["elements", "lock objects", "object list"],
+        action: () => openSidebarPanel("objects"),
       },
       {
         id: "layers-panel",

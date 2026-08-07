@@ -1960,7 +1960,9 @@ function AnnotationItem({
         // non-primary text members still need the membership ring.
         (ann.kind !== "text" ? isSelected || isMulti : isMulti && !isSelected) &&
           !previewing &&
-          "ring-2 ring-blue-500 ring-offset-1",
+          (ann.locked
+            ? "ring-2 ring-amber-500 ring-offset-1"
+            : "ring-2 ring-blue-500 ring-offset-1"),
         hasActiveSearchHit
           ? "annotation-search-hit-active"
           : hasSearchHit && "annotation-search-hit",
@@ -1981,7 +1983,7 @@ function AnnotationItem({
         if (erasable && e.buttons & 1) app.removeAnnotation(pageIndex, ann.id);
       }}
       onDoubleClick={(e) => {
-        if (ann.kind === "text") {
+        if (ann.kind === "text" && !ann.locked) {
           e.stopPropagation();
           textEditSnapshotRef.current = ann;
           setEditing(true);
@@ -2017,7 +2019,11 @@ function AnnotationItem({
           <div
             className={cn(
               "pointer-events-none absolute -inset-1 rounded-[3px] border shadow-[0_0_0_1px_rgba(255,255,255,0.55)]",
-              textCollision ? "border-red-500" : "border-blue-500",
+              textCollision
+                ? "border-red-500"
+                : ann.locked
+                  ? "border-amber-500 border-dashed"
+                  : "border-blue-500",
             )}
           />
           {/* Grab band: an invisible ~10px zone around the frame. The whole
@@ -2082,7 +2088,7 @@ function AnnotationItem({
           <Link2 className="h-3 w-3 text-blue-600/90" />
         </div>
       )}
-      {isSelected && !previewing && ann.kind !== "note" && (
+      {isSelected && !previewing && !ann.locked && ann.kind !== "note" && (
         // Corner resize handles; the corner opposite the grabbed one anchors.
         <>
           {(["nw", "ne", "sw", "se"] as const).map((c) => (
@@ -2101,7 +2107,7 @@ function AnnotationItem({
           ))}
         </>
       )}
-      {isSelected && !previewing && ann.kind === "text" && (
+      {isSelected && !previewing && !ann.locked && ann.kind === "text" && (
         <>
           {(["n", "e", "s", "w"] as const).map((edge) => (
             <div
@@ -2124,7 +2130,7 @@ function AnnotationItem({
           ))}
         </>
       )}
-      {isSelected && ROTATABLE_KINDS.has(ann.kind) && (
+      {isSelected && !ann.locked && ROTATABLE_KINDS.has(ann.kind) && (
         <>
           {/* stem + grab-knob above the top edge; rotates with the element */}
           <div className="pointer-events-none absolute -top-5 left-1/2 h-5 w-px -translate-x-1/2 bg-blue-400/80" />
@@ -2138,7 +2144,7 @@ function AnnotationItem({
           </Tip>
         </>
       )}
-      {ann.kind === "formfield" && !previewing && (
+      {ann.kind === "formfield" && !previewing && !ann.locked && (
         <Popover
           open={isSelected}
           onOpenChange={(o: boolean) => {
@@ -2166,7 +2172,7 @@ function AnnotationItem({
           </PopoverContent>
         </Popover>
       )}
-      {ann.kind !== "formfield" && !previewing && (
+      {ann.kind !== "formfield" && !previewing && !ann.locked && (
         // Floating align/distribute bar for a multi-selection whose primary
         // member is a regular annotation (form fields use their side popover).
         // Kept open while the selection lives — dismissal is selection-driven
