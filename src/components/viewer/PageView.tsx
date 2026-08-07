@@ -18,13 +18,20 @@ import {
   typefaceRoot,
   faceStyleDistance,
   collectLine,
+  columnAwareTextWidth,
   mapLineEditToRuns,
   detectFontFromName,
   resolveTextFont,
   trustedStandardFont,
 } from "./textedit";
 import { collectParagraph } from "./paragraph";
-import { makeParagraphMeasure, planReflow } from "./reflow";
+import { sampleTextBackdrop } from "./textBackdrop";
+import {
+  makeParagraphMeasure,
+  planReflow,
+  reflowWouldOverlap,
+  type Measure,
+} from "./reflow";
 import { missingGlyphs, newCharacters } from "../../lib/fontcoverage";
 import { canMoveNativeContent } from "../../lib/selectionPolicy";
 import { InlineTextEditor } from "./InlineTextEditor";
@@ -58,6 +65,7 @@ export function PageView({
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const inlineEditSeq = useRef(0);
+  const inlineWrapWidths = useRef(new Map<string, number>());
   const committedPreviewSeq = useRef(0);
   const [committedPreview, setCommittedPreview] = useState<{
     id: number;
@@ -350,6 +358,8 @@ export function PageView({
           originX: o.originX,
           originY: o.originY,
           fontName: o.fontName,
+          fontSize: o.fontSize,
+          color: o.color,
         });
         joined += o.text + sep;
       }
@@ -393,38 +403,40 @@ export function PageView({
       }
     }
 
-    // Reflow eligibility: paragraph/block scope with ONE face and size across
-    // every run. Mixed-style paragraphs (a bold word, a footnote mark) keep
-    // fixed breaks — words crossing lines can't carry per-run styles yet.
+    // Line scope may grow to the page edge and uses the clicked run as its
+    // style template. Paragraph/block reflow still requires one face and size;
+    // moving words between mixed-style paragraph lines cannot preserve styles.
     let reflow: ReflowMeta | undefined;
+    const lineMeta = paraLines.map((lineRuns) => ({
+      objectIndexes: lineRuns.map((o) => o.index),
+      originX: lineRuns[0].originX,
+      originY: lineRuns[0].originY,
+    }));
+    const wrapKey = `${app.editTextScope}:${lineMeta[0].objectIndexes[0]}`;
+    const steps = lineMeta
+      .slice(1)
+      .map((l, i) => lineMeta[i].originY - l.originY)
+      .filter((d) => d > 0)
+      .sort((a, b) => a - b);
+    const leading = steps.length
+      ? steps[Math.floor(steps.length / 2)]
+      : hit.fontSize * 1.2;
     if (
-      app.editTextScope !== "line" &&
+      app.editTextScope === "line" ||
       allRuns.every(
         (o) =>
           o.fontName === hit.fontName &&
           Math.abs(o.fontSize - hit.fontSize) < 0.2,
       )
     ) {
-      const lineMeta = paraLines.map((lineRuns) => ({
-        objectIndexes: lineRuns.map((o) => o.index),
-        originX: lineRuns[0].originX,
-        originY: lineRuns[0].originY,
-      }));
-      // Leading from the baseline steps; a single-line paragraph gets the
-      // typographic default so it can still grow a second line.
-      const steps = lineMeta
-        .slice(1)
-        .map((l, i) => lineMeta[i].originY - l.originY)
-        .filter((d) => d > 0)
-        .sort((a, b) => a - b);
       reflow = {
         lines: lineMeta,
         width:
-          Math.max(...allRuns.map((o) => o.right)) -
-          Math.min(...allRuns.map((o) => o.left)),
-        leading: steps.length
-          ? steps[Math.floor(steps.length / 2)]
-          : hit.fontSize * 1.2,
+          app.editTextScope === "line"
+            ? 0
+            : Math.max(...allRuns.map((o) => o.right)) -
+              Math.min(...allRuns.map((o) => o.left)),
+        leading,
       };
     }
 
@@ -432,6 +444,50 @@ export function PageView({
     const left = Math.min(vx1, vx2);
     const top = Math.min(vy1, vy2);
     const width = Math.max(Math.abs(vx2 - vx1), 24);
+    const selectedObjectIndexes = new Set(allRuns.map((object) => object.index));
+    const collisionRects = objs
+      .filter(
+        (object) =>
+          object.text.trim() && !selectedObjectIndexes.has(object.index),
+      )
+      .map((object) => {
+        const [x1, y1, x2, y2] = viewport.convertToViewportRectangle([
+          object.left,
+          object.bottom,
+          object.right,
+          object.top,
+        ]);
+        return {
+          left: Math.min(x1, x2),
+          top: Math.min(y1, y2),
+          right: Math.max(x1, x2),
+          bottom: Math.max(y1, y2),
+        };
+      });
+    const selectedRect = {
+      left,
+      top,
+      right: left + width,
+      bottom: top + Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale),
+    };
+    const availableWidth = columnAwareTextWidth(
+      selectedRect,
+      w,
+      collisionRects,
+    );
+    const autoWrapLine = app.editTextScope === "line" && !!reflow;
+    const rememberedWidth = reflow
+      ? inlineWrapWidths.current.get(wrapKey)
+      : undefined;
+    if (reflow) {
+      if (rememberedWidth !== undefined) {
+        reflow.width = Math.min(rememberedWidth, availableWidth / scale);
+      } else if (app.editTextScope === "line") {
+        // Stay inside the current column/cell rather than treating the page's
+        // right edge as the line boundary.
+        reflow.width = availableWidth / scale;
+      }
+    }
     const hitRun = runs.find((run) => run.objectIndex === hit.index) ?? runs[0];
     const hitFraction = Math.max(
       0,
@@ -441,6 +497,20 @@ export function PageView({
       joined.length,
       hitRun.start + Math.round(hit.text.length * hitFraction),
     );
+    const backdrop = sampleTextBackdrop(
+      canvasRef.current,
+      {
+        left,
+        top,
+        width: availableWidth,
+        height: Math.min(
+          Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale) * 8,
+          Math.max(hit.fontSize * scale, h - top - 4),
+        ),
+      },
+      { width: w, height: h },
+      hex,
+    );
     const openedEdit: InlineEdit = {
       id: editId,
       runs,
@@ -449,12 +519,23 @@ export function PageView({
       top,
       width,
       height: Math.max(Math.abs(vy2 - vy1), hit.fontSize * scale),
-      maxWidth: Math.max(width, w - left - 4),
+      maxWidth: Math.max(width, availableWidth),
       maxHeight: Math.max(hit.fontSize * scale, h - top - 4),
+      preferredWidth:
+        rememberedWidth === undefined
+          ? undefined
+          : Math.min(rememberedWidth * scale, availableWidth),
+      wrapKey,
+      collisionRects,
+      autoWrapLine,
       caretOffset,
       fontPx: hit.fontSize * scale,
       color: `rgb(${r}, ${g}, ${b})`,
       colorHex: hex,
+      backdropColor: backdrop.color,
+      backdropImage: backdrop.image,
+      backdropWidth: backdrop.width,
+      backdropHeight: backdrop.height,
       fontSize: hit.fontSize,
       fontName: (hit.fontName || "").replace(/^[A-Z]{6}\+/, ""),
       fallbackFamily: f.family,
@@ -743,6 +824,7 @@ export function PageView({
     family: string,
     bold: boolean,
     italic: boolean,
+    layout?: { width: number },
   ): Promise<boolean> => {
     const edit = inlineEdit;
     if (!edit) return true;
@@ -756,15 +838,26 @@ export function PageView({
     const boldOff = !bold && edit.bold;
     const italicOn = italic && !edit.italic;
     const italicOff = !italic && edit.italic;
+    const requestedReflowWidth =
+      edit.reflow && layout
+        ? Math.max(1, layout.width / scale)
+        : edit.reflow?.width;
+    const layoutChanged =
+      !!edit.reflow &&
+      requestedReflowWidth !== undefined &&
+      Math.abs(requestedReflowWidth - edit.reflow.width) > 0.5;
+    if (layout && edit.wrapKey && requestedReflowWidth !== undefined) {
+      inlineWrapWidths.current.set(edit.wrapKey, requestedReflowWidth);
+    }
 
-    // Reflow: in paragraph/block scope over a uniform face, an edit that
-    // adds/removes line breaks or overflows its line re-wraps the paragraph
-    // to the column width. Only when text (± color) is what changed — size
-    // and face changes keep today's fixed-break per-run path.
+    // Reflow: a page-bounded line, or a paragraph/block over a uniform face,
+    // re-wraps when text overflows or adds/removes soft breaks. Size and face
+    // changes keep the fixed-break per-run path.
     let plan: string[] | null = null;
+    let wrapMeasure: Measure | null = null;
     if (
       edit.reflow &&
-      textChanged &&
+      (textChanged || layoutChanged) &&
       !sizeChanged &&
       !familyReplaced &&
       !boldOn &&
@@ -772,12 +865,18 @@ export function PageView({
       !italicOn &&
       !italicOff
     ) {
-      const measure = await makeParagraphMeasure(
+      wrapMeasure = await makeParagraphMeasure(
         edit.embeddedFont,
         FONT_CSS[edit.fallbackFamily] ?? "Helvetica, Arial, sans-serif",
         edit.fontSize,
       );
-      plan = planReflow(oldLines, committed.split("\n"), edit.reflow.width, measure);
+      plan = planReflow(
+        oldLines,
+        committed.split("\n"),
+        requestedReflowWidth ?? edit.reflow.width,
+        wrapMeasure,
+        layoutChanged,
+      );
       if (!plan && committed.split("\n").length !== oldLines.length) {
         // The wrap settled back into the document's own breaks (a Shift+Enter
         // that changed nothing) — commit as if the text were untouched.
@@ -785,15 +884,16 @@ export function PageView({
         textChanged = false;
       }
     }
-    // Structural change that can't reflow: line scope, mixed faces/sizes, or
-    // combined with a size/face change. The editor stays open.
+    // Structural change that can't reflow: mixed paragraph faces/sizes, or a
+    // line-break edit combined with a size/face change. The editor stays open.
     if (!plan && committed.split("\n").length !== oldLines.length) {
       toast.info(
-        "Line breaks here are fixed — reflow needs Paragraph or Block scope with a single font, and no size or font change in the same edit.",
+        "These line breaks can't reflow across mixed paragraph styles or while changing the font or size in the same edit.",
       );
       return false;
     }
     if (
+      !plan &&
       !textChanged &&
       !colorChanged &&
       !sizeChanged &&
@@ -842,6 +942,46 @@ export function PageView({
         if (extras.some((e) => e.originY < 0)) {
           toast.info("This edit would push the paragraph past the bottom of the page.");
           return false;
+        }
+        if (plan.length && wrapMeasure) {
+          try {
+            const selectedIndexes = new Set(
+              meta.lines.flatMap((line) => line.objectIndexes),
+            );
+            const obstacles = (await app.getPageObjects(pageIndex))
+              .filter(
+                (object) =>
+                  object.kind === "text" && !selectedIndexes.has(object.index),
+              )
+              .map((object) => ({
+                left: object.left,
+                right: object.right,
+                bottom: object.bottom,
+                top: object.top,
+              }));
+            const plannedBoxes = plan.map((text, index) =>
+              index < meta.lines.length
+                ? {
+                    text,
+                    originX: meta.lines[index].originX,
+                    originY: meta.lines[index].originY,
+                  }
+                : extras[index - meta.lines.length],
+            );
+            if (reflowWouldOverlap(plannedBoxes, edit.fontSize, wrapMeasure, obstacles)) {
+              const proceed = await app.requestConfirm({
+                title: "Wrapped text overlaps page content",
+                message:
+                  "The wrapped text would overlap existing page content. Keep the overlap, or cancel and shorten the text or resize it?",
+                confirmLabel: "Keep overlap",
+                cancelLabel: "Keep editing",
+              });
+              if (!proceed) return false;
+            }
+          } catch {
+            // Collision checking is advisory; never discard an otherwise valid
+            // edit because page-object bounds could not be inspected.
+          }
         }
         const lastKept = [...lines].reverse().find((l) => l.text !== "");
         const templateIndex = (lastKept ?? lines[0]).objectIndexes[0];

@@ -78,6 +78,7 @@ import { applyAccent, type AccentId } from "./lib/accents";
 import { editPdfsInBackground } from "./lib/pdfEditWorker";
 import { appendPdfEdit } from "./lib/pdfEditJournal";
 import type { PdfEditOperation } from "./lib/pdfEditTypes";
+import { previewTextRuns } from "./lib/textRunPreview";
 import { fileSourceKey, legacyBytesSourceKey } from "./lib/fileIdentity";
 import {
   type DocRevision,
@@ -3268,16 +3269,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Common in-place text and color changes can be previewed directly. Font
       // replacement/reflow still finishes in the worker, without blocking UI.
       if (!style.font) {
-        for (const run of runs) {
-          if (run.text != null) {
-            active.pdf.previewSetText(pageIndex, run.objectIndex, run.text);
-          }
-          if (style.fill) {
-            active.pdf.previewSetObjectStyle(pageIndex, run.objectIndex, {
-              fill: style.fill,
-            });
-          }
-        }
+        previewTextRuns(active.pdf, pageIndex, runs, style.fill);
         setContentRev((v) => v + 1);
       }
       const committed = flushPendingPdfEdits(active.id);
@@ -3285,8 +3277,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         !!style.font ||
         !!style.fontScale ||
         !!style.synthBold ||
-        !!style.synthItalic ||
-        runs.some((run) => run.text === "");
+        !!style.synthItalic;
       // Keep the natural inline preview over the page only for edits the live
       // renderer cannot represent exactly. Basic text/color edits close now.
       void committed;

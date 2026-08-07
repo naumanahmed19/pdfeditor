@@ -77,7 +77,10 @@ export function buildPageLines(objs: TextObject[]): PageLine[] {
   const lines: PageLine[] = [];
   for (const bandObjs of bands) {
     bandObjs.sort((a, b) => a.left - b.left);
-    const maxGap = 1.5 * Math.max(...bandObjs.map((o) => o.fontSize), 6);
+    // Match collectLine's conservative run spacing. A 1.5em threshold can
+    // merge narrow publication gutters before paragraph column checks ever
+    // see separate line units.
+    const maxGap = 1.25 * Math.max(...bandObjs.map((o) => o.fontSize), 6);
     let cluster: TextObject[] = [];
     for (const o of bandObjs) {
       if (cluster.length && o.left - cluster[cluster.length - 1].right > maxGap) {

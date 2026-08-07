@@ -16,6 +16,9 @@ export interface InlineEditRun {
   originY: number;
   /** Base font name of THIS run — glyph coverage is per-face, per-subset. */
   fontName: string;
+  /** Paint/style identity used when normalizing glyph-fragmented lines. */
+  fontSize: number;
+  color: [number, number, number, number];
 }
 
 /** Paragraph geometry captured at click time so a commit can reflow. */
@@ -42,6 +45,14 @@ export interface InlineEdit {
   /** Remaining page room available to a naturally growing editor. */
   maxWidth: number;
   maxHeight: number;
+  /** Previously chosen wrap width for this native text scope, in screen px. */
+  preferredWidth?: number;
+  /** Session-stable key used to remember a manually chosen wrap width. */
+  wrapKey?: string;
+  /** Other page-text rectangles, relative to the page wrapper in screen px. */
+  collisionRects?: { left: number; top: number; right: number; bottom: number }[];
+  /** Line scope grows to the page edge, then wraps and reflows on commit. */
+  autoWrapLine?: boolean;
   /** Approximate character position corresponding to the user's click. */
   caretOffset: number;
   fontPx: number;
@@ -49,6 +60,12 @@ export interface InlineEdit {
   color: string;
   /** Original ink color as hex (for the color control). */
   colorHex: string;
+  /** Dominant page color behind the original run, used to mask old glyphs while editing. */
+  backdropColor: string;
+  /** Approximate local page artwork with original ink removed. */
+  backdropImage?: string;
+  backdropWidth?: number;
+  backdropHeight?: number;
   /** Original font size in PDF points (of the clicked run). */
   fontSize: number;
   /** Real base font name of the clicked run (subset prefix stripped). */
@@ -70,9 +87,9 @@ export interface InlineEdit {
   /** Same-family runs in other styles: styleKey() -> objectIndex. */
   siblings: Partial<Record<string, number>>;
   /**
-   * Present when the selection can reflow on commit: paragraph/block scope
-   * with one face and size across every run. Absent = line breaks are fixed
-   * (line scope, or mixed styles reflow would destroy).
+   * Present when the selection can reflow on commit: line scope (using the
+   * clicked run as the style template), or paragraph/block scope with one face
+   * and size across every run. Absent = mixed paragraph styles would be lost.
    */
   reflow?: ReflowMeta;
 }
@@ -169,12 +186,53 @@ export function collectLine(objs: TextObject[], hit: TextObject): TextObject[] {
       return overlap > 0.5 * Math.min(height(o), height(hit));
     })
     .sort((a, b) => a.left - b.left);
-  const maxGap = Math.max(hit.fontSize, 6) * 1.5;
+  // Ordinary PDF word/run splits are comfortably below one em. Keep a small
+  // allowance for fragmented generators, but do not bridge narrow newspaper
+  // gutters (the Green Transition report uses a ~1.45em two-column gap).
+  const maxGap = Math.max(hit.fontSize, 6) * 1.25;
   let a = line.indexOf(hit);
   let b = a;
   while (a > 0 && line[a].left - line[a - 1].right <= maxGap) a--;
   while (b < line.length - 1 && line[b + 1].left - line[b].right <= maxGap) b++;
   return line.slice(a, b + 1);
+}
+
+export interface ScreenTextRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * Find the usable width of an editable scope without crossing into a nearby
+ * column/cell. Only obstacles that share a meaningful vertical band with the
+ * selected text can establish the right edge; content above or below remains
+ * a collision concern, not a column boundary.
+ */
+export function columnAwareTextWidth(
+  selected: ScreenTextRect,
+  pageWidth: number,
+  obstacles: ScreenTextRect[],
+  padding = 4,
+): number {
+  const pageRoom = Math.max(1, pageWidth - selected.left - padding);
+  const selectedHeight = Math.max(1, selected.bottom - selected.top);
+  const selectedRight = selected.right;
+  let boundary = pageWidth;
+  for (const obstacle of obstacles) {
+    const overlap =
+      Math.min(selected.bottom, obstacle.bottom) -
+      Math.max(selected.top, obstacle.top);
+    const obstacleHeight = Math.max(1, obstacle.bottom - obstacle.top);
+    if (overlap < Math.min(selectedHeight, obstacleHeight) * 0.35) continue;
+    if (obstacle.left <= selectedRight + 1) continue;
+    boundary = Math.min(boundary, obstacle.left);
+  }
+  return Math.max(
+    selectedRight - selected.left,
+    Math.min(pageRoom, boundary - selected.left - padding),
+  );
 }
 
 /**
@@ -188,6 +246,73 @@ export function mapLineEditToRuns(edit: InlineEdit, newJoined: string): TextRunE
   if (newJoined === old) {
     return edit.runs.map((r) => ({ objectIndex: r.objectIndex }));
   }
+
+  // Some generators emit a visual line as dozens of one- or two-character
+  // objects. Preserving a common prefix/suffix in that representation leaves
+  // old standalone glyph objects around the replacement (and the edit-mode
+  // hover layer exposes them individually). For a heavily fragmented single
+  // line, normalize the edit into its first object and remove every old
+  // fragment. Multi-line edits keep the surgical diff path below so their
+  // separate baselines stay intact.
+  const shortRuns = edit.runs.filter(
+    (r) => Array.from(r.text.trim()).length <= 2,
+  ).length;
+  const fragmentedSingleLine =
+    !old.includes("\n") &&
+    edit.runs.length >= 8 &&
+    shortRuns / edit.runs.length >= 0.75;
+  if (fragmentedSingleLine) {
+    // Keep contiguous style groups separate. Collapsing every glyph into the
+    // first PDF object fixes stale fragments but destroys later bold/color/font
+    // runs. Map each old style boundary monotonically into the replacement and
+    // collapse only within that group.
+    const groups: { first: number; last: number; start: number; end: number }[] = [];
+    const signature = (run: InlineEditRun) =>
+      `${run.fontName}\u0000${run.fontSize.toFixed(3)}\u0000${run.color.join(",")}`;
+    for (let i = 0; i < edit.runs.length; i++) {
+      const run = edit.runs[i];
+      const end = run.start + run.text.length + run.sep.length;
+      const current = groups.at(-1);
+      if (current && signature(edit.runs[current.first]) === signature(run)) {
+        current.last = i;
+        current.end = end;
+      } else {
+        groups.push({ first: i, last: i, start: run.start, end });
+      }
+    }
+
+    let prefix = 0;
+    const commonMax = Math.min(old.length, newJoined.length);
+    while (prefix < commonMax && old[prefix] === newJoined[prefix]) prefix++;
+    let suffix = 0;
+    while (
+      suffix < commonMax - prefix &&
+      old[old.length - 1 - suffix] === newJoined[newJoined.length - 1 - suffix]
+    ) {
+      suffix++;
+    }
+    const oldChangedEnd = old.length - suffix;
+    const newChangedEnd = newJoined.length - suffix;
+    const mapOffset = (offset: number) => {
+      if (offset <= prefix) return offset;
+      if (offset >= oldChangedEnd) return offset + newJoined.length - old.length;
+      const oldSpan = Math.max(1, oldChangedEnd - prefix);
+      const newSpan = Math.max(0, newChangedEnd - prefix);
+      return prefix + Math.round(((offset - prefix) / oldSpan) * newSpan);
+    };
+
+    const edits = edit.runs.map((r) => ({ objectIndex: r.objectIndex, text: "" }));
+    for (const group of groups) {
+      const start = mapOffset(group.start);
+      const end = Math.max(start, mapOffset(group.end));
+      let text = newJoined.slice(start, end);
+      const separator = edit.runs[group.last].sep;
+      if (separator && text.endsWith(separator)) text = text.slice(0, -separator.length);
+      edits[group.first].text = text;
+    }
+    return edits;
+  }
+
   let p = 0;
   const pMax = Math.min(old.length, newJoined.length);
   while (p < pMax && old[p] === newJoined[p]) p++;

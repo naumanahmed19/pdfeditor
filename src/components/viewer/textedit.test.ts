@@ -6,6 +6,7 @@ import {
   faceStyleDistance,
   detectFontFromName,
   collectLine,
+  columnAwareTextWidth,
   mapLineEditToRuns,
   resolveTextFont,
   trustedStandardFont,
@@ -35,7 +36,18 @@ function obj(p: Partial<TextObject>): TextObject {
 }
 
 function run(p: Partial<InlineEditRun>): InlineEditRun {
-  return { objectIndex: 0, text: "", start: 0, sep: "", originX: 0, originY: 0, fontName: "F", ...p };
+  return {
+    objectIndex: 0,
+    text: "",
+    start: 0,
+    sep: "",
+    originX: 0,
+    originY: 0,
+    fontName: "F",
+    fontSize: 10,
+    color: [0, 0, 0, 255],
+    ...p,
+  };
 }
 
 /** Minimal InlineEdit — mapLineEditToRuns only reads `original` and `runs`. */
@@ -155,6 +167,65 @@ describe("collectLine", () => {
     const far = obj({ index: 2, text: "col2", left: 400, right: 430, bottom: 100, top: 112, fontSize: 12 });
     expect(collectLine([a, far], a).map((o) => o.text)).toEqual(["left"]);
   });
+
+  it("does not join a narrow publication gutter at the same baseline", () => {
+    const left = obj({
+      index: 1,
+      text: "In addition to economic effects, climate change will",
+      left: 72,
+      right: 302,
+      bottom: 100,
+      top: 110.2,
+      fontSize: 10.2,
+    });
+    const rightA = obj({
+      index: 2,
+      text: "the",
+      left: 317,
+      right: 332,
+      bottom: 100,
+      top: 110.2,
+      fontSize: 10.2,
+    });
+    const rightB = obj({
+      index: 3,
+      text: "cold. Overall mortality is projected to increase",
+      left: 336,
+      right: 548,
+      bottom: 100,
+      top: 110.2,
+      fontSize: 10.2,
+    });
+
+    expect(collectLine([left, rightA, rightB], left).map((o) => o.text)).toEqual([
+      left.text,
+    ]);
+    expect(collectLine([left, rightA, rightB], rightA).map((o) => o.text)).toEqual([
+      rightA.text,
+      rightB.text,
+    ]);
+  });
+});
+
+describe("columnAwareTextWidth", () => {
+  const selected = { left: 100, top: 100, right: 260, bottom: 120 };
+
+  it("stops at the nearest text obstacle in the same row", () => {
+    expect(
+      columnAwareTextWidth(selected, 800, [
+        { left: 300, top: 100, right: 450, bottom: 120 },
+      ]),
+    ).toBe(196);
+  });
+
+  it("ignores text above and below the selected row", () => {
+    expect(
+      columnAwareTextWidth(selected, 800, [
+        { left: 300, top: 40, right: 450, bottom: 60 },
+        { left: 280, top: 150, right: 430, bottom: 170 },
+      ]),
+    ).toBe(696);
+  });
 });
 
 // --- mapLineEditToRuns ------------------------------------------------------
@@ -184,6 +255,38 @@ describe("mapLineEditToRuns", () => {
     const out = mapLineEditToRuns(twoRuns(), "hey");
     expect(out[0]).toEqual({ objectIndex: 0, text: "hey" });
     expect(out[1]).toEqual({ objectIndex: 1, text: "" });
+  });
+
+  it("removes stale fragments while preserving contiguous style groups", () => {
+    const runs = Array.from("Bajarunaite").map((text, i) =>
+      run({
+        objectIndex: i,
+        text,
+        start: i,
+        fontName: i < 3 ? "Arial-BoldMT" : "ArialMT",
+      }),
+    );
+    const fragmented = edit("Bajarunaite", runs);
+
+    expect(mapLineEditToRuns(fragmented, "B tenant")).toEqual([
+      { objectIndex: 0, text: "B " },
+      { objectIndex: 1, text: "" },
+      { objectIndex: 2, text: "" },
+      { objectIndex: 3, text: "tenant" },
+      ...runs.slice(4).map((r) => ({ objectIndex: r.objectIndex, text: "" })),
+    ]);
+  });
+
+  it("still collapses a uniformly styled fragmented line into one object", () => {
+    const runs = Array.from("fragmented").map((text, i) =>
+      run({ objectIndex: i, text, start: i, fontName: "ArialMT" }),
+    );
+    expect(mapLineEditToRuns(edit("fragmented", runs), "replacement")).toEqual(
+      runs.map((r, i) => ({
+        objectIndex: r.objectIndex,
+        text: i === 0 ? "replacement" : "",
+      })),
+    );
   });
 });
 

@@ -371,22 +371,49 @@ function ViewerImpl() {
         ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)
       ) {
         e.preventDefault();
-        const step = e.shiftKey ? 10 : 1;
-        const dx = e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0;
-        const dy = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
-        if (multi) {
+        const ann = (app.annotations[app.selected.page] ?? []).find(
+          (a) => a.id === app.selected!.id,
+        );
+        // A selected text box uses Shift+Arrow for precise resizing. Plain
+        // arrows still nudge it; other annotation kinds retain the familiar
+        // Shift = 10pt fast-nudge behavior.
+        if (ann?.kind === "text" && e.shiftKey && !multi) {
+          const step = e.ctrlKey || e.metaKey ? 10 : 1;
+          app.updateAnnotation(app.selected.page, {
+            ...ann,
+            w: Math.max(
+              8,
+              ann.w +
+                (e.key === "ArrowRight"
+                  ? step
+                  : e.key === "ArrowLeft"
+                    ? -step
+                    : 0),
+            ),
+            h: Math.max(
+              8,
+              ann.h +
+                (e.key === "ArrowDown"
+                  ? step
+                  : e.key === "ArrowUp"
+                    ? -step
+                    : 0),
+            ),
+          });
+        } else if (multi) {
+          const step = e.shiftKey ? 10 : 1;
+          const dx = e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0;
+          const dy = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
           app.translateAnnotations(multi.page, multi.ids, dx, dy);
-        } else {
-          const ann = (app.annotations[app.selected.page] ?? []).find(
-            (a) => a.id === app.selected!.id,
-          );
-          if (ann) {
-            app.updateAnnotation(app.selected.page, {
-              ...ann,
-              x: ann.x + dx,
-              y: ann.y + dy,
-            });
-          }
+        } else if (ann) {
+          const step = e.shiftKey ? 10 : 1;
+          const dx = e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0;
+          const dy = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
+          app.updateAnnotation(app.selected.page, {
+            ...ann,
+            x: ann.x + dx,
+            y: ann.y + dy,
+          });
         }
       }
       if (

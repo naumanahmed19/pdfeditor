@@ -1,7 +1,7 @@
 // Points at the block editor of the text box currently being edited (if any).
 // The toolbar's paragraph-format controls (headings, lists, indent) consult
 // this the same way style controls consult `activeTextEditor`.
-import type { BlockKind } from "../types";
+import type { BlockKind, TextAnnotation } from "../types";
 
 export interface ActiveBlockEditor {
   annId: string;
@@ -13,6 +13,9 @@ export interface ActiveBlockEditor {
   toggleList: (list: "bullet" | "numbered") => void;
   indent: () => void;
   outdent: () => void;
+  /** Draft-only whole-box properties; committed together with the text. */
+  boxValue: <K extends keyof TextAnnotation>(key: K) => TextAnnotation[K];
+  patchBox: (patch: Partial<TextAnnotation>) => void;
 }
 
 export const activeBlockEditor: { current: ActiveBlockEditor | null } = { current: null };
