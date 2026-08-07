@@ -15,6 +15,8 @@ export interface InlineEditControls {
   bold: boolean;
   italic: boolean;
   saving: boolean;
+  /** Keyboard help shown beside the active inline-edit style controls. */
+  commitHint: string;
   setColorHex: (v: string) => void;
   setSizePt: (updater: (s: number) => number) => void;
   setFamily: (v: string) => void;

@@ -596,9 +596,18 @@ export function EditorToolbar() {
     );
     return ann && ann.kind === "text" ? ann : null;
   })();
+  const activeBoxDraft =
+    selectedText && activeBlockEditor.current?.annId === selectedText.id
+      ? activeBlockEditor.current
+      : null;
 
   const patchSelectedText = (patch: Partial<TextAnnotation>) => {
     if (selectedText && app.selected) {
+      if (activeBoxDraft) {
+        activeBoxDraft.patchBox(patch);
+        bumpSel();
+        return;
+      }
       app.updateAnnotation(app.selected.page, {
         ...selectedText,
         ...patch,
@@ -679,24 +688,25 @@ export function EditorToolbar() {
       ? activeTextEditor.current
       : null;
   // Block-format controls (headings/lists) are live only while editing the box.
-  const liveBlockEditor =
-    selectedText && activeBlockEditor.current?.annId === selectedText.id
-      ? activeBlockEditor.current
-      : null;
+  const liveBlockEditor = activeBoxDraft;
   const sel = <K extends "bold" | "italic" | "underline" | "strike">(
     key: K,
     boxVal: boolean,
-  ): boolean => (liveEditor ? liveEditor.styleValue(key) ?? false : boxVal);
+  ): boolean =>
+    liveEditor
+      ? liveEditor.styleValue(key) ?? false
+      : (activeBoxDraft?.boxValue(key) ?? boxVal);
 
   const fontFamily =
     (liveEditor?.styleValue("fontFamily")) ??
+    activeBoxDraft?.boxValue("fontFamily") ??
     selectedText?.fontFamily ??
     app.fontFamily;
   const isBold = sel("bold", selectedText ? !!selectedText.bold : app.fontBold);
   const isItalic = sel("italic", selectedText ? !!selectedText.italic : app.fontItalic);
   const isUnderline = sel("underline", selectedText ? !!selectedText.underline : app.fontUnderline);
   const isStrike = sel("strike", selectedText ? !!selectedText.strike : app.fontStrike);
-  const alignValue = selectedText?.align ?? app.textAlign;
+  const alignValue = activeBoxDraft?.boxValue("align") ?? selectedText?.align ?? app.textAlign;
 
   // A selected annotation whose color / stroke / fill the contextual row
   // edits directly (text & notes have their own handling; image/redact have
@@ -1131,6 +1141,10 @@ export function EditorToolbar() {
                 onChange={inlineEdit.setColorHex}
                 title="Text color"
               />
+              <Separator orientation="vertical" className="mx-0.5 h-6" />
+              <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                {inlineEdit.commitHint}
+              </span>
             </div>
           ) : (
             <div className="flex items-center gap-2">
@@ -1189,11 +1203,13 @@ export function EditorToolbar() {
             value={{
               color:
                 liveEditor?.styleValue("color") ??
+                activeBoxDraft?.boxValue("color") ??
                 selectedText?.color ??
                 app.fontColor,
               fontFamily,
               fontSize:
                 liveEditor?.styleValue("fontSize") ??
+                activeBoxDraft?.boxValue("fontSize") ??
                 selectedText?.fontSize ??
                 app.fontSize,
               bold: isBold,

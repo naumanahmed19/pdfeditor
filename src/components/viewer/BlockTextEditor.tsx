@@ -13,6 +13,8 @@ import { activeBlockEditor } from "../../lib/activeBlockEditor";
 
 export interface BlockEditorHandle {
   focus: () => void;
+  commit: (focusTo?: HTMLElement | null) => void;
+  cancel: () => void;
 }
 
 /**
@@ -30,12 +32,20 @@ export const BlockTextEditor = forwardRef<
     onChange: (blocks: TextBlock[]) => void;
     onSize: (heightPts: number) => void;
     onCommit: (blocks: TextBlock[], focusTo: HTMLElement | null) => void;
+    onCancel: () => void;
+    onBoxPatch: (patch: Partial<TextAnnotation>) => void;
     style?: React.CSSProperties;
   }
->(({ ann, scale, onChange, onSize, onCommit, style }, ref) => {
+>(({ ann, scale, onChange, onSize, onCommit, onCancel, onBoxPatch, style }, ref) => {
   const elRef = useRef<HTMLDivElement>(null);
   const annRef = useRef(ann);
+  const onCommitRef = useRef(onCommit);
+  const onCancelRef = useRef(onCancel);
+  const onBoxPatchRef = useRef(onBoxPatch);
   annRef.current = ann;
+  onCommitRef.current = onCommit;
+  onCancelRef.current = onCancel;
+  onBoxPatchRef.current = onBoxPatch;
   // Last selection made inside the editor, so block ops can restore it after a
   // toolbar control (that isn't preventing blur) steals focus.
   const savedRange = useRef<Range | null>(null);
@@ -59,6 +69,31 @@ export const BlockTextEditor = forwardRef<
     const el = elRef.current;
     if (el) onSize(el.scrollHeight / scale + 3);
   };
+
+  // Clicking a non-focusable part of the page does not reliably blur a
+  // contentEditable element. Commit explicitly on an outside pointer press so
+  // placing a text block never leaves it stuck in edit mode. The annotation
+  // wrapper (including its move/resize handles) and its toolbar controls stay
+  // inside the edit session.
+  useEffect(() => {
+    const onOutsidePointerDown = (event: PointerEvent) => {
+      const el = elRef.current;
+      const target = event.target;
+      if (!el || !(target instanceof Element)) return;
+      const annotation = el.closest("[data-text-annotation]");
+      if (annotation?.contains(target) || el.contains(target)) return;
+      if (target.closest("[data-ann-controls]")) return;
+      onCommitRef.current(
+        read(),
+        target instanceof HTMLElement ? target : target.parentElement,
+      );
+    };
+    document.addEventListener("pointerdown", onOutsidePointerDown, true);
+    return () =>
+      document.removeEventListener("pointerdown", onOutsidePointerDown, true);
+    // `read` always uses refs, and onCommitRef tracks the latest callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Populate once on mount and place the caret at the end.
   useEffect(() => {
@@ -257,7 +292,11 @@ export const BlockTextEditor = forwardRef<
   const indent = () => runOp({ type: "indent", delta: 1 });
   const outdent = () => runOp({ type: "indent", delta: -1 });
 
-  useImperativeHandle(ref, () => ({ focus: () => elRef.current?.focus() }));
+  useImperativeHandle(ref, () => ({
+    focus: () => elRef.current?.focus(),
+    commit: (focusTo = null) => onCommitRef.current(read(), focusTo),
+    cancel: () => onCancelRef.current(),
+  }));
 
   // Register as the active editor(s) so the toolbar targets this box.
   useEffect(() => {
@@ -267,7 +306,16 @@ export const BlockTextEditor = forwardRef<
       selection: () => ({ start: 0, end: 1 }),
       styleValue: styleValue as never,
     };
-    activeBlockEditor.current = { annId: ann.id, state: blockState, setKind, toggleList, indent, outdent };
+    activeBlockEditor.current = {
+      annId: ann.id,
+      state: blockState,
+      setKind,
+      toggleList,
+      indent,
+      outdent,
+      boxValue: (key) => annRef.current[key],
+      patchBox: (patch) => onBoxPatchRef.current(patch),
+    };
     return () => {
       if (activeTextEditor.current?.annId === ann.id) activeTextEditor.current = null;
       if (activeBlockEditor.current?.annId === ann.id) activeBlockEditor.current = null;
@@ -306,7 +354,15 @@ export const BlockTextEditor = forwardRef<
         reportSize();
       }}
       onKeyDown={(e) => {
-        if (e.key === "Tab") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          onCancelRef.current();
+        } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          onCommitRef.current(read(), null);
+        } else if (e.key === "Tab") {
           e.preventDefault();
           if (blockState().kind === "li") (e.shiftKey ? outdent : indent)();
         }

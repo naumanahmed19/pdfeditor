@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { joinSoftBreaks, planReflow, wrapText } from "./reflow";
+import {
+  joinSoftBreaks,
+  planReflow,
+  reflowWouldOverlap,
+  wrapText,
+} from "./reflow";
 
 // Character-count measure: 10pt per character, spaces included — predictable
 // break points without real font metrics.
@@ -30,12 +35,18 @@ describe("wrapText", () => {
     expect(wrapText("aaa bbb ccc ddd", 70, measure)).toEqual(["aaa bbb", "ccc ddd"]);
   });
 
-  it("gives an oversized word its own line instead of chopping it", () => {
-    expect(wrapText("hi incomprehensibilities yo", 100, measure)).toEqual([
-      "hi",
-      "incomprehensibilities",
-      "yo",
-    ]);
+  it("hard-wraps an oversized unspaced token to the available width", () => {
+    const lines = wrapText("hi incomprehensibilities yo", 100, measure);
+    expect(lines).toEqual(["hi", "incomprehe", "nsibilitie", "s yo"]);
+    expect(lines.every((line) => measure(line) <= 100 * 1.015)).toBe(true);
+  });
+
+  it("preserves every character while wrapping a long URL", () => {
+    const url = "https://example.com/a/very/long/unbroken/path";
+    const lines = wrapText(url, 90, measure);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.join("")).toBe(url);
+    expect(lines.every((line) => measure(line) <= 90 * 1.015)).toBe(true);
   });
 
   it("returns no lines for whitespace-only text", () => {
@@ -45,6 +56,38 @@ describe("wrapText", () => {
   it("tolerates a hair of overflow (metric drift)", () => {
     // "aaaa bbbb" = 9 chars = 90pt; width 89 is within the 1.5% tolerance of 90.
     expect(wrapText("aaaa bbbb", 89, measure)).toEqual(["aaaa bbbb"]);
+  });
+});
+
+describe("reflowWouldOverlap", () => {
+  const lines = [{ text: "wrapped line", originX: 10, originY: 80 }];
+
+  it("detects page text intersecting a newly added line", () => {
+    expect(
+      reflowWouldOverlap(lines, 10, measure, [
+        { left: 20, right: 70, bottom: 78, top: 86 },
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects overlap on a rewritten existing line, not only appended lines", () => {
+    expect(
+      reflowWouldOverlap(
+        [{ text: "expanded existing row", originX: 10, originY: 80 }],
+        10,
+        measure,
+        [{ left: 130, right: 210, bottom: 78, top: 86 }],
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores content outside the line's horizontal or vertical bounds", () => {
+    expect(
+      reflowWouldOverlap(lines, 10, measure, [
+        { left: 140, right: 180, bottom: 78, top: 86 },
+        { left: 20, right: 70, bottom: 55, top: 65 },
+      ]),
+    ).toBe(false);
   });
 });
 
@@ -61,6 +104,16 @@ describe("planReflow", () => {
     // Original lines measure exactly at width; shrink width so they'd all
     // "overflow" — untouched lines must not trigger a rewrap.
     expect(planReflow(oldLines, [...oldLines], 100, measure)).toBeNull();
+  });
+
+  it("rewraps unchanged text when the user explicitly resizes its column", () => {
+    expect(planReflow(oldLines, [...oldLines], 100, measure, true)).toEqual([
+      "the quick",
+      "brown fox",
+      "jumps over",
+      "the lazy",
+      "dog",
+    ]);
   });
 
   it("rewraps from the first changed line when an insert overflows", () => {

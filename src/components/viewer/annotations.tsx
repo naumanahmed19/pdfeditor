@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Calendar, Link2, MessageSquare, PenLine, Trash2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Calendar, Check, Link2, MessageSquare, PenLine, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { cn, uid, ROTATABLE_KINDS } from "../../lib/utils";
@@ -13,7 +13,7 @@ import {
   snapMovingRect,
   snapResizingRect,
 } from "../../lib/formbuilder";
-import { BlockTextEditor } from "./BlockTextEditor";
+import { BlockTextEditor, type BlockEditorHandle } from "./BlockTextEditor";
 import {
   DEFAULT_LINE_HEIGHT,
   blocksHaveText,
@@ -21,7 +21,6 @@ import {
   blocksToSemanticHtml,
   getBlocks,
   linkStyledText,
-  measureBlocks,
 } from "../../lib/richtext";
 import type { PageDims } from "./types";
 import { FONT_CSS } from "./textedit";
@@ -989,6 +988,7 @@ function AnnotationItem({
   const [hasContent, setHasContent] = useState(
     ann.kind !== "text" || !!ann.text.trim(),
   );
+  const textEditSnapshotRef = useRef<TextAnnotation | null>(null);
 
   // Commit the comment draft when the note is deselected — the popover can
   // be dismissed on pointerDOWN, before the textarea's blur ever fires, so
@@ -1017,6 +1017,7 @@ function AnnotationItem({
   // Open the editor when requested externally (e.g. "edit existing text").
   useEffect(() => {
     if (app.editRequestId === ann.id && ann.kind === "text") {
+      textEditSnapshotRef.current = ann;
       setEditing(true);
       app.setEditRequestId(null);
     }
@@ -1026,13 +1027,17 @@ function AnnotationItem({
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   // Rotation while the rotate handle is being dragged (committed on release).
   const [liveRot, setLiveRot] = useState<number | null>(null);
-  // While editing, the box auto-grows to fit the typed text (RichTextEditor
-  // reports run changes via onRunsChange → measureRichText).
-  const [editSize, setEditSize] = useState<{ w: number; h: number } | null>(null);
-  type ResizeCorner = "nw" | "ne" | "sw" | "se";
+  // The complete text annotation stays draft-only while editing. Geometry and
+  // toolbar styling are committed once on Done/outside-click, so Cancel never
+  // needs to manufacture a compensating history entry.
+  const [textDraft, setTextDraft] = useState<TextAnnotation | null>(null);
+  const textDraftRef = useRef<TextAnnotation | null>(null);
+  const blockEditorRef = useRef<BlockEditorHandle>(null);
+  const [textCollision, setTextCollision] = useState(false);
+  type ResizeHandle = "n" | "e" | "s" | "w" | "nw" | "ne" | "sw" | "se";
   const dragRef = useRef<{
     mode: "move" | "resize";
-    corner: ResizeCorner;
+    corner: ResizeHandle;
     startX: number;
     startY: number;
     orig: { x: number; y: number; w: number; h: number };
@@ -1040,26 +1045,70 @@ function AnnotationItem({
   const lastDown = useRef<PressPoint | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  const maxTextWidth = Math.max(40, baseDims.width - ann.x - 2);
-
-  // Seed / clear the auto-grow size as editing toggles.
+  // Seed / clear the editable box as editing toggles. Start from persisted
+  // geometry; re-measuring natural width here used to erase manual resizes.
   useEffect(() => {
     if (editing && ann.kind === "text") {
-      setEditSize(measureBlocks(ann, getBlocks(ann), maxTextWidth));
+      if (!textEditSnapshotRef.current) textEditSnapshotRef.current = ann;
+      textDraftRef.current = ann;
+      setTextDraft(ann);
     } else {
-      setEditSize(null);
+      textEditSnapshotRef.current = null;
+      textDraftRef.current = null;
+      setTextDraft(null);
+      setTextCollision(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 
   const box =
     live ??
-    (editing && editSize ? { ...ann, w: editSize.w, h: editSize.h } : ann);
+    (editing && textDraft ? textDraft : ann);
+
+  // Preview collisions while typing or resizing. The check uses the rendered
+  // page rectangles, so it stays aligned through zoom, rotation, and crop.
+  useLayoutEffect(() => {
+    if (!editing || ann.kind !== "text") return;
+    const frame = requestAnimationFrame(() => {
+      const own = wrapRef.current;
+      const page = own?.closest("[data-page-index]");
+      if (!own || !page) return;
+      const rect = own.getBoundingClientRect();
+      const overlaps = (other: DOMRect) =>
+        Math.min(rect.right, other.right) - Math.max(rect.left, other.left) > 1 &&
+        Math.min(rect.bottom, other.bottom) - Math.max(rect.top, other.top) > 1;
+      const pageTextHit = Array.from(page.querySelectorAll(".textLayer span")).some(
+        (node) =>
+          !!node.textContent?.trim() && overlaps(node.getBoundingClientRect()),
+      );
+      const annotationHit = Array.from(
+        page.querySelectorAll<HTMLElement>("[data-annotation-id]"),
+      ).some(
+        (node) =>
+          node.dataset.annotationId !== ann.id &&
+          overlaps(node.getBoundingClientRect()),
+      );
+      setTextCollision(pageTextHit || annotationHit);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [ann.id, ann.kind, box.h, box.w, box.x, box.y, editing]);
+
+  const cancelTextEditing = () => {
+    if (ann.kind !== "text") return;
+    const snapshot = textEditSnapshotRef.current;
+    textEditSnapshotRef.current = null;
+    setEditing(false);
+    if (!snapshot || !snapshot.text.trim()) {
+      app.removeAnnotation(pageIndex, ann.id);
+    } else {
+      requestAnimationFrame(() => wrapRef.current?.focus({ preventScroll: true }));
+    }
+  };
 
   const beginDrag = (
     e: React.PointerEvent,
     mode: "move" | "resize",
-    corner: ResizeCorner = "se",
+    corner: ResizeHandle = "se",
   ) => {
     // While reading, clicking a comment marker just opens its popup.
     if (ann.kind === "note" && app.tool === "read") {
@@ -1113,6 +1162,7 @@ function AnnotationItem({
     e.stopPropagation();
     e.preventDefault();
     app.setSelected({ page: pageIndex, id: ann.id });
+    requestAnimationFrame(() => wrapRef.current?.focus({ preventScroll: true }));
 
     // Canceling pointerdown suppresses the browser's dblclick, so detect
     // double-press by timing to open the text editor.
@@ -1130,12 +1180,12 @@ function AnnotationItem({
       startX: e.clientX,
       startY: e.clientY,
       orig: {
-        x: ann.x,
-        y: ann.y,
+        x: box.x,
+        y: box.y,
         // While editing, the box is auto-grown to fit the text — drag that
         // size, not the last committed one, so the box doesn't jump on grab.
-        w: editing && editSize ? editSize.w : ann.w,
-        h: editing && editSize ? editSize.h : ann.h,
+        w: box.w,
+        h: box.h,
       },
     };
     // Alignment aids: snap candidates on this page, and (when the pressed
@@ -1214,8 +1264,14 @@ function AnnotationItem({
         };
       } else {
         const c = d.corner;
-        const w = Math.max(8, d.orig.w + (c.includes("w") ? -dx : dx));
-        const h = Math.max(8, d.orig.h + (c.includes("n") ? -dy : dy));
+        const changesWidth = c.includes("w") || c.includes("e");
+        const changesHeight = c.includes("n") || c.includes("s");
+        const w = changesWidth
+          ? Math.max(8, d.orig.w + (c.includes("w") ? -dx : dx))
+          : d.orig.w;
+        const h = changesHeight
+          ? Math.max(8, d.orig.h + (c.includes("n") ? -dy : dy))
+          : d.orig.h;
         let next = {
           x: c.includes("w") ? d.orig.x + d.orig.w - w : d.orig.x,
           y: c.includes("n") ? d.orig.y + d.orig.h - h : d.orig.y,
@@ -1244,7 +1300,14 @@ function AnnotationItem({
       // Commit outside the state updater — updating the store from within
       // one triggers React's setState-during-render warning.
       if (commit && finalBox) {
-        if (groupIds) {
+        if (editing && ann.kind === "text") {
+          const next = {
+            ...(textDraftRef.current ?? ann),
+            ...finalBox,
+          } as TextAnnotation;
+          textDraftRef.current = next;
+          setTextDraft(next);
+        } else if (groupIds) {
           // The whole selection moves in one undo step.
           app.translateAnnotations(
             pageIndex,
@@ -1793,14 +1856,23 @@ function AnnotationItem({
       break;
     }
     case "text": {
-      const textAnn = ann;
+      const textAnn = textDraft ?? ann;
       body = editing ? (
         <BlockTextEditor
+          ref={blockEditorRef}
           ann={textAnn}
           scale={scale}
           style={{ ...textSpacingStyle(textAnn, scale), textAlign: textAnn.align ?? "left" }}
-          onChange={(blocks) => setHasContent(blocksHaveText(blocks))}
-          onSize={(h) => setEditSize({ w: textAnn.w, h })}
+          onChange={(blocks) => {
+            setHasContent(blocksHaveText(blocks));
+          }}
+          onSize={(h) => {
+            const current = textDraftRef.current ?? textAnn;
+            if (h <= current.h) return;
+            const next = { ...current, h };
+            textDraftRef.current = next;
+            setTextDraft(next);
+          }}
           onCommit={(blocks, focusTo) => {
             // Focus moving to a style control (popover or toolbar) means the
             // user is styling, not finishing — commit text, keep editing.
@@ -1809,21 +1881,40 @@ function AnnotationItem({
               document.activeElement?.closest("[data-ann-controls]");
             if (!blocksHaveText(blocks)) {
               if (!toControls) {
+                textEditSnapshotRef.current = null;
                 setEditing(false);
                 app.removeAnnotation(pageIndex, ann.id);
               }
               return;
             }
-            const size = measureBlocks(textAnn, blocks, maxTextWidth);
-            app.updateAnnotation(pageIndex, {
-              ...textAnn,
+            const draft = textDraftRef.current ?? textAnn;
+            const next = {
+              ...draft,
               text: blocksPlainText(blocks),
               blocks,
               runs: undefined,
-              w: size.w,
-              h: size.h,
-            });
-            if (!toControls) setEditing(false);
+            } as TextAnnotation;
+            textDraftRef.current = next;
+            setTextDraft(next);
+            if (!toControls) {
+              app.updateAnnotation(pageIndex, next);
+              textEditSnapshotRef.current = null;
+              setEditing(false);
+              if (!focusTo) {
+                requestAnimationFrame(() =>
+                  wrapRef.current?.focus({ preventScroll: true }),
+                );
+              }
+            }
+          }}
+          onCancel={cancelTextEditing}
+          onBoxPatch={(patch) => {
+            const next = {
+              ...(textDraftRef.current ?? textAnn),
+              ...patch,
+            } as TextAnnotation;
+            textDraftRef.current = next;
+            setTextDraft(next);
           }}
         />
       ) : (
@@ -1860,6 +1951,9 @@ function AnnotationItem({
   return (
     <div
       ref={wrapRef}
+      data-annotation-id={ann.id}
+      data-text-annotation={ann.kind === "text" ? ann.id : undefined}
+      tabIndex={isSelected && !editing ? 0 : undefined}
       style={style}
       className={cn(
         // Text boxes draw their own selection chrome; in a multi-selection the
@@ -1889,6 +1983,7 @@ function AnnotationItem({
       onDoubleClick={(e) => {
         if (ann.kind === "text") {
           e.stopPropagation();
+          textEditSnapshotRef.current = ann;
           setEditing(true);
         }
       }}
@@ -1919,7 +2014,12 @@ function AnnotationItem({
         <>
           {/* Selection frame drawn just outside the text so glyphs never
               touch it; a faint white halo keeps it visible on dark pages. */}
-          <div className="pointer-events-none absolute -inset-1 rounded-[3px] border border-blue-500 shadow-[0_0_0_1px_rgba(255,255,255,0.55)]" />
+          <div
+            className={cn(
+              "pointer-events-none absolute -inset-1 rounded-[3px] border shadow-[0_0_0_1px_rgba(255,255,255,0.55)]",
+              textCollision ? "border-red-500" : "border-blue-500",
+            )}
+          />
           {/* Grab band: an invisible ~10px zone around the frame. The whole
               box drags when idle, but while editing the text area owns the
               pointer — the band is what makes the box draggable then. */}
@@ -1939,6 +2039,38 @@ function AnnotationItem({
                 onPointerDown={(e) => beginDrag(e, "move")}
               />
             ))}
+          {editing && (
+            <div
+              data-ann-controls
+              className="absolute -top-9 right-0 z-20 flex items-center gap-1 rounded-md border border-border bg-background p-1 shadow-md"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium hover:bg-muted"
+                onClick={() => blockEditorRef.current?.commit(null)}
+              >
+                <Check className="h-3.5 w-3.5" />
+                Done
+              </button>
+              <button
+                type="button"
+                aria-label="Cancel text editing"
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted"
+                onClick={() => blockEditorRef.current?.cancel()}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          <div className="pointer-events-none absolute -bottom-6 right-0 rounded bg-slate-900/80 px-1.5 py-0.5 text-[9px] tabular-nums text-white">
+            {Math.round(box.w)} × {Math.round(box.h)} pt
+          </div>
+          {textCollision && (
+            <div className="pointer-events-none absolute -bottom-6 left-0 rounded bg-red-600 px-1.5 py-0.5 text-[9px] font-medium text-white">
+              Overlaps page content
+            </div>
+          )}
         </>
       )}
       {ann.kind === "text" && hasLinkTarget(ann.link) && (app.editMode || isSelected) && (
@@ -1965,6 +2097,29 @@ function AnnotationItem({
               )}
               style={{ touchAction: "none" }}
               onPointerDown={(e) => beginDrag(e, "resize", c)}
+            />
+          ))}
+        </>
+      )}
+      {isSelected && !previewing && ann.kind === "text" && (
+        <>
+          {(["n", "e", "s", "w"] as const).map((edge) => (
+            <div
+              key={edge}
+              aria-label={`Resize text ${edge} edge`}
+              className={cn(
+                "absolute rounded-full border border-white bg-blue-500 shadow-sm",
+                edge === "n" &&
+                  "-top-1.5 left-1/2 h-3 w-6 -translate-x-1/2 cursor-ns-resize",
+                edge === "e" &&
+                  "-right-1.5 top-1/2 h-6 w-3 -translate-y-1/2 cursor-ew-resize",
+                edge === "s" &&
+                  "-bottom-1.5 left-1/2 h-3 w-6 -translate-x-1/2 cursor-ns-resize",
+                edge === "w" &&
+                  "-left-1.5 top-1/2 h-6 w-3 -translate-y-1/2 cursor-ew-resize",
+              )}
+              style={{ touchAction: "none" }}
+              onPointerDown={(e) => beginDrag(e, "resize", edge)}
             />
           ))}
         </>

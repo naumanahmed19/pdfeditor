@@ -13,6 +13,19 @@
 /** Width of a string in PDF points (at the paragraph's font and size). */
 export type Measure = (s: string) => number;
 
+export interface ReflowLineBox {
+  text: string;
+  originX: number;
+  originY: number;
+}
+
+export interface ReflowObstacle {
+  left: number;
+  right: number;
+  bottom: number;
+  top: number;
+}
+
 /**
  * Measured widths drift slightly between our metrics (fontkit advances or a
  * canvas fallback) and the PDF's own layout (TJ kerning adjustments), so a
@@ -53,6 +66,27 @@ export function wrapText(text: string, maxWidth: number, measure: Measure): stri
   const lines: string[] = [];
   let line = "";
   for (const w of words) {
+    if (measure(w) > limit) {
+      if (line) {
+        lines.push(line);
+        line = "";
+      }
+      const pieces: string[] = [];
+      let piece = "";
+      for (const char of Array.from(w)) {
+        const candidate = piece + char;
+        if (piece && measure(candidate) > limit) {
+          pieces.push(piece);
+          piece = char;
+        } else {
+          piece = candidate;
+        }
+      }
+      if (piece) pieces.push(piece);
+      lines.push(...pieces.slice(0, -1));
+      line = pieces.at(-1) ?? "";
+      continue;
+    }
     const candidate = line ? line + " " + w : w;
     if (!line || measure(candidate) <= limit) {
       line = candidate;
@@ -65,14 +99,39 @@ export function wrapText(text: string, maxWidth: number, measure: Measure): stri
   return lines;
 }
 
+/** True when any newly planned line would paint over existing page text. */
+export function reflowWouldOverlap(
+  lines: ReflowLineBox[],
+  fontSize: number,
+  measure: Measure,
+  obstacles: ReflowObstacle[],
+): boolean {
+  return lines.some((line) => {
+    if (!line.text.trim()) return false;
+    const box = {
+      left: line.originX,
+      right: line.originX + measure(line.text),
+      bottom: line.originY - fontSize * 0.25,
+      top: line.originY + fontSize * 0.9,
+    };
+    return obstacles.some(
+      (obstacle) =>
+        box.right > obstacle.left &&
+        box.left < obstacle.right &&
+        box.top > obstacle.bottom &&
+        box.bottom < obstacle.top,
+    );
+  });
+}
+
 /**
  * Decide whether a committed paragraph edit needs reflow, and compute the
  * final line layout when it does. Returns null when the committed lines
  * already match the original structure — same line count and no CHANGED line
  * overflowing — so the caller can keep today's minimal per-run diff path
- * (which preserves untouched runs byte-for-byte). Unchanged lines never
- * trigger a rewrap even if they measure wide: their breaks are the
- * document's own layout, not ours to second-guess.
+ * (which preserves untouched runs byte-for-byte). Unchanged lines only
+ * rewrap when `force` is true because the user explicitly resized the column;
+ * otherwise their breaks are the document's own layout, not ours to guess.
  *
  * When reflow is needed, lines above the first change are kept verbatim and
  * everything from the first changed line onward is rejoined and rewrapped to
@@ -83,6 +142,7 @@ export function planReflow(
   committedLines: string[],
   maxWidth: number,
   measure: Measure,
+  force = false,
 ): string[] | null {
   const structural = committedLines.length !== oldLines.length;
   const overflow = committedLines.some(
@@ -100,11 +160,15 @@ export function planReflow(
     const joined = line.endsWith("-") ? line + next : line + " " + next;
     return measure(joined) <= maxWidth * WIDTH_TOLERANCE;
   });
-  if (!structural && !overflow && !pullUp) return null;
+  if (!force && !structural && !overflow && !pullUp) return null;
 
   let firstChanged = 0;
   const common = Math.min(oldLines.length, committedLines.length);
-  while (firstChanged < common && committedLines[firstChanged] === oldLines[firstChanged]) {
+  while (
+    !force &&
+    firstChanged < common &&
+    committedLines[firstChanged] === oldLines[firstChanged]
+  ) {
     firstChanged++;
   }
 

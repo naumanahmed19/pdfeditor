@@ -70,6 +70,20 @@ describe("buildPageLines", () => {
     expect(lines[1].objs.map((o) => o.text)).toEqual(["right"]);
     expect(lines[2].objs.map((o) => o.text)).toEqual(["below"]);
   });
+
+  it("splits same-baseline columns separated by a narrow publication gutter", () => {
+    const left = run("left column", 72, 302, 700, 10.2);
+    const rightA = run("right", 317, 347, 700, 10.2);
+    const rightB = run("column", 351, 548, 700, 10.2);
+
+    const lines = buildPageLines([left, rightA, rightB]);
+    expect(lines).toHaveLength(2);
+    expect(lines[0].objs.map((o) => o.text)).toEqual([left.text]);
+    expect(lines[1].objs.map((o) => o.text)).toEqual([
+      rightA.text,
+      rightB.text,
+    ]);
+  });
 });
 
 describe("collectParagraph", () => {
