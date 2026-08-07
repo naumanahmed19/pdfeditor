@@ -1,5 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Calendar, Check, Link2, MessageSquare, PenLine, Trash2, X } from "lucide-react";
+import {
+  Calendar,
+  Check,
+  Link2,
+  Lock,
+  MessageSquare,
+  PenLine,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
 import { cn, uid, ROTATABLE_KINDS } from "../../lib/utils";
@@ -1956,6 +1965,7 @@ function AnnotationItem({
       tabIndex={isSelected && !editing ? 0 : undefined}
       style={style}
       className={cn(
+        "group/annotation",
         // Text boxes draw their own selection chrome; in a multi-selection the
         // non-primary text members still need the membership ring.
         (ann.kind !== "text" ? isSelected || isMulti : isMulti && !isSelected) &&
@@ -2012,6 +2022,16 @@ function AnnotationItem({
         </div>
       )}
       {body}
+      {selectable && !editing && !previewing && (
+        <CanvasLockControl
+          visible={isSelected}
+          onLock={() => {
+            app.setMultiSelected(null);
+            app.updateAnnotation(pageIndex, { ...ann, locked: true });
+            app.setSelected({ page: pageIndex, id: ann.id });
+          }}
+        />
+      )}
       {textChrome && (
         <>
           {/* Selection frame drawn just outside the text so glyphs never
@@ -2295,5 +2315,40 @@ function AnnotationItem({
         </Popover>
       )}
     </div>
+  );
+}
+
+export function CanvasLockControl({
+  visible,
+  onLock,
+}: {
+  visible: boolean;
+  onLock: () => void;
+}) {
+  return (
+    <Tip label="Lock object" desc="Prevent accidental changes">
+      <button
+        type="button"
+        data-ann-controls
+        aria-label="Lock object"
+        className={cn(
+          "absolute -top-8 left-0 z-20 flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground opacity-0 shadow-md transition-[color,background-color,opacity] hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/annotation:opacity-100",
+          visible && "opacity-100",
+        )}
+        onPointerDown={(e) => {
+          // The control sits inside the draggable wrapper, so consume the
+          // press before AnnotationItem can interpret it as a move.
+          e.stopPropagation();
+          e.preventDefault();
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onLock();
+        }}
+      >
+        <Lock className="h-3.5 w-3.5" />
+      </button>
+    </Tip>
   );
 }
