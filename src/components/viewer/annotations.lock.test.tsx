@@ -7,11 +7,15 @@ afterEach(() => cleanup());
 
 describe("annotation canvas lock control", () => {
   it("locks an object without starting a canvas edit gesture", () => {
-    const onLock = vi.fn();
+    const onToggle = vi.fn();
     const onPointerDown = vi.fn();
     render(
       <div onPointerDown={onPointerDown}>
-        <CanvasLockControl visible={false} onLock={onLock} />
+        <CanvasLockControl
+          locked={false}
+          visible={false}
+          onToggle={onToggle}
+        />
       </div>,
     );
 
@@ -22,6 +26,20 @@ describe("annotation canvas lock control", () => {
     fireEvent.click(lock);
 
     expect(onPointerDown).not.toHaveBeenCalled();
-    expect(onLock).toHaveBeenCalledTimes(1);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an unlock action for a locked object", () => {
+    const onToggle = vi.fn();
+    render(
+      <CanvasLockControl locked visible={false} onToggle={onToggle} />,
+    );
+
+    const unlock = screen.getByRole("button", { name: "Unlock object" });
+    expect(unlock.getAttribute("aria-pressed")).toBe("true");
+    expect(unlock.className).toContain("group-hover/annotation:opacity-100");
+
+    fireEvent.click(unlock);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });
