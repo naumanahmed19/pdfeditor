@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.3...v0.6.0) (2026-08-09)
+
+
+### Features
+
+* **editor:** add inline object lock control ([80775cf](https://github.com/naumanahmed19/pdfeditor/commit/80775cf98df51dafe8a01361851f52d97a2c4819))
+* **editor:** add object locking panel ([32ff383](https://github.com/naumanahmed19/pdfeditor/commit/32ff383e89f5cb5fb16a8c774c4b63035b026f89))
+* **editor:** add object locking panel ([d0f714c](https://github.com/naumanahmed19/pdfeditor/commit/d0f714c09edf124be3d3db767bd0ef2330adcf98))
+
+
+### Bug Fixes
+
+* **ai:** normalize Gemma 3 conversation roles ([61bcfdd](https://github.com/naumanahmed19/pdfeditor/commit/61bcfdd42b4c189ec4ce9e97cf1d92ad45d33828))
+* **ai:** normalize Gemma 3 conversation roles ([d9aa16c](https://github.com/naumanahmed19/pdfeditor/commit/d9aa16cfe0d7cb67831fba8297a7a44b222c92cc))
+* **editor:** allow unlocking objects on hover ([fbd731e](https://github.com/naumanahmed19/pdfeditor/commit/fbd731e524db9957a721e6ac4b792dc74ccc238d))
+* **editor:** allow unlocking objects on hover ([3c73e81](https://github.com/naumanahmed19/pdfeditor/commit/3c73e8154d6affcc79a5fa95714e7f038e5d1edf))
+
 ## [0.5.3](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.2...v0.5.3) (2026-08-07)
 
 
