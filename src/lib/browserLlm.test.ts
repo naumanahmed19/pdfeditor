@@ -68,6 +68,58 @@ describe("browser LLM worker lifecycle", () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
+  it("normalizes PDF context into strict alternating Gemma turns", async () => {
+    const { streamBrowserChat } = await import("./browserLlm");
+    const pending = streamBrowserChat(
+      model,
+      [
+        { role: "system", content: "Be concise." },
+        { role: "user", content: "Earlier question" },
+        { role: "assistant", content: "Earlier answer" },
+        { role: "user", content: "UNTRUSTED_DOCUMENT_DATA_JSON: page 11" },
+        { role: "user", content: "Summarize page 11." },
+      ],
+      0,
+      vi.fn(),
+    );
+    const worker = FakeWorker.instances[0];
+    const request = worker.messages[0];
+    const requestId = String(request.requestId);
+
+    expect(request.messages).toEqual([
+      { role: "system", content: "Be concise." },
+      { role: "user", content: "Earlier question" },
+      { role: "assistant", content: "Earlier answer" },
+      {
+        role: "user",
+        content:
+          "UNTRUSTED_DOCUMENT_DATA_JSON: page 11\n\nSummarize page 11.",
+      },
+    ]);
+
+    worker.emit({ type: "done", requestId });
+    await expect(pending).resolves.toBe("");
+  });
+
+  it("drops orphan assistant history and merges duplicate system prompts", async () => {
+    const { normalizeBrowserMessages } = await import("./browserLlm");
+
+    expect(
+      normalizeBrowserMessages([
+        { role: "system", content: "First instruction" },
+        { role: "assistant", content: "orphaned response" },
+        { role: "system", content: "Second instruction" },
+        { role: "user", content: "Current question" },
+      ]),
+    ).toEqual([
+      {
+        role: "system",
+        content: "First instruction\n\nSecond instruction",
+      },
+      { role: "user", content: "Current question" },
+    ]);
+  });
+
   it("rejects pending work when the worker crashes", async () => {
     const { preloadBrowserModel } = await import("./browserLlm");
     const pending = preloadBrowserModel(model, vi.fn());
