@@ -4,6 +4,7 @@ import {
   Check,
   Link2,
   Lock,
+  LockOpen,
   MessageSquare,
   PenLine,
   Trash2,
@@ -1161,6 +1162,17 @@ function AnnotationItem({
       new CustomEvent("pdfwb:object-selection", { detail: null }),
     );
     app.setSelectedField(null);
+    // Locked objects remain intentionally selectable on the canvas so their
+    // hover control can unlock them, but the press must never start a drag or
+    // add them to a movable multi-selection.
+    if (ann.locked) {
+      e.stopPropagation();
+      e.preventDefault();
+      app.setMultiSelected(null);
+      app.setSelected({ page: pageIndex, id: ann.id });
+      requestAnimationFrame(() => wrapRef.current?.focus({ preventScroll: true }));
+      return;
+    }
     // Shift-click builds a multi-selection (any annotation kind).
     if (e.shiftKey) {
       e.stopPropagation();
@@ -1406,6 +1418,7 @@ function AnnotationItem({
   // that kind selects it so it can be recolored or deleted; the eraser removes
   // any element it touches; everything else needs the Select tool.
   const selectable = app.tool === "select" && !ann.locked;
+  const lockedSelectable = app.tool === "select" && !!ann.locked && !previewing;
   const noteInRead = ann.kind === "note" && app.tool === "read" && !ann.locked;
   // The link target of this annotation, if any — an area-link, or a text box
   // that's been turned into a link. Followed on click while reading (baked
@@ -1444,7 +1457,7 @@ function AnnotationItem({
     transform: rotationDeg ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center",
     pointerEvents:
-      selectable || noteInRead || linkInRead || editMarkArmed || erasable
+      selectable || lockedSelectable || noteInRead || linkInRead || editMarkArmed || erasable
         ? "auto"
         : "none",
     cursor: selectable
@@ -1961,6 +1974,7 @@ function AnnotationItem({
     <div
       ref={wrapRef}
       data-annotation-id={ann.id}
+      data-annotation-locked={ann.locked ? "true" : undefined}
       data-text-annotation={ann.kind === "text" ? ann.id : undefined}
       tabIndex={isSelected && !editing ? 0 : undefined}
       style={style}
@@ -1978,6 +1992,9 @@ function AnnotationItem({
           : hasSearchHit && "annotation-search-hit",
         isEmptyText && "rounded-sm bg-blue-50/40",
         erasable && "hover:ring-2 hover:ring-red-400/80",
+        lockedSelectable &&
+          !isSelected &&
+          "hover:rounded-sm hover:ring-1 hover:ring-amber-500/70",
         !isSelected &&
           !erasable &&
           (ann.kind === "text"
@@ -2022,12 +2039,16 @@ function AnnotationItem({
         </div>
       )}
       {body}
-      {selectable && !editing && !previewing && (
+      {(selectable || lockedSelectable) && !editing && !previewing && (
         <CanvasLockControl
+          locked={!!ann.locked}
           visible={isSelected}
-          onLock={() => {
+          onToggle={() => {
             app.setMultiSelected(null);
-            app.updateAnnotation(pageIndex, { ...ann, locked: true });
+            app.updateAnnotation(pageIndex, {
+              ...ann,
+              locked: ann.locked ? undefined : true,
+            });
             app.setSelected({ page: pageIndex, id: ann.id });
           }}
         />
@@ -2319,21 +2340,29 @@ function AnnotationItem({
 }
 
 export function CanvasLockControl({
+  locked,
   visible,
-  onLock,
+  onToggle,
 }: {
+  locked: boolean;
   visible: boolean;
-  onLock: () => void;
+  onToggle: () => void;
 }) {
   return (
-    <Tip label="Lock object" desc="Prevent accidental changes">
+    <Tip
+      label={locked ? "Unlock object" : "Lock object"}
+      desc={locked ? "Allow changes again" : "Prevent accidental changes"}
+    >
       <button
         type="button"
         data-ann-controls
-        aria-label="Lock object"
+        aria-label={locked ? "Unlock object" : "Lock object"}
+        aria-pressed={locked}
         className={cn(
           "absolute -top-8 left-0 z-20 flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground opacity-0 shadow-md transition-[color,background-color,opacity] hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/annotation:opacity-100",
           visible && "opacity-100",
+          locked &&
+            "border-amber-500/50 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 dark:hover:bg-amber-900/80",
         )}
         onPointerDown={(e) => {
           // The control sits inside the draggable wrapper, so consume the
@@ -2344,10 +2373,14 @@ export function CanvasLockControl({
         onClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
-          onLock();
+          onToggle();
         }}
       >
-        <Lock className="h-3.5 w-3.5" />
+        {locked ? (
+          <LockOpen className="h-3.5 w-3.5" />
+        ) : (
+          <Lock className="h-3.5 w-3.5" />
+        )}
       </button>
     </Tip>
   );
