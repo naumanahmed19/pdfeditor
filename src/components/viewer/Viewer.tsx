@@ -632,13 +632,20 @@ function StartAction({
   icon: Icon,
   label,
   onClick,
+  tourId,
 }: {
   icon: LucideIcon;
   label: string;
   onClick: () => void;
+  tourId?: string;
 }) {
   return (
-    <button type="button" onClick={onClick} className="group flex items-center gap-2 text-left">
+    <button
+      type="button"
+      data-tour={tourId}
+      onClick={onClick}
+      className="group flex items-center gap-2 text-left"
+    >
       <Icon className="h-4 w-4 shrink-0 text-primary" />
       <span className="text-sm text-foreground transition-colors group-hover:text-primary group-hover:underline">
         {label}
@@ -722,7 +729,12 @@ function EmptyState() {
           <div>
             <h2 className="text-sm font-medium text-muted-foreground">Start</h2>
             <div className="flex flex-col items-start gap-2.5 pt-3">
-              <StartAction icon={FileText} label="Open a PDF…" onClick={() => void app.requestOpen()} />
+              <StartAction
+                icon={FileText}
+                label="Open a PDF…"
+                tourId="open-pdf"
+                onClick={() => void app.requestOpen()}
+              />
               <StartAction icon={FolderOpen} label="Open a folder of PDFs…" onClick={() => void app.openFolder()} />
               <StartAction icon={FilePlus2} label="Create a blank PDF" onClick={() => app.setScreen("templates")} />
             </div>

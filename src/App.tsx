@@ -31,6 +31,7 @@ import {
 import { Toaster } from "./components/ui/sonner";
 import { TitleBar } from "./components/layout/TitleBar";
 import { UpdateNotifier } from "./components/layout/UpdateNotifier";
+import { OnboardingTour } from "./components/layout/OnboardingTour";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DropZone } from "./components/layout/DropZone";
 import { CommandPalette } from "./components/command/CommandPalette";
@@ -323,7 +324,10 @@ function ContentHeader() {
   // mobile the panes stack vertically, so the tab row stays evenly split.
   if (app.screen === "viewer" && app.panes.length >= 2) {
     return (
-      <div className="sticky top-0 z-20 flex h-11 shrink-0 items-stretch overflow-hidden rounded-tl-lg border-b bg-background/95 backdrop-blur">
+      <div
+        data-tour="document-header"
+        className="sticky top-0 z-20 flex h-11 shrink-0 items-stretch overflow-hidden rounded-tl-lg border-b bg-background/95 backdrop-blur"
+      >
         {app.panes.map((pane, i) => {
           const size = !app.isMobile ? app.paneSizes[i] : undefined;
           return (
@@ -347,7 +351,10 @@ function ContentHeader() {
   // Viewer screen with a single document open: name + status + doc actions.
   if (app.screen === "viewer" && app.pdf) {
     return (
-      <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-3 backdrop-blur">
+      <div
+        data-tour="document-header"
+        className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-3 backdrop-blur"
+      >
         <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
         <DocName />
         {app.hasAnnotations && (
@@ -572,6 +579,53 @@ function Shell() {
       <DropZone />
       <UpdateNotifier />
       <ChromeExtensionBridge />
+      <OnboardingTour
+        hasDocument={Boolean(app.pdf)}
+        onOpenDocument={() => void app.requestOpen()}
+        onChooseComment={() => {
+          app.setScreen("viewer");
+          app.setEditMode(true);
+          app.setTool("note");
+        }}
+        onOpenComments={() => {
+          app.setScreen("viewer");
+          app.setSidebarOpen(true);
+          if (app.isMobile) app.setAiOpen(false);
+          window.dispatchEvent(
+            new CustomEvent("pdfwb:open-sidebar-panel", {
+              detail: { panel: "comments" },
+            }),
+          );
+        }}
+        onFocusSearch={() =>
+          window.dispatchEvent(new CustomEvent("pdfwb:focus-document-search"))
+        }
+        onOpenReplace={() =>
+          window.dispatchEvent(new CustomEvent("pdfwb:open-replace"))
+        }
+        onOpenSplit={() => app.setScreen("split")}
+        onChooseEditText={() => {
+          app.setScreen("viewer");
+          app.setEditMode(true);
+          app.setTool("edittext");
+        }}
+        onOpenSignature={() => {
+          app.setScreen("viewer");
+          app.setSignatureModalOpen(true);
+        }}
+        onChooseRedact={() => {
+          app.setScreen("viewer");
+          app.setEditMode(true);
+          app.setTool("redact");
+        }}
+        onRunOcr={() => {
+          app.setScreen("viewer");
+          void app.runOcrText();
+        }}
+        onOpenCommandPalette={() =>
+          window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
+        }
+      />
       <Toaster />
     </div>
   );

@@ -396,6 +396,15 @@ function ToolFlyoutButton({
         shortcut={active ? displayTool.shortcut : undefined}
       >
         <MenuTrigger
+          data-tour={
+            group.id === "markup"
+              ? "comment-tools"
+              : group.id === "text"
+                ? "text-tools"
+                : group.id === "cleanup"
+                  ? "cleanup-tools"
+                  : undefined
+          }
           aria-label={group.label}
           aria-pressed={active}
           className={cn(
@@ -928,6 +937,7 @@ export function EditorToolbar() {
         </Menu>
         <Tip label="Insert signature" desc="Draw, type or upload; saved for reuse">
           <button
+            data-tour="sign-document"
             onClick={() => app.setSignatureModalOpen(true)}
             className={cn(
               "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",

@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Combine,
   Command as CommandIcon,
+  CircleHelp,
   Crop,
   Download,
   Droplets,
@@ -65,6 +66,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { PrintModal } from "../viewer/PrintModal";
 import { BrandLogo } from "./BrandLogo";
 import { Tip } from "../ui/tooltip";
+import { TUTORIAL_CENTER_EVENT } from "./OnboardingTour";
 
 // Memoized: it has no props, so it ignores parent (Shell) re-renders and only
 // re-renders when its own selected store fields change.
@@ -512,7 +514,11 @@ function TitleBarImpl() {
             <MenuContent className="min-w-52">{fileItems}</MenuContent>
           </Menu>
           <Menu>
-            <MenuTrigger className={cn(triggerCls, "gap-1.5")} aria-label="Tools menu">
+            <MenuTrigger
+              data-tour="tools-menu"
+              className={cn(triggerCls, "gap-1.5")}
+              aria-label="Tools menu"
+            >
               <Wrench className="h-4 w-4 sm:hidden" />
               <span className="hidden sm:inline">Tools</span>
             </MenuTrigger>
@@ -522,6 +528,7 @@ function TitleBarImpl() {
       )}
       <Tip label="Command palette">
         <Button
+          data-tour="command-palette"
           variant="ghost"
           size="icon"
           className="h-7 w-7"
@@ -549,6 +556,7 @@ function TitleBarImpl() {
       />
 
       <form
+        data-tour="document-search"
         ref={searchFormRef}
         onSubmit={submitSearch}
         className="mx-auto hidden h-7 w-full max-w-md items-center gap-1 rounded-md border border-sidebar-border bg-background/70 px-2 sm:flex"
@@ -678,6 +686,7 @@ function TitleBarImpl() {
         <Popover open={replaceOpen} onOpenChange={setReplaceOpen}>
           <Tip label="Toggle replace">
             <PopoverTrigger
+              data-tour="replace-toggle"
               type="button"
               aria-label="Toggle replace"
               className={optionButtonClass(replaceOpen)}
@@ -812,6 +821,17 @@ function TitleBarImpl() {
           onClick={() => app.setScreen("settings")}
         >
           <Settings className="h-4 w-4" />
+        </Button>
+      </Tip>
+      <Tip label="Tutorials">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          aria-label="Open tutorials"
+          onClick={() => window.dispatchEvent(new CustomEvent(TUTORIAL_CENTER_EVENT))}
+        >
+          <CircleHelp className="h-4 w-4" />
         </Button>
       </Tip>
 

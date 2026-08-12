@@ -182,7 +182,7 @@ function CommentsPanel() {
 
   if (!notes.length) {
     return (
-      <p className="px-4 py-3 text-xs text-muted-foreground">
+      <p data-tour="comments-list" className="px-4 py-3 text-xs text-muted-foreground">
         No comments yet. Use the comment tool{" "}
         <MessageSquare className="inline h-3 w-3 align-[-2px]" /> in Edit mode
         to add one.
@@ -191,7 +191,10 @@ function CommentsPanel() {
   }
 
   return (
-    <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
+    <div
+      data-tour="comments-list"
+      className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2"
+    >
       <div className="flex flex-col gap-1.5">
         {notes.map(({ page, ann }) => (
           <button
