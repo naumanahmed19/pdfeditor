@@ -121,6 +121,9 @@ describe("tool page file drops", () => {
     expect(screen.getAllByText("one.pdf")).toHaveLength(4);
 
     fireEvent.click(screen.getByRole("button", { name: "Remove cover.png" }));
+    expect(screen.getByRole("alertdialog", { name: "Remove this file?" })).toBeTruthy();
+    expect(screen.getAllByText("cover.png")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Remove file" }));
     expect(screen.queryByText("cover.png")).toBeNull();
     expect(screen.getAllByTestId("tool-sidebar-file")[2].getAttribute("data-selected")).toBe("true");
     expect(screen.getByText("1 selected")).toBeTruthy();
@@ -138,6 +141,13 @@ describe("tool page file drops", () => {
     expect(screen.getByRole("button", { name: "Clear selection" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete selected files" }));
+    expect(screen.getByRole("alertdialog", { name: "Remove 3 files?" })).toBeTruthy();
+    expect(screen.getAllByTestId("file-collection-item")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected files" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove files" }));
     expect(screen.getByTestId("file-collection-empty")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Merge & download" })).toBeNull();
   });
@@ -195,6 +205,8 @@ describe("tool page file drops", () => {
     expect(screen.getByText("3 selected")).toBeTruthy();
 
     fireEvent.keyDown(window, { key: "Delete" });
+    expect(screen.getByRole("alertdialog", { name: "Remove 3 files?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove files" }));
     expect(screen.getByTestId("file-collection-empty")).toBeTruthy();
   });
 });

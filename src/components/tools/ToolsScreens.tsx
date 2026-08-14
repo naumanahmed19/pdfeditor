@@ -18,6 +18,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { ColorSwatch } from "../ui/color-swatch";
@@ -394,6 +402,7 @@ export function MergeScreen() {
   const app = useApp();
   const [files, setFiles] = useState<MergeFile[]>([]);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectionAnchorRef = useRef<string | null>(null);
@@ -551,19 +560,34 @@ export function MergeScreen() {
     );
   };
 
-  const removeSelected = () => {
-    if (!selectedFileIds.size) return;
+  const removeFiles = (ids: ReadonlySet<string>) => {
+    if (!ids.size) return;
     const remaining: MergeFile[] = [];
     for (const file of files) {
-      if (selectedFileIds.has(file.id)) {
+      if (ids.has(file.id)) {
         if (file.preview.kind === "image") URL.revokeObjectURL(file.preview.url);
       } else {
         remaining.push(file);
       }
     }
     setFiles(remaining);
-    setSelectedFileIds(remaining[0] ? new Set([remaining[0].id]) : new Set());
-    selectionAnchorRef.current = remaining[0]?.id ?? null;
+    setSelectedFileIds((current) => {
+      const next = new Set([...current].filter((id) => !ids.has(id)));
+      if (!next.size && remaining[0]) next.add(remaining[0].id);
+      return next;
+    });
+    if (selectionAnchorRef.current && ids.has(selectionAnchorRef.current)) {
+      selectionAnchorRef.current = remaining[0]?.id ?? null;
+    }
+  };
+
+  const requestRemoveSelected = () => {
+    if (selectedFileIds.size) setPendingDeleteIds(new Set(selectedFileIds));
+  };
+
+  const confirmRemove = () => {
+    if (pendingDeleteIds) removeFiles(pendingDeleteIds);
+    setPendingDeleteIds(null);
   };
 
   useEffect(() => {
@@ -572,7 +596,7 @@ export function MergeScreen() {
       if (
         target?.isContentEditable ||
         target?.matches("input, textarea, select") ||
-        target?.closest('[role="dialog"], [role="menu"]')
+        target?.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')
       ) {
         return;
       }
@@ -591,7 +615,7 @@ export function MergeScreen() {
       }
       if ((event.key === "Delete" || event.key === "Backspace") && selectedFileIds.size) {
         event.preventDefault();
-        removeSelected();
+        requestRemoveSelected();
       }
     };
 
@@ -599,25 +623,9 @@ export function MergeScreen() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [files, selectedFileIds]);
 
-  const remove = (index: number) => {
-    const removedId = files[index]?.id;
-    if (removedId) {
-      const fallbackId = files[index + 1]?.id ?? files[index - 1]?.id;
-      setSelectedFileIds((current) => {
-        const next = new Set(current);
-        next.delete(removedId);
-        if (!next.size && fallbackId) next.add(fallbackId);
-        return next;
-      });
-      if (selectionAnchorRef.current === removedId) {
-        selectionAnchorRef.current = fallbackId ?? null;
-      }
-    }
-    setFiles((prev) => {
-      const removed = prev[index];
-      if (removed?.preview.kind === "image") URL.revokeObjectURL(removed.preview.url);
-      return prev.filter((_, itemIndex) => itemIndex !== index);
-    });
+  const requestRemove = (index: number) => {
+    const file = files[index];
+    if (file) setPendingDeleteIds(new Set([file.id]));
   };
 
   const renderMergePreview = (file: MergeFile) => (
@@ -645,6 +653,9 @@ export function MergeScreen() {
       file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"
     }${file.rotation ? ` · ${file.rotation}°` : ""}`;
   const allFilesSelected = files.length > 0 && selectedFileIds.size === files.length;
+  const pendingDeleteFiles = pendingDeleteIds
+    ? files.filter((file) => pendingDeleteIds.has(file.id))
+    : [];
   const toggleSelectAll = () => {
     setSelectedFileIds(
       allFilesSelected ? new Set() : new Set(files.map((file) => file.id)),
@@ -714,7 +725,7 @@ export function MergeScreen() {
                     size="icon"
                     aria-label="Delete selected files"
                     className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                    onClick={removeSelected}
+                    onClick={requestRemoveSelected}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -757,7 +768,7 @@ export function MergeScreen() {
           onReorder={reorder}
           onDuplicate={duplicate}
           onRotate={rotate}
-          onRemove={remove}
+          onRemove={requestRemove}
           selectedKeys={selectedFileIds}
           onSelect={selectWithModifiers}
           onToggleSelect={toggleSelection}
@@ -777,7 +788,7 @@ export function MergeScreen() {
         onReorder={reorder}
         onDuplicate={duplicate}
         onRotate={rotate}
-        onRemove={remove}
+        onRemove={requestRemove}
         selectedKeys={selectedFileIds}
         onSelect={selectWithModifiers}
         onToggleSelect={toggleSelection}
@@ -794,6 +805,37 @@ export function MergeScreen() {
           e.target.value = "";
         }}
       />
+
+      <AlertDialog
+        open={pendingDeleteIds !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteIds(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingDeleteFiles.length === 1
+                ? "Remove this file?"
+                : `Remove ${pendingDeleteFiles.length} files?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDeleteFiles.length === 1
+                ? `“${pendingDeleteFiles[0]?.name ?? "This file"}” will be removed from the merge queue.`
+                : `The selected ${pendingDeleteFiles.length} files will be removed from the merge queue.`}
+              {" "}Your original files will not be deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button variant="outline" onClick={() => setPendingDeleteIds(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmRemove}>
+              {pendingDeleteFiles.length === 1 ? "Remove file" : "Remove files"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ToolShell>
   );
 }
