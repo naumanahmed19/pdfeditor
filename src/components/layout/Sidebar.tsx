@@ -49,6 +49,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { Tip } from "../ui/tooltip";
+import { TOOL_SIDEBAR_CONTENT_ID } from "../tools/ToolFileSidebar";
 
 // Memoized: no props, so parent (Shell) re-renders don't touch it; it and its
 // panels track their own store slices via useAppSelector.
@@ -56,7 +57,7 @@ export const Sidebar = memo(SidebarImpl);
 
 function SidebarImpl() {
   const app = useAppSelector(
-    (s) => ({ formBuilder: s.formBuilder, pdf: s.pdf, sidebarOpen: s.sidebarOpen, setFormBuilder: s.setFormBuilder }),
+    (s) => ({ formBuilder: s.formBuilder, pdf: s.pdf, screen: s.screen, sidebarOpen: s.sidebarOpen, setFormBuilder: s.setFormBuilder }),
     shallowEqual,
   );
   const [tab, setTab] = useState<SidebarTab>("recent");
@@ -97,6 +98,7 @@ function SidebarImpl() {
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
   const activeTab = app.pdf ? tab : "recent";
+  const hasToolSidebar = app.screen === "merge" || app.screen === "createimages";
 
   return (
     <aside
@@ -109,7 +111,23 @@ function SidebarImpl() {
       )}
     >
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-1 px-3 pt-2">
+        {hasToolSidebar ? (
+          <>
+            <div className="flex items-center gap-1 px-3 pt-2">
+              <div className="flex items-center gap-1.5 rounded-md bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-sm">
+                <Files className="h-3.5 w-3.5" />
+                Files
+              </div>
+            </div>
+            <div
+              id={TOOL_SIDEBAR_CONTENT_ID}
+              data-testid={TOOL_SIDEBAR_CONTENT_ID}
+              className="flex min-h-0 flex-1 flex-col"
+            />
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-1 px-3 pt-2">
           <TabButton
             active={activeTab === "recent"}
             onClick={() => setTab("recent")}
@@ -141,8 +159,8 @@ function SidebarImpl() {
               <MoreTabsMenu activeTab={activeTab} setTab={setTab} />
             </div>
           )}
-        </div>
-        {app.pdf && activeTab === "pages" ? (
+            </div>
+            {app.pdf && activeTab === "pages" ? (
           <ThumbnailList />
         ) : app.pdf && activeTab === "outline" ? (
           <OutlinePanel pdf={app.pdf} />
@@ -159,7 +177,9 @@ function SidebarImpl() {
         ) : app.pdf && activeTab === "form" ? (
           <FormBuilderSidebar />
         ) : (
-          <RecentList />
+              <RecentList />
+            )}
+          </>
         )}
       </div>
     </aside>

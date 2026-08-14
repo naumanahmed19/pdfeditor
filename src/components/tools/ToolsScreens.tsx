@@ -67,6 +67,7 @@ import {
   ToolPageHeader,
   type ToolPageWidth,
 } from "./ToolPageHeader";
+import { ToolFileSidebar, ToolSidebarPortal } from "./ToolFileSidebar";
 
 function ToolShell({
   title,
@@ -496,6 +497,10 @@ export function MergeScreen() {
         className="max-h-full max-w-full rounded object-contain"
       />
     );
+  const getMergeMeta = (file: MergeFile) =>
+    `${formatBytes(file.bytes.length)} · ${
+      file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"
+    }`;
 
   const doMerge = async (openAfter: boolean) => {
     if (files.length < 1 || (files.length < 2 && files[0].kind === "pdf")) {
@@ -551,12 +556,26 @@ export function MergeScreen() {
         ) : undefined
       }
     >
+      <ToolSidebarPortal>
+        <ToolFileSidebar
+          items={files}
+          getKey={(file) => file.id}
+          getName={(file) => file.name}
+          getMeta={getMergeMeta}
+          emptyText="No merge files yet. Add or drop PDFs and images to begin."
+          addLabel="Add merge files"
+          onAdd={() => inputRef.current?.click()}
+          onReorder={reorder}
+          onDuplicate={duplicate}
+          onRemove={remove}
+        />
+      </ToolSidebarPortal>
       <FileCollectionView
         items={files}
         view={collectionView}
         getKey={(file) => file.id}
         getName={(file) => file.name}
-        getMeta={(file) => `${formatBytes(file.bytes.length)} · ${file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"}`}
+        getMeta={getMergeMeta}
         renderPreview={renderMergePreview}
         emptyTitle="Drop PDFs or images here"
         emptyDescription="Add multiple PDF, PNG, or JPEG files. They will be merged in the order shown."

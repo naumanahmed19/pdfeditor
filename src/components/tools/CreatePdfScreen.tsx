@@ -18,6 +18,7 @@ import {
   type FileCollectionViewMode,
 } from "./FileCollectionView";
 import { ToolPageContainer, ToolPageHeader } from "./ToolPageHeader";
+import { ToolFileSidebar, ToolSidebarPortal } from "./ToolFileSidebar";
 
 interface ImageEntry {
   id: string;
@@ -174,6 +175,8 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
     else toast.error("Word or text to PDF accepts .docx, .txt, and .md files");
   };
   const { dragOver, dropHandlers } = useToolFileDrop(onDrop);
+  const getImageMeta = (image: ImageEntry) =>
+    `${formatBytes(image.bytes.length)} · ${image.type === "image/png" ? "PNG" : "JPEG"}`;
 
   return (
     <div
@@ -181,6 +184,22 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
       data-testid="tool-drop-surface"
       className="scrollbar-soft h-full overflow-y-auto p-6"
     >
+      {mode === "images" && (
+        <ToolSidebarPortal>
+          <ToolFileSidebar
+            items={images}
+            getKey={(image) => image.id}
+            getName={(image) => image.name}
+            getMeta={getImageMeta}
+            emptyText="No images yet. Add or drop PNG and JPEG files to begin."
+            addLabel="Add images"
+            onAdd={() => imageInputRef.current?.click()}
+            onReorder={reorderImage}
+            onDuplicate={duplicateImage}
+            onRemove={removeImage}
+          />
+        </ToolSidebarPortal>
+      )}
       <ToolPageContainer width={mode === "images" ? "full" : "standard"}>
         <ToolPageHeader
           title={mode === "images" ? "Images to PDF" : "Word or text to PDF"}
@@ -245,7 +264,7 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
             view={collectionView}
             getKey={(image) => image.id}
             getName={(image) => image.name}
-            getMeta={(image) => `${formatBytes(image.bytes.length)} · ${image.type === "image/png" ? "PNG" : "JPEG"}`}
+            getMeta={getImageMeta}
             renderPreview={(image) => (
               <img
                 src={image.url}

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DropZone } from "../layout/DropZone";
 import { MergeScreen, SplitScreen } from "./ToolsScreens";
 import { TOOL_HEADER_ACTIONS_ID } from "./ToolPageHeader";
+import { TOOL_SIDEBAR_CONTENT_ID } from "./ToolFileSidebar";
 
 const app = vi.hoisted(() => ({
   docBytes: null as Uint8Array | null,
@@ -71,6 +72,7 @@ describe("tool page file drops", () => {
     render(
       <>
         <div id={TOOL_HEADER_ACTIONS_ID} data-testid={TOOL_HEADER_ACTIONS_ID} />
+        <div id={TOOL_SIDEBAR_CONTENT_ID} data-testid={TOOL_SIDEBAR_CONTENT_ID} />
         <MergeScreen />
         <DropZone />
       </>,
@@ -78,6 +80,8 @@ describe("tool page file drops", () => {
     expect(screen.getByTestId("file-collection-empty")).toBeTruthy();
     expect(screen.getByTestId("tool-page-content").getAttribute("data-layout-width")).toBe("full");
     expect(screen.queryByRole("heading", { name: "Merge PDFs" })).toBeNull();
+    expect(screen.getByTestId("tool-file-sidebar")).toBeTruthy();
+    expect(screen.getByText(/No merge files yet/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Grid view" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Merge & download" })).toBeNull();
 
@@ -85,11 +89,12 @@ describe("tool page file drops", () => {
       dataTransfer: dataTransfer(files),
     });
 
-    await waitFor(() => expect(screen.getByText("one.pdf")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("one.pdf")).toHaveLength(2));
     expect(screen.queryByTestId("file-collection-empty")).toBeNull();
-    expect(screen.getByText("two.pdf")).toBeTruthy();
-    expect(screen.getByText("cover.png")).toBeTruthy();
+    expect(screen.getAllByText("two.pdf")).toHaveLength(2);
+    expect(screen.getAllByText("cover.png")).toHaveLength(2);
     expect(screen.getAllByTestId("pdf-thumbnail")).toHaveLength(2);
+    expect(screen.getAllByTestId("tool-sidebar-file")).toHaveLength(3);
     expect(app.openFile).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
     const actionsHost = screen.getByTestId(TOOL_HEADER_ACTIONS_ID);
@@ -105,7 +110,7 @@ describe("tool page file drops", () => {
     expect(screen.getAllByTestId("file-collection-item")).toHaveLength(3);
 
     fireEvent.click(screen.getByRole("button", { name: "Duplicate one.pdf" }));
-    expect(screen.getAllByText("one.pdf")).toHaveLength(2);
+    expect(screen.getAllByText("one.pdf")).toHaveLength(4);
 
     fireEvent.click(screen.getByRole("button", { name: "Remove cover.png" }));
     expect(screen.queryByText("cover.png")).toBeNull();
