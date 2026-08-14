@@ -64,6 +64,8 @@ describe("Images-to-PDF collection view", () => {
     expect(screen.getAllByText("second.jpg")).toHaveLength(2);
     expect(screen.getAllByTestId("file-collection-item")).toHaveLength(2);
     expect(screen.getAllByTestId("tool-sidebar-file")).toHaveLength(2);
+    expect(screen.getAllByTestId("tool-sidebar-file")[0].querySelector('[data-file-icon="png"]')).toBeTruthy();
+    expect(screen.getAllByTestId("tool-sidebar-file")[1].querySelector('[data-file-icon="jpeg"]')).toBeTruthy();
     expect(screen.getAllByTestId("tool-sidebar-file")[0].getAttribute("data-selected")).toBe("true");
     fireEvent.click(screen.getAllByTestId("file-collection-item")[1]);
     expect(screen.getAllByTestId("tool-sidebar-file")[1].getAttribute("data-selected")).toBe("true");

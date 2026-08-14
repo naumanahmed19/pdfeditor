@@ -570,6 +570,9 @@ export function MergeScreen() {
           getKey={(file) => file.id}
           getName={(file) => file.name}
           getMeta={getMergeMeta}
+          getFileType={(file) =>
+            file.kind === "pdf" ? "pdf" : file.kind === "image/png" ? "png" : "jpeg"
+          }
           emptyText="No merge files yet. Add or drop PDFs and images to begin."
           addLabel="Add merge files"
           onAdd={() => inputRef.current?.click()}

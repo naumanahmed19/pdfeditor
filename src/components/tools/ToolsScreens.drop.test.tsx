@@ -95,6 +95,8 @@ describe("tool page file drops", () => {
     expect(screen.getAllByText("cover.png")).toHaveLength(2);
     expect(screen.getAllByTestId("pdf-thumbnail")).toHaveLength(2);
     expect(screen.getAllByTestId("tool-sidebar-file")).toHaveLength(3);
+    expect(screen.getAllByTestId("tool-sidebar-file")[0].querySelector('[data-file-icon="pdf"]')).toBeTruthy();
+    expect(screen.getAllByTestId("tool-sidebar-file")[2].querySelector('[data-file-icon="png"]')).toBeTruthy();
     expect(screen.getAllByTestId("tool-sidebar-file")[0].getAttribute("data-selected")).toBe("true");
     expect(screen.getAllByTestId("file-collection-item")[0].getAttribute("data-selected")).toBe("true");
     fireEvent.click(screen.getAllByTestId("tool-sidebar-file")[1]);

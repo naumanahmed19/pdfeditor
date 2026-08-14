@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   Copy,
+  FileImage,
   FileText,
   GripVertical,
   MoreVertical,
@@ -44,6 +45,7 @@ interface ToolFileSidebarProps<T> {
   getKey: (item: T) => string;
   getName: (item: T) => string;
   getMeta: (item: T) => ReactNode;
+  getFileType: (item: T) => "pdf" | "png" | "jpeg";
   emptyText: string;
   addLabel: string;
   onAdd: () => void;
@@ -60,6 +62,7 @@ export function ToolFileSidebar<T>({
   getKey,
   getName,
   getMeta,
+  getFileType,
   emptyText,
   addLabel,
   onAdd,
@@ -106,6 +109,22 @@ export function ToolFileSidebar<T>({
               const name = getName(item);
               const key = getKey(item);
               const selected = selectedKey === key;
+              const fileType = getFileType(item);
+              const fileIcon =
+                fileType === "pdf" ? (
+                  <FileText
+                    data-file-icon="pdf"
+                    className="h-3.5 w-3.5 shrink-0 text-rose-500/80"
+                  />
+                ) : (
+                  <FileImage
+                    data-file-icon={fileType}
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      fileType === "png" ? "text-sky-500/80" : "text-violet-500/80",
+                    )}
+                  />
+                );
               return (
                 <div
                   key={key}
@@ -158,7 +177,7 @@ export function ToolFileSidebar<T>({
                   <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-background px-1 text-[9px] font-medium tabular-nums text-muted-foreground shadow-sm">
                     {index + 1}
                   </span>
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  {fileIcon}
                   <div className="min-w-0 flex-1">
                     <Tip label={name} side="right">
                       <p className="truncate text-xs text-sidebar-foreground">{name}</p>

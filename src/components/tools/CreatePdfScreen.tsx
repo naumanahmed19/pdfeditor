@@ -199,6 +199,7 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
             getKey={(image) => image.id}
             getName={(image) => image.name}
             getMeta={getImageMeta}
+            getFileType={(image) => (image.type === "image/png" ? "png" : "jpeg")}
             emptyText="No images yet. Add or drop PNG and JPEG files to begin."
             addLabel="Add images"
             onAdd={() => imageInputRef.current?.click()}
