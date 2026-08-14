@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Tip } from "../ui/tooltip";
 
 export interface FileCollectionViewProps<T> {
@@ -28,7 +29,9 @@ export interface FileCollectionViewProps<T> {
   onRotate?: (index: number) => void;
   onRemove: (index: number) => void;
   selectedKey?: string | null;
+  selectedKeys?: ReadonlySet<string>;
   onSelect?: (item: T) => void;
+  onToggleSelect?: (item: T, selected: boolean) => void;
 }
 
 /** Shared ordered-file layout for tools such as Merge and Images-to-PDF. */
@@ -48,7 +51,9 @@ export function FileCollectionView<T>({
   onRotate,
   onRemove,
   selectedKey,
+  selectedKeys,
   onSelect,
+  onToggleSelect,
 }: FileCollectionViewProps<T>) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -151,7 +156,7 @@ export function FileCollectionView<T>({
         {items.map((item, index) => {
           const name = getName(item);
           const key = getKey(item);
-          const selected = selectedKey === key;
+          const selected = selectedKeys ? selectedKeys.has(key) : selectedKey === key;
           const preview = renderPreview?.(item);
           return (
             <div
@@ -180,6 +185,19 @@ export function FileCollectionView<T>({
                 <span className="absolute left-2 top-2 rounded-full bg-background/90 px-1.5 py-0.5 text-[10px] font-semibold shadow-sm ring-1 ring-border">
                   {index + 1}
                 </span>
+                {onToggleSelect && (
+                  <span
+                    className="absolute right-2 top-2"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <Checkbox
+                      checked={selected}
+                      aria-label={`Select ${name}`}
+                      className="bg-background/90 shadow-sm"
+                      onCheckedChange={(checked: boolean) => onToggleSelect(item, checked)}
+                    />
+                  </span>
+                )}
               </div>
               <div className="min-w-0 px-1 pt-2">
                 <p className="truncate text-sm font-medium" title={name}>{name}</p>
@@ -229,7 +247,10 @@ function CollectionButton({
         size="icon"
         aria-label={label}
         disabled={disabled}
-        onClick={onClick}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick();
+        }}
         className={cn(
           "h-7 w-7 rounded text-muted-foreground hover:text-foreground disabled:opacity-40",
           destructive && "hover:text-destructive",

@@ -122,6 +122,24 @@ describe("tool page file drops", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove cover.png" }));
     expect(screen.queryByText("cover.png")).toBeNull();
+    expect(screen.getAllByTestId("tool-sidebar-file")[2].getAttribute("data-selected")).toBe("true");
+    expect(screen.getByText("1 selected")).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "Select one.pdf" })[0]);
+    expect(screen.getByText("2 selected")).toBeTruthy();
+    expect(actionsHost.contains(screen.getByRole("button", { name: "Rotate selected files" }))).toBe(true);
+    expect(actionsHost.contains(screen.getByRole("button", { name: "Delete selected files" }))).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Rotate selected files" }));
+    expect(screen.getAllByTestId("merge-file-preview")[0].getAttribute("data-rotation")).toBe("180");
+
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(screen.getByText("3 selected")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clear selection" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected files" }));
+    expect(screen.getByTestId("file-collection-empty")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Merge & download" })).toBeNull();
   });
 
   it("loads a dropped PDF into a single-document tool and keeps that tool active", async () => {

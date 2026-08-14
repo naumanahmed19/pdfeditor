@@ -393,7 +393,7 @@ const nextMergeFileId = () => `merge-file-${++mergeFileSequence}`;
 export function MergeScreen() {
   const app = useApp();
   const [files, setFiles] = useState<MergeFile[]>([]);
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const filesRef = useRef(files);
@@ -438,7 +438,9 @@ export function MergeScreen() {
     }
     if (next.length) {
       setFiles((prev) => [...prev, ...next]);
-      setSelectedFileId((current) => current ?? next[0].id);
+      setSelectedFileIds((current) =>
+        current.size ? current : new Set([next[0].id]),
+      );
     }
     if (skipped) {
       toast.error(
@@ -489,10 +491,54 @@ export function MergeScreen() {
     );
   };
 
+  const selectOnly = (file: MergeFile) => {
+    setSelectedFileIds(new Set([file.id]));
+  };
+
+  const toggleSelection = (file: MergeFile, selected: boolean) => {
+    setSelectedFileIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(file.id);
+      else next.delete(file.id);
+      return next;
+    });
+  };
+
+  const rotateSelected = () => {
+    if (!selectedFileIds.size) return;
+    setFiles((prev) =>
+      prev.map((file) =>
+        selectedFileIds.has(file.id)
+          ? { ...file, rotation: ((file.rotation + 90) % 360) as MergeFile["rotation"] }
+          : file,
+      ),
+    );
+  };
+
+  const removeSelected = () => {
+    if (!selectedFileIds.size) return;
+    const remaining: MergeFile[] = [];
+    for (const file of files) {
+      if (selectedFileIds.has(file.id)) {
+        if (file.preview.kind === "image") URL.revokeObjectURL(file.preview.url);
+      } else {
+        remaining.push(file);
+      }
+    }
+    setFiles(remaining);
+    setSelectedFileIds(remaining[0] ? new Set([remaining[0].id]) : new Set());
+  };
+
   const remove = (index: number) => {
     const removedId = files[index]?.id;
-    if (removedId && removedId === selectedFileId) {
-      setSelectedFileId(files[index + 1]?.id ?? files[index - 1]?.id ?? null);
+    if (removedId) {
+      const fallbackId = files[index + 1]?.id ?? files[index - 1]?.id;
+      setSelectedFileIds((current) => {
+        const next = new Set(current);
+        next.delete(removedId);
+        if (!next.size && fallbackId) next.add(fallbackId);
+        return next;
+      });
     }
     setFiles((prev) => {
       const removed = prev[index];
@@ -525,6 +571,7 @@ export function MergeScreen() {
     `${formatBytes(file.bytes.length)} · ${
       file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"
     }${file.rotation ? ` · ${file.rotation}°` : ""}`;
+  const allFilesSelected = files.length > 0 && selectedFileIds.size === files.length;
 
   const doMerge = async (openAfter: boolean) => {
     if (files.length < 1 || (files.length < 2 && files[0].kind === "pdf")) {
@@ -558,6 +605,47 @@ export function MergeScreen() {
       headerActions={
         files.length ? (
           <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7"
+              onClick={() =>
+                setSelectedFileIds(
+                  allFilesSelected ? new Set() : new Set(files.map((file) => file.id)),
+                )
+              }
+            >
+              {allFilesSelected ? "Clear selection" : "Select all"}
+            </Button>
+            {selectedFileIds.size > 0 && (
+              <>
+                <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
+                  {selectedFileIds.size} selected
+                </span>
+                <Tip label="Rotate selected files">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Rotate selected files"
+                    className="h-7 w-7"
+                    onClick={rotateSelected}
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                  </Button>
+                </Tip>
+                <Tip label="Delete selected files">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Delete selected files"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    onClick={removeSelected}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </Tip>
+              </>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -595,8 +683,9 @@ export function MergeScreen() {
           onDuplicate={duplicate}
           onRotate={rotate}
           onRemove={remove}
-          selectedKey={selectedFileId}
-          onSelect={(file) => setSelectedFileId(file.id)}
+          selectedKeys={selectedFileIds}
+          onSelect={selectOnly}
+          onToggleSelect={toggleSelection}
         />
       </ToolSidebarPortal>
       <FileCollectionView
@@ -614,8 +703,9 @@ export function MergeScreen() {
         onDuplicate={duplicate}
         onRotate={rotate}
         onRemove={remove}
-        selectedKey={selectedFileId}
-        onSelect={(file) => setSelectedFileId(file.id)}
+        selectedKeys={selectedFileIds}
+        onSelect={selectOnly}
+        onToggleSelect={toggleSelection}
       />
 
       <input

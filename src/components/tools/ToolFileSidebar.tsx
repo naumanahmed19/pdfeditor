@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Checkbox } from "../ui/checkbox";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Tip } from "../ui/tooltip";
 
@@ -55,7 +56,9 @@ interface ToolFileSidebarProps<T> {
   onRotate?: (index: number) => void;
   onRemove: (index: number) => void;
   selectedKey?: string | null;
+  selectedKeys?: ReadonlySet<string>;
   onSelect?: (item: T) => void;
+  onToggleSelect?: (item: T, selected: boolean) => void;
 }
 
 /** Compact Recent-style queue for file-heavy tools. */
@@ -73,7 +76,9 @@ export function ToolFileSidebar<T>({
   onRotate,
   onRemove,
   selectedKey,
+  selectedKeys,
   onSelect,
+  onToggleSelect,
 }: ToolFileSidebarProps<T>) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -111,7 +116,7 @@ export function ToolFileSidebar<T>({
             {items.map((item, index) => {
               const name = getName(item);
               const key = getKey(item);
-              const selected = selectedKey === key;
+              const selected = selectedKeys ? selectedKeys.has(key) : selectedKey === key;
               const fileType = getFileType(item);
               const fileIcon =
                 fileType === "pdf" ? (
@@ -177,6 +182,16 @@ export function ToolFileSidebar<T>({
                   )}
                 >
                   <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                  {onToggleSelect && (
+                    <span onClick={(event) => event.stopPropagation()}>
+                      <Checkbox
+                        checked={selected}
+                        aria-label={`Select ${name}`}
+                        className="h-3.5 w-3.5 bg-background"
+                        onCheckedChange={(checked: boolean) => onToggleSelect(item, checked)}
+                      />
+                    </span>
+                  )}
                   <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-background px-1 text-[9px] font-medium tabular-nums text-muted-foreground shadow-sm">
                     {index + 1}
                   </span>
