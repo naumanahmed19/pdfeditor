@@ -103,17 +103,14 @@ describe("tool page file drops", () => {
     expect(screen.getAllByTestId("tool-sidebar-file")[1].getAttribute("data-selected")).toBe("true");
     expect(screen.getAllByTestId("file-collection-item")[1].getAttribute("data-selected")).toBe("true");
     expect(app.openFile).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
     const actionsHost = screen.getByTestId(TOOL_HEADER_ACTIONS_ID);
     expect(actionsHost.contains(screen.getByRole("button", { name: "Merge & download" }))).toBe(true);
     expect(actionsHost.contains(screen.getByRole("button", { name: "Merge & open here" }))).toBe(true);
-    expect(actionsHost.contains(screen.getByRole("button", { name: "Grid view" }))).toBe(true);
     expect(screen.getByTestId("file-collection-add").textContent).toContain("Add more PDFs or images");
     expect(screen.queryByRole("button", { name: "Add PDFs / images" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "List view" }));
-    expect(screen.getByRole("button", { name: "List view" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("file-collection-add")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "List view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Grid view" })).toBeNull();
     expect(screen.getAllByTestId("file-collection-item")).toHaveLength(3);
 
     fireEvent.click(screen.getByRole("button", { name: "Duplicate one.pdf" }));

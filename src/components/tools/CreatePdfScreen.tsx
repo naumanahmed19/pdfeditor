@@ -12,11 +12,7 @@ import { cn, downloadBytes, formatBytes } from "../../lib/utils";
 import { imagesToPdf, type ImagePageSize } from "../../lib/pdftools";
 import { docxToPdf, textFileToPdf } from "../../lib/createpdf";
 import { isJpegFile, isPngFile, useToolFileDrop } from "./useToolFileDrop";
-import {
-  FileCollectionView,
-  FileCollectionViewToggle,
-  type FileCollectionViewMode,
-} from "./FileCollectionView";
+import { FileCollectionView } from "./FileCollectionView";
 import { ToolPageContainer, ToolPageHeader } from "./ToolPageHeader";
 import { ToolFileSidebar, ToolSidebarPortal } from "./ToolFileSidebar";
 
@@ -53,7 +49,6 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
   const app = useApp();
   const [images, setImages] = useState<ImageEntry[]>([]);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
-  const [collectionView, setCollectionView] = useState<FileCollectionViewMode>("grid");
   const [pageSize, setPageSize] = useState<ImagePageSize>("fit");
   const [busy, setBusy] = useState<null | "images" | "doc">(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -235,10 +230,6 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
                     <option value="letter">Letter portrait</option>
                   </Select>
                 </label>
-                <FileCollectionViewToggle
-                  value={collectionView}
-                  onValueChange={setCollectionView}
-                />
                 <Button
                   variant="ghost"
                   size="sm"
@@ -264,15 +255,9 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
         />
 
         {mode === "images" && (
-        <div
-          className={cn(
-            "rounded-xl border bg-card p-4 shadow-shell transition-colors",
-            dragOver && "border-blue-500 ring-1 ring-blue-500/50",
-          )}
-        >
+        <div className={cn(dragOver && "rounded-2xl ring-2 ring-blue-500/50")}>
           <FileCollectionView
             items={images}
-            view={collectionView}
             getKey={(image) => image.id}
             getName={(image) => image.name}
             getMeta={getImageMeta}

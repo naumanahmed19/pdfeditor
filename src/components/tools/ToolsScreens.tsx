@@ -57,11 +57,7 @@ import {
   useToolFileDrop,
   type DroppedHandlePromises,
 } from "./useToolFileDrop";
-import {
-  FileCollectionView,
-  FileCollectionViewToggle,
-  type FileCollectionViewMode,
-} from "./FileCollectionView";
+import { FileCollectionView } from "./FileCollectionView";
 import {
   ToolPageContainer,
   ToolPageHeader,
@@ -397,7 +393,6 @@ export function MergeScreen() {
   const app = useApp();
   const [files, setFiles] = useState<MergeFile[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
-  const [collectionView, setCollectionView] = useState<FileCollectionViewMode>("grid");
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const filesRef = useRef(files);
@@ -495,9 +490,9 @@ export function MergeScreen() {
     });
   };
 
-  const renderMergePreview = (file: MergeFile, view: FileCollectionViewMode) =>
+  const renderMergePreview = (file: MergeFile) =>
     file.preview.kind === "pdf" ? (
-      <Thumbnail pdf={file.preview.pdf} pageIndex={0} width={view === "grid" ? 128 : 44} />
+      <Thumbnail pdf={file.preview.pdf} pageIndex={0} width={128} />
     ) : (
       <img
         src={file.preview.url}
@@ -542,7 +537,6 @@ export function MergeScreen() {
       headerActions={
         files.length ? (
           <>
-            <FileCollectionViewToggle value={collectionView} onValueChange={setCollectionView} />
             <Button
               variant="ghost"
               size="sm"
@@ -585,7 +579,6 @@ export function MergeScreen() {
       </ToolSidebarPortal>
       <FileCollectionView
         items={files}
-        view={collectionView}
         getKey={(file) => file.id}
         getName={(file) => file.name}
         getMeta={getMergeMeta}

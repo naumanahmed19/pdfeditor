@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe("Images-to-PDF collection view", () => {
-  it("shares list/grid, duplicate, remove, and ordering controls with Merge", async () => {
+  it("shares grid, duplicate, remove, and ordering controls with Merge", async () => {
     render(
       <>
         <div id={TOOL_HEADER_ACTIONS_ID} data-testid={TOOL_HEADER_ACTIONS_ID} />
@@ -70,12 +70,10 @@ describe("Images-to-PDF collection view", () => {
     fireEvent.click(screen.getAllByTestId("file-collection-item")[1]);
     expect(screen.getAllByTestId("tool-sidebar-file")[1].getAttribute("data-selected")).toBe("true");
     expect(screen.getAllByTestId("file-collection-item")[1].getAttribute("data-selected")).toBe("true");
-    expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
     const actionsHost = screen.getByTestId(TOOL_HEADER_ACTIONS_ID);
     expect(actionsHost.contains(screen.getByLabelText("Page size"))).toBe(true);
     expect(actionsHost.contains(screen.getByRole("button", { name: "Create & open" }))).toBe(true);
     expect(actionsHost.contains(screen.getByRole("button", { name: "Download" }))).toBe(true);
-    expect(actionsHost.contains(screen.getByRole("button", { name: "Grid view" }))).toBe(true);
     expect(screen.getByTestId("file-collection-add").textContent).toContain("Add more images");
     expect(
       screen
@@ -83,9 +81,8 @@ describe("Images-to-PDF collection view", () => {
         .contains(screen.getByRole("button", { name: "Add images" })),
     ).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "List view" }));
-    expect(screen.getByRole("button", { name: "List view" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("file-collection-add")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "List view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Grid view" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Duplicate first.png" }));
     expect(screen.getAllByText("first.png")).toHaveLength(4);

@@ -4,8 +4,6 @@ import {
   ArrowUp,
   Copy,
   FilePlus2,
-  LayoutGrid,
-  List,
   Trash2,
   UploadCloud,
 } from "lucide-react";
@@ -13,15 +11,12 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tip } from "../ui/tooltip";
 
-export type FileCollectionViewMode = "list" | "grid";
-
 export interface FileCollectionViewProps<T> {
   items: T[];
-  view: FileCollectionViewMode;
   getKey: (item: T) => string;
   getName: (item: T) => string;
   getMeta?: (item: T) => ReactNode;
-  renderPreview?: (item: T, mode: FileCollectionViewMode) => ReactNode;
+  renderPreview?: (item: T) => ReactNode;
   emptyTitle: string;
   emptyDescription: ReactNode;
   emptyActionLabel: string;
@@ -37,7 +32,6 @@ export interface FileCollectionViewProps<T> {
 /** Shared ordered-file layout for tools such as Merge and Images-to-PDF. */
 export function FileCollectionView<T>({
   items,
-  view,
   getKey,
   getName,
   getMeta,
@@ -141,46 +135,14 @@ export function FileCollectionView<T>({
       </span>
 
       <div
-        className={cn(
-          view === "grid" && "grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3",
-        )}
+        className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3"
       >
         {items.map((item, index) => {
           const name = getName(item);
           const key = getKey(item);
           const selected = selectedKey === key;
-          const preview = renderPreview?.(item, view);
-          return view === "list" ? (
-            <div
-              key={key}
-              {...dragProps(index)}
-              data-testid="file-collection-item"
-              data-selected={selected || undefined}
-              role="button"
-              tabIndex={0}
-              aria-pressed={selected}
-              onClick={() => onSelect?.(item)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSelect?.(item);
-                }
-              }}
-              className={cn(
-                "mb-2 flex cursor-grab items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-sm shadow-sm transition-all hover:border-foreground/15 hover:shadow-md active:cursor-grabbing",
-                selected && "border-primary bg-primary/[0.025] ring-1 ring-primary/35",
-                dragOver === index && dragFrom !== index && "border-blue-500 ring-1 ring-blue-500/50",
-              )}
-            >
-              <span className="w-5 shrink-0 text-xs tabular-nums text-muted-foreground">{index + 1}.</span>
-              {preview && <div className="flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded bg-muted/30">{preview}</div>}
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{name}</p>
-                {getMeta && <div className="pt-0.5 text-xs text-muted-foreground">{getMeta(item)}</div>}
-              </div>
-              {controls(item, index)}
-            </div>
-          ) : (
+          const preview = renderPreview?.(item);
+          return (
             <div
               key={key}
               {...dragProps(index)}
@@ -218,97 +180,20 @@ export function FileCollectionView<T>({
             </div>
           );
         })}
-        {view === "list" ? (
-          <button
-            type="button"
-            data-testid="file-collection-add"
-            onClick={onEmptyAction}
-            className="mb-2 flex min-h-16 w-full items-center gap-3 rounded-xl border-2 border-dashed border-border bg-muted/15 px-4 text-left text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-background shadow-sm">
-              <FilePlus2 className="h-4 w-4" />
-            </span>
-            <span>
-              <span className="block text-sm font-medium">{addMoreLabel}</span>
-              <span className="block pt-0.5 text-xs text-muted-foreground">Drop files here or click to browse</span>
-            </span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            data-testid="file-collection-add"
-            onClick={onEmptyAction}
-            className="group flex min-h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/15 p-5 text-center text-muted-foreground transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:bg-primary/[0.03] hover:text-foreground hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl border bg-background shadow-sm transition-colors group-hover:text-primary">
-              <FilePlus2 className="h-5 w-5" />
-            </span>
-            <span className="pt-3 text-sm font-medium">{addMoreLabel}</span>
-            <span className="pt-1 text-xs text-muted-foreground">Drop or browse</span>
-          </button>
-        )}
+        <button
+          type="button"
+          data-testid="file-collection-add"
+          onClick={onEmptyAction}
+          className="group flex min-h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/15 p-5 text-center text-muted-foreground transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:bg-primary/[0.03] hover:text-foreground hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl border bg-background shadow-sm transition-colors group-hover:text-primary">
+            <FilePlus2 className="h-5 w-5" />
+          </span>
+          <span className="pt-3 text-sm font-medium">{addMoreLabel}</span>
+          <span className="pt-1 text-xs text-muted-foreground">Drop or browse</span>
+        </button>
       </div>
     </div>
-  );
-}
-
-export function FileCollectionViewToggle({
-  value,
-  onValueChange,
-}: {
-  value: FileCollectionViewMode;
-  onValueChange: (view: FileCollectionViewMode) => void;
-}) {
-  return (
-    <div
-      className="flex items-center rounded-md border bg-muted/40 shadow-sm"
-      role="group"
-      aria-label="File view"
-    >
-      <ViewButton
-        label="List view"
-        active={value === "list"}
-        onClick={() => onValueChange("list")}
-      >
-        <List className="h-3.5 w-3.5" />
-      </ViewButton>
-      <ViewButton
-        label="Grid view"
-        active={value === "grid"}
-        onClick={() => onValueChange("grid")}
-      >
-        <LayoutGrid className="h-3.5 w-3.5" />
-      </ViewButton>
-    </div>
-  );
-}
-
-function ViewButton({
-  label,
-  active,
-  onClick,
-  children,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <Tip label={label}>
-      <button
-        type="button"
-        aria-label={label}
-        aria-pressed={active}
-        onClick={onClick}
-        className={cn(
-          "flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors",
-          active ? "bg-background text-foreground shadow-sm" : "hover:text-foreground",
-        )}
-      >
-        {children}
-      </button>
-    </Tip>
   );
 }
 
