@@ -95,6 +95,11 @@ describe("tool page file drops", () => {
     expect(screen.getAllByText("cover.png")).toHaveLength(2);
     expect(screen.getAllByTestId("pdf-thumbnail")).toHaveLength(2);
     expect(screen.getAllByTestId("tool-sidebar-file")).toHaveLength(3);
+    expect(screen.getAllByTestId("tool-sidebar-file")[0].getAttribute("data-selected")).toBe("true");
+    expect(screen.getAllByTestId("file-collection-item")[0].getAttribute("data-selected")).toBe("true");
+    fireEvent.click(screen.getAllByTestId("tool-sidebar-file")[1]);
+    expect(screen.getAllByTestId("tool-sidebar-file")[1].getAttribute("data-selected")).toBe("true");
+    expect(screen.getAllByTestId("file-collection-item")[1].getAttribute("data-selected")).toBe("true");
     expect(app.openFile).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
     const actionsHost = screen.getByTestId(TOOL_HEADER_ACTIONS_ID);

@@ -30,6 +30,8 @@ export interface FileCollectionViewProps<T> {
   onReorder: (from: number, to: number) => void;
   onDuplicate: (index: number) => void;
   onRemove: (index: number) => void;
+  selectedKey?: string | null;
+  onSelect?: (item: T) => void;
 }
 
 /** Shared ordered-file layout for tools such as Merge and Images-to-PDF. */
@@ -48,6 +50,8 @@ export function FileCollectionView<T>({
   onReorder,
   onDuplicate,
   onRemove,
+  selectedKey,
+  onSelect,
 }: FileCollectionViewProps<T>) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -143,14 +147,28 @@ export function FileCollectionView<T>({
       >
         {items.map((item, index) => {
           const name = getName(item);
+          const key = getKey(item);
+          const selected = selectedKey === key;
           const preview = renderPreview?.(item, view);
           return view === "list" ? (
             <div
-              key={getKey(item)}
+              key={key}
               {...dragProps(index)}
               data-testid="file-collection-item"
+              data-selected={selected || undefined}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selected}
+              onClick={() => onSelect?.(item)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect?.(item);
+                }
+              }}
               className={cn(
                 "mb-2 flex cursor-grab items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-sm shadow-sm transition-all hover:border-foreground/15 hover:shadow-md active:cursor-grabbing",
+                selected && "border-primary bg-primary/[0.025] ring-1 ring-primary/35",
                 dragOver === index && dragFrom !== index && "border-blue-500 ring-1 ring-blue-500/50",
               )}
             >
@@ -164,11 +182,23 @@ export function FileCollectionView<T>({
             </div>
           ) : (
             <div
-              key={getKey(item)}
+              key={key}
               {...dragProps(index)}
               data-testid="file-collection-item"
+              data-selected={selected || undefined}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selected}
+              onClick={() => onSelect?.(item)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect?.(item);
+                }
+              }}
               className={cn(
                 "group/card flex cursor-grab flex-col rounded-xl border bg-card p-2 shadow-sm transition-all hover:-translate-y-0.5 hover:border-foreground/15 hover:shadow-md active:cursor-grabbing",
+                selected && "border-primary bg-primary/[0.025] ring-1 ring-primary/35",
                 dragOver === index && dragFrom !== index && "border-blue-500 ring-1 ring-blue-500/50",
               )}
             >

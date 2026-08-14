@@ -396,6 +396,7 @@ const nextMergeFileId = () => `merge-file-${++mergeFileSequence}`;
 export function MergeScreen() {
   const app = useApp();
   const [files, setFiles] = useState<MergeFile[]>([]);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [collectionView, setCollectionView] = useState<FileCollectionViewMode>("grid");
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -439,7 +440,10 @@ export function MergeScreen() {
         );
       }
     }
-    setFiles((prev) => [...prev, ...next]);
+    if (next.length) {
+      setFiles((prev) => [...prev, ...next]);
+      setSelectedFileId((current) => current ?? next[0].id);
+    }
     if (skipped) {
       toast.error(
         skipped === list.length
@@ -480,6 +484,10 @@ export function MergeScreen() {
   };
 
   const remove = (index: number) => {
+    const removedId = files[index]?.id;
+    if (removedId && removedId === selectedFileId) {
+      setSelectedFileId(files[index + 1]?.id ?? files[index - 1]?.id ?? null);
+    }
     setFiles((prev) => {
       const removed = prev[index];
       if (removed?.preview.kind === "image") URL.revokeObjectURL(removed.preview.url);
@@ -568,6 +576,8 @@ export function MergeScreen() {
           onReorder={reorder}
           onDuplicate={duplicate}
           onRemove={remove}
+          selectedKey={selectedFileId}
+          onSelect={(file) => setSelectedFileId(file.id)}
         />
       </ToolSidebarPortal>
       <FileCollectionView
@@ -585,6 +595,8 @@ export function MergeScreen() {
         onReorder={reorder}
         onDuplicate={duplicate}
         onRemove={remove}
+        selectedKey={selectedFileId}
+        onSelect={(file) => setSelectedFileId(file.id)}
       />
 
       <input

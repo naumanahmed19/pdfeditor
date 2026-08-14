@@ -52,6 +52,7 @@ export function DocToPdfScreen() {
 function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
   const app = useApp();
   const [images, setImages] = useState<ImageEntry[]>([]);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [collectionView, setCollectionView] = useState<FileCollectionViewMode>("grid");
   const [pageSize, setPageSize] = useState<ImagePageSize>("fit");
   const [busy, setBusy] = useState<null | "images" | "doc">(null);
@@ -83,10 +84,17 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
         url: URL.createObjectURL(f),
       });
     }
-    if (next.length) setImages((prev) => [...prev, ...next]);
+    if (next.length) {
+      setImages((prev) => [...prev, ...next]);
+      setSelectedImageId((current) => current ?? next[0].id);
+    }
   };
 
   const removeImage = (i: number) => {
+    const removedId = images[i]?.id;
+    if (removedId && removedId === selectedImageId) {
+      setSelectedImageId(images[i + 1]?.id ?? images[i - 1]?.id ?? null);
+    }
     setImages((prev) => {
       if (prev[i]) URL.revokeObjectURL(prev[i].url);
       return prev.filter((_, j) => j !== i);
@@ -197,6 +205,8 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
             onReorder={reorderImage}
             onDuplicate={duplicateImage}
             onRemove={removeImage}
+            selectedKey={selectedImageId}
+            onSelect={(image) => setSelectedImageId(image.id)}
           />
         </ToolSidebarPortal>
       )}
@@ -280,6 +290,8 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
             onReorder={reorderImage}
             onDuplicate={duplicateImage}
             onRemove={removeImage}
+            selectedKey={selectedImageId}
+            onSelect={(image) => setSelectedImageId(image.id)}
           />
 
           <input

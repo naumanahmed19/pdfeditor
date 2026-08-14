@@ -64,6 +64,10 @@ describe("Images-to-PDF collection view", () => {
     expect(screen.getAllByText("second.jpg")).toHaveLength(2);
     expect(screen.getAllByTestId("file-collection-item")).toHaveLength(2);
     expect(screen.getAllByTestId("tool-sidebar-file")).toHaveLength(2);
+    expect(screen.getAllByTestId("tool-sidebar-file")[0].getAttribute("data-selected")).toBe("true");
+    fireEvent.click(screen.getAllByTestId("file-collection-item")[1]);
+    expect(screen.getAllByTestId("tool-sidebar-file")[1].getAttribute("data-selected")).toBe("true");
+    expect(screen.getAllByTestId("file-collection-item")[1].getAttribute("data-selected")).toBe("true");
     expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
     const actionsHost = screen.getByTestId(TOOL_HEADER_ACTIONS_ID);
     expect(actionsHost.contains(screen.getByLabelText("Page size"))).toBe(true);

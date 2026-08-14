@@ -50,6 +50,8 @@ interface ToolFileSidebarProps<T> {
   onReorder: (from: number, to: number) => void;
   onDuplicate: (index: number) => void;
   onRemove: (index: number) => void;
+  selectedKey?: string | null;
+  onSelect?: (item: T) => void;
 }
 
 /** Compact Recent-style queue for file-heavy tools. */
@@ -64,6 +66,8 @@ export function ToolFileSidebar<T>({
   onReorder,
   onDuplicate,
   onRemove,
+  selectedKey,
+  onSelect,
 }: ToolFileSidebarProps<T>) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -100,11 +104,24 @@ export function ToolFileSidebar<T>({
           <div className="flex flex-col gap-0.5">
             {items.map((item, index) => {
               const name = getName(item);
+              const key = getKey(item);
+              const selected = selectedKey === key;
               return (
                 <div
-                  key={getKey(item)}
+                  key={key}
                   data-testid="tool-sidebar-file"
+                  data-selected={selected || undefined}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected}
                   draggable
+                  onClick={() => onSelect?.(item)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect?.(item);
+                    }
+                  }}
                   onDragStart={(event) => {
                     setDragFrom(index);
                     event.dataTransfer.effectAllowed = "move";
@@ -131,6 +148,8 @@ export function ToolFileSidebar<T>({
                   }}
                   className={cn(
                     "group flex cursor-grab items-center gap-1.5 rounded-md border-l-2 border-transparent px-1.5 py-1.5 text-left text-xs outline-none transition-colors hover:bg-sidebar-accent active:cursor-grabbing",
+                    selected &&
+                      "border-primary bg-background font-medium text-foreground shadow-sm",
                     dragOver === index && dragFrom !== index &&
                       "border-primary bg-sidebar-accent",
                   )}
