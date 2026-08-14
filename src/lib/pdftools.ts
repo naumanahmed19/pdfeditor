@@ -487,6 +487,8 @@ export interface MergeInput {
   bytes: Uint8Array;
   /** "pdf" or an image mime type. */
   kind: "pdf" | "image/png" | "image/jpeg";
+  /** Clockwise rotation applied to every page produced by this input. */
+  rotation?: 0 | 90 | 180 | 270;
 }
 
 /**
@@ -503,7 +505,12 @@ export async function mergeMixed(inputs: MergeInput[]): Promise<Uint8Array> {
     if (input.kind === "pdf") {
       const src = await load(input.bytes);
       const pages = await out.copyPages(src, src.getPageIndices());
-      pages.forEach((p) => out.addPage(p));
+      pages.forEach((page) => {
+        if (input.rotation) {
+          page.setRotation(degrees((page.getRotation().angle + input.rotation) % 360));
+        }
+        out.addPage(page);
+      });
       if (primary) {
         copyDocMetadata(src, out);
         primary = false;
@@ -511,6 +518,9 @@ export async function mergeMixed(inputs: MergeInput[]): Promise<Uint8Array> {
       registerCopiedFormFields(src, out, pages);
     } else {
       await imagesToPdfPages(out, { bytes: input.bytes, type: input.kind });
+      if (input.rotation) {
+        out.getPage(out.getPageCount() - 1).setRotation(degrees(input.rotation));
+      }
     }
   }
   return out.save();

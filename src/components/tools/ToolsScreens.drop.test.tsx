@@ -113,6 +113,10 @@ describe("tool page file drops", () => {
     expect(screen.queryByRole("button", { name: "Grid view" })).toBeNull();
     expect(screen.getAllByTestId("file-collection-item")).toHaveLength(3);
 
+    fireEvent.click(screen.getByRole("button", { name: "Rotate one.pdf clockwise" }));
+    expect(screen.getAllByText(/90°/)).toHaveLength(2);
+    expect(screen.getAllByTestId("merge-file-preview")[0].getAttribute("data-rotation")).toBe("90");
+
     fireEvent.click(screen.getByRole("button", { name: "Duplicate one.pdf" }));
     expect(screen.getAllByText("one.pdf")).toHaveLength(4);
 

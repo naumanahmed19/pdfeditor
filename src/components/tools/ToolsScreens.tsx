@@ -381,6 +381,7 @@ interface MergeFile {
   name: string;
   bytes: Uint8Array;
   kind: MergeInput["kind"];
+  rotation: 0 | 90 | 180 | 270;
   preview:
     | { kind: "pdf"; pdf: PdfDoc }
     | { kind: "image"; url: string };
@@ -427,7 +428,7 @@ export function MergeScreen() {
           kind === "pdf"
             ? { kind: "pdf", pdf: await loadPdf(bytes) }
             : { kind: "image", url: URL.createObjectURL(f) };
-        next.push({ id: nextMergeFileId(), name: f.name, bytes, kind, preview });
+        next.push({ id: nextMergeFileId(), name: f.name, bytes, kind, rotation: 0, preview });
       } catch (err) {
         skipped++;
         toast.error(
@@ -478,6 +479,16 @@ export function MergeScreen() {
     });
   };
 
+  const rotate = (index: number) => {
+    setFiles((prev) =>
+      prev.map((file, itemIndex) =>
+        itemIndex === index
+          ? { ...file, rotation: ((file.rotation + 90) % 360) as MergeFile["rotation"] }
+          : file,
+      ),
+    );
+  };
+
   const remove = (index: number) => {
     const removedId = files[index]?.id;
     if (removedId && removedId === selectedFileId) {
@@ -490,20 +501,30 @@ export function MergeScreen() {
     });
   };
 
-  const renderMergePreview = (file: MergeFile) =>
-    file.preview.kind === "pdf" ? (
-      <Thumbnail pdf={file.preview.pdf} pageIndex={0} width={128} />
-    ) : (
-      <img
-        src={file.preview.url}
-        alt=""
-        className="max-h-full max-w-full rounded object-contain"
-      />
-    );
+  const renderMergePreview = (file: MergeFile) => (
+    <div
+      data-testid="merge-file-preview"
+      data-rotation={file.rotation}
+      className="flex h-full w-full items-center justify-center transition-transform duration-200"
+      style={{
+        transform: `rotate(${file.rotation}deg) scale(${file.rotation % 180 === 0 ? 1 : 0.75})`,
+      }}
+    >
+      {file.preview.kind === "pdf" ? (
+        <Thumbnail pdf={file.preview.pdf} pageIndex={0} width={128} />
+      ) : (
+        <img
+          src={file.preview.url}
+          alt=""
+          className="max-h-full max-w-full rounded object-contain"
+        />
+      )}
+    </div>
+  );
   const getMergeMeta = (file: MergeFile) =>
     `${formatBytes(file.bytes.length)} · ${
       file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"
-    }`;
+    }${file.rotation ? ` · ${file.rotation}°` : ""}`;
 
   const doMerge = async (openAfter: boolean) => {
     if (files.length < 1 || (files.length < 2 && files[0].kind === "pdf")) {
@@ -572,6 +593,7 @@ export function MergeScreen() {
           onAdd={() => inputRef.current?.click()}
           onReorder={reorder}
           onDuplicate={duplicate}
+          onRotate={rotate}
           onRemove={remove}
           selectedKey={selectedFileId}
           onSelect={(file) => setSelectedFileId(file.id)}
@@ -590,6 +612,7 @@ export function MergeScreen() {
         onEmptyAction={() => inputRef.current?.click()}
         onReorder={reorder}
         onDuplicate={duplicate}
+        onRotate={rotate}
         onRemove={remove}
         selectedKey={selectedFileId}
         onSelect={(file) => setSelectedFileId(file.id)}

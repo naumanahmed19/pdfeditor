@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Copy,
   FilePlus2,
+  RotateCw,
   Trash2,
   UploadCloud,
 } from "lucide-react";
@@ -24,6 +25,7 @@ export interface FileCollectionViewProps<T> {
   onEmptyAction: () => void;
   onReorder: (from: number, to: number) => void;
   onDuplicate: (index: number) => void;
+  onRotate?: (index: number) => void;
   onRemove: (index: number) => void;
   selectedKey?: string | null;
   onSelect?: (item: T) => void;
@@ -43,6 +45,7 @@ export function FileCollectionView<T>({
   onEmptyAction,
   onReorder,
   onDuplicate,
+  onRotate,
   onRemove,
   selectedKey,
   onSelect,
@@ -93,6 +96,14 @@ export function FileCollectionView<T>({
         <CollectionButton label={`Duplicate ${name}`} onClick={() => onDuplicate(index)}>
           <Copy className="h-3.5 w-3.5" />
         </CollectionButton>
+        {onRotate && (
+          <CollectionButton
+            label={`Rotate ${name} clockwise`}
+            onClick={() => onRotate(index)}
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+          </CollectionButton>
+        )}
         <CollectionButton label={`Remove ${name}`} onClick={() => onRemove(index)} destructive>
           <Trash2 className="h-3.5 w-3.5" />
         </CollectionButton>

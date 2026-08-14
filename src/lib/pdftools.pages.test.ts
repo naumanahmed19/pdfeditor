@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   decodePDFRawStream,
+  degrees,
   PDFDocument,
   PDFName,
   PDFRawStream,
@@ -11,6 +12,7 @@ import {
   deletePages,
   extractPages,
   insertBlankPage,
+  mergeMixed,
   mergePdfs,
   movePage,
   setOutline,
@@ -347,5 +349,28 @@ describe("mergePdfs (metadata + interactive form fields)", () => {
     expect(doc.getForm().getTextField("name_p1").getText()).toBe("hello");
     expect(doc.getForm().getTextField("other_field").getText()).toBe("B");
     expect(doc.getTitle()).toBe("Fixture Title");
+  });
+});
+
+describe("mergeMixed rotation", () => {
+  const redPixelPng = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    ),
+    (char) => char.charCodeAt(0),
+  );
+
+  it("rotates every copied PDF page and an image page clockwise", async () => {
+    const source = await PDFDocument.create();
+    source.addPage([200, 300]).setRotation(degrees(90));
+    source.addPage([300, 400]);
+
+    const out = await mergeMixed([
+      { bytes: await source.save(), kind: "pdf", rotation: 90 },
+      { bytes: redPixelPng, kind: "image/png", rotation: 270 },
+    ]);
+    const merged = await PDFDocument.load(out);
+
+    expect(merged.getPages().map((page) => page.getRotation().angle)).toEqual([180, 90, 270]);
   });
 });

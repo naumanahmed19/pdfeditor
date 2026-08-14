@@ -9,6 +9,7 @@ import {
   GripVertical,
   MoreVertical,
   Plus,
+  RotateCw,
   Trash2,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -51,6 +52,7 @@ interface ToolFileSidebarProps<T> {
   onAdd: () => void;
   onReorder: (from: number, to: number) => void;
   onDuplicate: (index: number) => void;
+  onRotate?: (index: number) => void;
   onRemove: (index: number) => void;
   selectedKey?: string | null;
   onSelect?: (item: T) => void;
@@ -68,6 +70,7 @@ export function ToolFileSidebar<T>({
   onAdd,
   onReorder,
   onDuplicate,
+  onRotate,
   onRemove,
   selectedKey,
   onSelect,
@@ -210,6 +213,12 @@ export function ToolFileSidebar<T>({
                         <Copy className="h-4 w-4 text-muted-foreground" />
                         Duplicate
                       </MenuItem>
+                      {onRotate && (
+                        <MenuItem onClick={() => onRotate(index)}>
+                          <RotateCw className="h-4 w-4 text-muted-foreground" />
+                          Rotate clockwise
+                        </MenuItem>
+                      )}
                       <MenuItem
                         onClick={() => onRemove(index)}
                         className="text-destructive data-[highlighted]:text-destructive"
