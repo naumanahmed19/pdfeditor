@@ -57,7 +57,11 @@ interface ToolFileSidebarProps<T> {
   onRemove: (index: number) => void;
   selectedKey?: string | null;
   selectedKeys?: ReadonlySet<string>;
-  onSelect?: (item: T) => void;
+  onSelect?: (
+    item: T,
+    index: number,
+    modifiers: { toggle: boolean; range: boolean },
+  ) => void;
   onToggleSelect?: (item: T, selected: boolean) => void;
 }
 
@@ -82,6 +86,15 @@ export function ToolFileSidebar<T>({
 }: ToolFileSidebarProps<T>) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const selectItem = (
+    item: T,
+    index: number,
+    event: Pick<React.MouseEvent | React.KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey">,
+  ) =>
+    onSelect?.(item, index, {
+      toggle: event.ctrlKey || event.metaKey,
+      range: event.shiftKey,
+    });
 
   return (
     <div data-testid="tool-file-sidebar" className="flex min-h-0 flex-1 flex-col">
@@ -142,11 +155,11 @@ export function ToolFileSidebar<T>({
                   tabIndex={0}
                   aria-pressed={selected}
                   draggable
-                  onClick={() => onSelect?.(item)}
+                  onClick={(event) => selectItem(item, index, event)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      onSelect?.(item);
+                      selectItem(item, index, event);
                     }
                   }}
                   onDragStart={(event) => {
@@ -183,11 +196,14 @@ export function ToolFileSidebar<T>({
                 >
                   <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
                   {onToggleSelect && (
-                    <span onClick={(event) => event.stopPropagation()}>
+                    <span
+                      className="cursor-pointer"
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       <Checkbox
                         checked={selected}
                         aria-label={`Select ${name}`}
-                        className="h-3.5 w-3.5 bg-background"
+                        className="h-3.5 w-3.5 cursor-pointer bg-background"
                         onCheckedChange={(checked: boolean) => onToggleSelect(item, checked)}
                       />
                     </span>

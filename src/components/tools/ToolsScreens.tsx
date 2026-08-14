@@ -396,6 +396,7 @@ export function MergeScreen() {
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectionAnchorRef = useRef<string | null>(null);
   const filesRef = useRef(files);
   filesRef.current = files;
   useEffect(
@@ -493,6 +494,7 @@ export function MergeScreen() {
 
   const selectOnly = (file: MergeFile) => {
     setSelectedFileIds(new Set([file.id]));
+    selectionAnchorRef.current = file.id;
   };
 
   const toggleSelection = (file: MergeFile, selected: boolean) => {
@@ -502,6 +504,40 @@ export function MergeScreen() {
       else next.delete(file.id);
       return next;
     });
+    selectionAnchorRef.current = file.id;
+  };
+
+  const selectWithModifiers = (
+    file: MergeFile,
+    index: number,
+    modifiers: { toggle: boolean; range: boolean },
+  ) => {
+    if (modifiers.range && selectionAnchorRef.current) {
+      const anchorIndex = files.findIndex((item) => item.id === selectionAnchorRef.current);
+      if (anchorIndex >= 0) {
+        const start = Math.min(anchorIndex, index);
+        const end = Math.max(anchorIndex, index);
+        setSelectedFileIds((current) => {
+          const next = modifiers.toggle ? new Set(current) : new Set<string>();
+          for (let itemIndex = start; itemIndex <= end; itemIndex++) {
+            next.add(files[itemIndex].id);
+          }
+          return next;
+        });
+        return;
+      }
+    }
+    if (modifiers.toggle) {
+      setSelectedFileIds((current) => {
+        const next = new Set(current);
+        if (next.has(file.id)) next.delete(file.id);
+        else next.add(file.id);
+        return next;
+      });
+      selectionAnchorRef.current = file.id;
+      return;
+    }
+    selectOnly(file);
   };
 
   const rotateSelected = () => {
@@ -527,7 +563,41 @@ export function MergeScreen() {
     }
     setFiles(remaining);
     setSelectedFileIds(remaining[0] ? new Set([remaining[0].id]) : new Set());
+    selectionAnchorRef.current = remaining[0]?.id ?? null;
   };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (
+        target?.isContentEditable ||
+        target?.matches("input, textarea, select") ||
+        target?.closest('[role="dialog"], [role="menu"]')
+      ) {
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        setSelectedFileIds(new Set(files.map((file) => file.id)));
+        selectionAnchorRef.current = files[0]?.id ?? null;
+        return;
+      }
+      if (event.key === "Escape" && selectedFileIds.size) {
+        event.preventDefault();
+        setSelectedFileIds(new Set());
+        selectionAnchorRef.current = null;
+        return;
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedFileIds.size) {
+        event.preventDefault();
+        removeSelected();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [files, selectedFileIds]);
 
   const remove = (index: number) => {
     const removedId = files[index]?.id;
@@ -539,6 +609,9 @@ export function MergeScreen() {
         if (!next.size && fallbackId) next.add(fallbackId);
         return next;
       });
+      if (selectionAnchorRef.current === removedId) {
+        selectionAnchorRef.current = fallbackId ?? null;
+      }
     }
     setFiles((prev) => {
       const removed = prev[index];
@@ -572,6 +645,12 @@ export function MergeScreen() {
       file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"
     }${file.rotation ? ` · ${file.rotation}°` : ""}`;
   const allFilesSelected = files.length > 0 && selectedFileIds.size === files.length;
+  const toggleSelectAll = () => {
+    setSelectedFileIds(
+      allFilesSelected ? new Set() : new Set(files.map((file) => file.id)),
+    );
+    selectionAnchorRef.current = allFilesSelected ? null : (files[0]?.id ?? null);
+  };
 
   const doMerge = async (openAfter: boolean) => {
     if (files.length < 1 || (files.length < 2 && files[0].kind === "pdf")) {
@@ -609,11 +688,7 @@ export function MergeScreen() {
               variant="ghost"
               size="sm"
               className="h-7"
-              onClick={() =>
-                setSelectedFileIds(
-                  allFilesSelected ? new Set() : new Set(files.map((file) => file.id)),
-                )
-              }
+              onClick={toggleSelectAll}
             >
               {allFilesSelected ? "Clear selection" : "Select all"}
             </Button>
@@ -684,7 +759,7 @@ export function MergeScreen() {
           onRotate={rotate}
           onRemove={remove}
           selectedKeys={selectedFileIds}
-          onSelect={selectOnly}
+          onSelect={selectWithModifiers}
           onToggleSelect={toggleSelection}
         />
       </ToolSidebarPortal>
@@ -704,7 +779,7 @@ export function MergeScreen() {
         onRotate={rotate}
         onRemove={remove}
         selectedKeys={selectedFileIds}
-        onSelect={selectOnly}
+        onSelect={selectWithModifiers}
         onToggleSelect={toggleSelection}
       />
 

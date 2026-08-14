@@ -30,7 +30,11 @@ export interface FileCollectionViewProps<T> {
   onRemove: (index: number) => void;
   selectedKey?: string | null;
   selectedKeys?: ReadonlySet<string>;
-  onSelect?: (item: T) => void;
+  onSelect?: (
+    item: T,
+    index: number,
+    modifiers: { toggle: boolean; range: boolean },
+  ) => void;
   onToggleSelect?: (item: T, selected: boolean) => void;
 }
 
@@ -57,6 +61,15 @@ export function FileCollectionView<T>({
 }: FileCollectionViewProps<T>) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const selectItem = (
+    item: T,
+    index: number,
+    event: Pick<React.MouseEvent | React.KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey">,
+  ) =>
+    onSelect?.(item, index, {
+      toggle: event.ctrlKey || event.metaKey,
+      range: event.shiftKey,
+    });
 
   if (!items.length) {
     return (
@@ -167,11 +180,11 @@ export function FileCollectionView<T>({
               role="button"
               tabIndex={0}
               aria-pressed={selected}
-              onClick={() => onSelect?.(item)}
+              onClick={(event) => selectItem(item, index, event)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  onSelect?.(item);
+                  selectItem(item, index, event);
                 }
               }}
               className={cn(
@@ -187,13 +200,13 @@ export function FileCollectionView<T>({
                 </span>
                 {onToggleSelect && (
                   <span
-                    className="absolute right-2 top-2"
+                    className="absolute right-2 top-2 cursor-pointer"
                     onClick={(event) => event.stopPropagation()}
                   >
                     <Checkbox
                       checked={selected}
                       aria-label={`Select ${name}`}
-                      className="bg-background/90 shadow-sm"
+                      className="cursor-pointer bg-background/90 shadow-sm"
                       onCheckedChange={(checked: boolean) => onToggleSelect(item, checked)}
                     />
                   </span>

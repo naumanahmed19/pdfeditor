@@ -160,4 +160,41 @@ describe("tool page file drops", () => {
     expect(app.openFile).toHaveBeenCalledWith(file, undefined);
     expect(app.setScreen).toHaveBeenCalledWith("split");
   });
+
+  it("supports select-all, modifier-click ranges, and delete keyboard shortcuts", async () => {
+    render(
+      <>
+        <div id={TOOL_HEADER_ACTIONS_ID} data-testid={TOOL_HEADER_ACTIONS_ID} />
+        <div id={TOOL_SIDEBAR_CONTENT_ID} data-testid={TOOL_SIDEBAR_CONTENT_ID} />
+        <MergeScreen />
+      </>,
+    );
+
+    fireEvent.drop(screen.getByTestId("tool-drop-surface"), {
+      dataTransfer: dataTransfer([
+        droppedFile("first.pdf", "application/pdf"),
+        droppedFile("second.pdf", "application/pdf"),
+        droppedFile("third.pdf", "application/pdf"),
+      ]),
+    });
+    await waitFor(() => expect(screen.getAllByTestId("tool-sidebar-file")).toHaveLength(3));
+
+    const checkbox = screen.getAllByRole("checkbox", { name: "Select first.pdf" })[0];
+    expect(checkbox.className).toContain("cursor-pointer");
+
+    fireEvent.keyDown(window, { key: "a", ctrlKey: true });
+    expect(screen.getByText("3 selected")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByText(/selected$/)).toBeNull();
+
+    const sidebarFiles = screen.getAllByTestId("tool-sidebar-file");
+    fireEvent.click(sidebarFiles[0], { ctrlKey: true });
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    fireEvent.click(sidebarFiles[2], { shiftKey: true });
+    expect(screen.getByText("3 selected")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Delete" });
+    expect(screen.getByTestId("file-collection-empty")).toBeTruthy();
+  });
 });
