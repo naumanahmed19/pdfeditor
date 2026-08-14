@@ -6,6 +6,11 @@ import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 import { loadPdf, extractAllText, type PdfDoc } from "../../lib/pdf";
 import { diffWords, hasTextChange, pixelDiffPage, type DiffPart } from "../../lib/compare";
+import {
+  isPdfFile,
+  useToolFileDrop,
+  type ToolFileDropHandlers,
+} from "./useToolFileDrop";
 
 type Mode = "text" | "pixel";
 
@@ -26,11 +31,40 @@ export function CompareScreen() {
   const [busy, setBusy] = useState(false);
   const diffCanvasRef = useRef<HTMLCanvasElement>(null);
   const [pixelChanged, setPixelChanged] = useState<number | null>(null);
+  const pickComparisonRef = useRef<(file: File) => Promise<void>>(async () => {});
 
   // Render the pixel diff whenever the page or mode changes. Declared BEFORE the
   // early return below so the hook order stays stable when a document opens or
   // closes — otherwise React throws "Rendered fewer hooks than expected" (#300).
   const bytesA = app.docBytes;
+  const consumeDroppedFiles = async (files: File[], handles: Array<Promise<unknown>>) => {
+    const pdfs = files.flatMap((file, index) =>
+      isPdfFile(file) ? [{ file, index }] : [],
+    );
+    if (!pdfs.length) {
+      toast.error("Compare accepts PDF files");
+      return;
+    }
+    if (files.length > 1) {
+      toast.info("Compare uses one dropped PDF at a time; using the first file");
+    }
+
+    const [{ file, index }] = pdfs;
+    if (app.pdf && bytesA) {
+      await pickComparisonRef.current(file);
+      return;
+    }
+
+    const resolvedHandles = await Promise.all(handles);
+    const handle = resolvedHandles[index] as { kind?: string } | null | undefined;
+    const opened = await app.openFile(file, handle?.kind === "file" ? handle : undefined);
+    if (opened) {
+      app.setScreen("compare");
+      toast.success(`${file.name} loaded; drop a second PDF to compare`);
+    }
+  };
+  const { dragOver, dropHandlers } = useToolFileDrop(consumeDroppedFiles);
+
   useEffect(() => {
     if (mode !== "pixel" || !bytesB || !bytesA) return;
     let cancelled = false;
@@ -63,7 +97,12 @@ export function CompareScreen() {
 
   if (!app.pdf || !bytesA) {
     return (
-      <ToolShellLite title="Compare documents" desc="Open a PDF first to compare it with another.">
+      <ToolShellLite
+        title="Compare documents"
+        desc="Open a PDF first to compare it with another."
+        dragOver={dragOver}
+        dropHandlers={dropHandlers}
+      >
         <div className="rounded-xl border border-dashed bg-card px-6 py-10 text-center text-sm text-muted-foreground">
           Open a PDF first (title bar → Open PDF), then pick a second file to compare.
         </div>
@@ -97,6 +136,7 @@ export function CompareScreen() {
       setBusy(false);
     }
   };
+  pickComparisonRef.current = onPickFile;
 
   const parts: DiffPart[] =
     bytesB && page < Math.max(textA.length, textB.length)
@@ -105,7 +145,13 @@ export function CompareScreen() {
   const changed = hasTextChange(parts);
 
   return (
-    <div className="scrollbar-soft h-full overflow-y-auto p-6">
+    <div
+      {...dropHandlers}
+      className={cn(
+        "scrollbar-soft h-full overflow-y-auto p-6 transition-shadow",
+        dragOver && "ring-2 ring-inset ring-blue-500/60",
+      )}
+    >
       <div className="mx-auto max-w-5xl">
         <div className="flex items-center gap-2">
           <GitCompare className="h-5 w-5 text-primary" />
@@ -272,13 +318,23 @@ function ToolShellLite({
   title,
   desc,
   children,
+  dragOver,
+  dropHandlers,
 }: {
   title: string;
   desc: string;
   children: React.ReactNode;
+  dragOver: boolean;
+  dropHandlers: ToolFileDropHandlers;
 }) {
   return (
-    <div className="scrollbar-soft h-full overflow-y-auto p-6">
+    <div
+      {...dropHandlers}
+      className={cn(
+        "scrollbar-soft h-full overflow-y-auto p-6 transition-shadow",
+        dragOver && "ring-2 ring-inset ring-blue-500/60",
+      )}
+    >
       <div className="mx-auto max-w-3xl">
         <h1 className="text-lg font-semibold">{title}</h1>
         <p className="pb-5 pt-1 text-sm text-muted-foreground">{desc}</p>

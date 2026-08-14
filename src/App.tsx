@@ -55,6 +55,7 @@ import { CompareScreen } from "./components/tools/CompareScreen";
 import { DocToPdfScreen, ImagesToPdfScreen } from "./components/tools/CreatePdfScreen";
 import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
+import { TOOL_HEADER_ACTIONS_ID } from "./components/tools/ToolPageHeader";
 import { ChromeExtensionBridge } from "./components/ChromeExtensionBridge";
 
 const SCREEN_TITLES: Record<string, string> = {
@@ -426,6 +427,13 @@ function ContentHeader() {
         </div>
       ) : (
         <span className="text-sm font-medium">{SCREEN_TITLES[app.screen]}</span>
+      )}
+      {app.screen !== "viewer" && (
+        <div
+          id={TOOL_HEADER_ACTIONS_ID}
+          data-testid={TOOL_HEADER_ACTIONS_ID}
+          className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5"
+        />
       )}
     </div>
   );

@@ -1,0 +1,86 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ImagesToPdfScreen } from "./CreatePdfScreen";
+import { TOOL_HEADER_ACTIONS_ID } from "./ToolPageHeader";
+
+const app = vi.hoisted(() => ({
+  openBytes: vi.fn(async () => "created"),
+}));
+
+vi.mock("../../store", () => ({ useApp: () => app }));
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
+const imageFile = (name: string, type: string) => {
+  const file = new File([new Uint8Array([1, 2, 3])], name, { type });
+  Object.defineProperty(file, "arrayBuffer", {
+    value: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
+  });
+  return file;
+};
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("Images-to-PDF collection view", () => {
+  it("shares list/grid, duplicate, remove, and ordering controls with Merge", async () => {
+    render(
+      <>
+        <div id={TOOL_HEADER_ACTIONS_ID} data-testid={TOOL_HEADER_ACTIONS_ID} />
+        <ImagesToPdfScreen />
+      </>,
+    );
+    const root = screen.getByTestId("tool-drop-surface");
+    expect(screen.getByTestId("file-collection-empty")).toBeTruthy();
+    expect(screen.getByTestId("tool-page-content").getAttribute("data-layout-width")).toBe("full");
+    expect(screen.queryByRole("heading", { name: "Images to PDF" })).toBeNull();
+    expect(
+      screen.queryByText(/Each PNG or JPEG becomes one page, in the order listed/),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Grid view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create & open" })).toBeNull();
+
+    fireEvent.drop(root, {
+      dataTransfer: {
+        files: [imageFile("first.png", "image/png"), imageFile("second.jpg", "image/jpeg")],
+        items: [],
+        types: ["Files"],
+      },
+    });
+
+    await waitFor(() => expect(screen.getByText("first.png")).toBeTruthy());
+    expect(screen.queryByTestId("file-collection-empty")).toBeNull();
+    expect(screen.getByText("second.jpg")).toBeTruthy();
+    expect(screen.getAllByTestId("file-collection-item")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
+    const actionsHost = screen.getByTestId(TOOL_HEADER_ACTIONS_ID);
+    expect(actionsHost.contains(screen.getByLabelText("Page size"))).toBe(true);
+    expect(actionsHost.contains(screen.getByRole("button", { name: "Create & open" }))).toBe(true);
+    expect(actionsHost.contains(screen.getByRole("button", { name: "Download" }))).toBe(true);
+    expect(actionsHost.contains(screen.getByRole("button", { name: "Grid view" }))).toBe(true);
+    expect(screen.getByTestId("file-collection-add").textContent).toContain("Add more images");
+    expect(screen.queryByRole("button", { name: "Add images" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "List view" }));
+    expect(screen.getByRole("button", { name: "List view" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("file-collection-add")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate first.png" }));
+    expect(screen.getAllByText("first.png")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move second.jpg earlier" }));
+    const itemText = screen.getAllByTestId("file-collection-item").map((item) => item.textContent);
+    expect(itemText[1]).toContain("second.jpg");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove second.jpg" }));
+    expect(screen.queryByText("second.jpg")).toBeNull();
+  });
+});

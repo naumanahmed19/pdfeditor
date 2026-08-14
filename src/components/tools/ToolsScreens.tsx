@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowDown,
   ArrowLeft,
   ArrowRight,
-  ArrowUp,
   Copy,
   Crop,
   Download,
@@ -12,13 +10,11 @@ import {
   FilePlus2,
   FileText,
   FileType2,
-  FolderOpen,
   Import,
   Minimize2,
   RotateCcw,
   RotateCw,
   Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
@@ -46,7 +42,7 @@ import {
   rotatePage,
   type MergeInput,
 } from "../../lib/pdftools";
-import { renderPageToCanvas } from "../../lib/pdf";
+import { loadPdf, renderPageToCanvas, type PdfDoc } from "../../lib/pdf";
 import {
   downloadBytes,
   downloadZip,
@@ -54,23 +50,90 @@ import {
   parsePageRanges,
 } from "../../lib/utils";
 import { cn } from "../../lib/utils";
+import {
+  isJpegFile,
+  isPdfFile,
+  isPngFile,
+  useToolFileDrop,
+  type DroppedHandlePromises,
+} from "./useToolFileDrop";
+import {
+  FileCollectionView,
+  FileCollectionViewToggle,
+  type FileCollectionViewMode,
+} from "./FileCollectionView";
+import {
+  ToolPageContainer,
+  ToolPageHeader,
+  type ToolPageWidth,
+} from "./ToolPageHeader";
 
 function ToolShell({
   title,
   description,
   children,
+  onFilesDropped,
+  headerActions,
+  width = "standard",
+  showIntro = true,
 }: {
   title: string;
   description: string;
   children: React.ReactNode;
+  onFilesDropped?: (files: File[]) => void | Promise<void>;
+  headerActions?: React.ReactNode;
+  width?: ToolPageWidth;
+  showIntro?: boolean;
 }) {
+  const app = useApp();
+  const toolScreen = app.screen;
+  const consumeFiles = async (files: File[], handles: DroppedHandlePromises) => {
+    if (onFilesDropped) {
+      await onFilesDropped(files);
+      return;
+    }
+
+    const pdfs = files.flatMap((file, index) =>
+      isPdfFile(file) ? [{ file, index }] : [],
+    );
+    const skipped = files.length - pdfs.length;
+    if (!pdfs.length) {
+      toast.error("This tool accepts PDF files");
+      return;
+    }
+    if (skipped) {
+      toast.error(`Skipped ${skipped} non-PDF file${skipped === 1 ? "" : "s"}`);
+    }
+    if (pdfs.length > 1) {
+      toast.info("This tool works with one PDF at a time; using the first file");
+    }
+
+    const [{ file, index }] = pdfs;
+    const resolvedHandles = await Promise.all(handles);
+    const handle = resolvedHandles[index] as { kind?: string } | null | undefined;
+    const opened = await app.openFile(file, handle?.kind === "file" ? handle : undefined);
+    if (opened) app.setScreen(toolScreen);
+  };
+  const { dragOver, dropHandlers } = useToolFileDrop(consumeFiles);
+
   return (
-    <div className="scrollbar-soft h-full overflow-y-auto p-6">
-      <div className="mx-auto max-w-3xl">
-        <h1 className="text-lg font-semibold">{title}</h1>
-        <p className="pb-5 pt-1 text-sm text-muted-foreground">{description}</p>
+    <div
+      {...dropHandlers}
+      data-testid="tool-drop-surface"
+      className={cn(
+        "scrollbar-soft h-full overflow-y-auto p-6 transition-shadow",
+        dragOver && "ring-2 ring-inset ring-blue-500/60",
+      )}
+    >
+      <ToolPageContainer width={width}>
+        <ToolPageHeader
+          title={title}
+          description={description}
+          actions={headerActions}
+          showIntro={showIntro}
+        />
         {children}
-      </div>
+      </ToolPageContainer>
     </div>
   );
 }
@@ -317,41 +380,122 @@ function IconBtn({
 /* ---------------- Merge ---------------- */
 
 interface MergeFile {
+  id: string;
   name: string;
   bytes: Uint8Array;
   kind: MergeInput["kind"];
+  preview:
+    | { kind: "pdf"; pdf: PdfDoc }
+    | { kind: "image"; url: string };
 }
+
+let mergeFileSequence = 0;
+const nextMergeFileId = () => `merge-file-${++mergeFileSequence}`;
 
 export function MergeScreen() {
   const app = useApp();
   const [files, setFiles] = useState<MergeFile[]>([]);
+  const [collectionView, setCollectionView] = useState<FileCollectionViewMode>("grid");
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  useEffect(
+    () => () => {
+      for (const file of filesRef.current) {
+        if (file.preview.kind === "image") URL.revokeObjectURL(file.preview.url);
+      }
+    },
+    [],
+  );
 
-  const addFiles = async (list: FileList | null) => {
+  const addFiles = async (list: FileList | File[] | null) => {
     if (!list) return;
     const next: MergeFile[] = [];
+    let skipped = 0;
     for (const f of Array.from(list)) {
+      if (!isPdfFile(f) && !isPngFile(f) && !isJpegFile(f)) {
+        skipped++;
+        continue;
+      }
       const kind: MergeInput["kind"] =
-        f.type === "image/png"
+        isPngFile(f)
           ? "image/png"
-          : f.type === "image/jpeg"
+          : isJpegFile(f)
             ? "image/jpeg"
             : "pdf";
-      next.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()), kind });
+      try {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const preview: MergeFile["preview"] =
+          kind === "pdf"
+            ? { kind: "pdf", pdf: await loadPdf(bytes) }
+            : { kind: "image", url: URL.createObjectURL(f) };
+        next.push({ id: nextMergeFileId(), name: f.name, bytes, kind, preview });
+      } catch (err) {
+        skipped++;
+        toast.error(
+          `Couldn't add ${f.name}: ${err instanceof Error ? err.message : "unreadable file"}`,
+        );
+      }
     }
     setFiles((prev) => [...prev, ...next]);
+    if (skipped) {
+      toast.error(
+        skipped === list.length
+          ? "Merge accepts PDF, PNG, and JPEG files"
+          : `Skipped ${skipped} unsupported file${skipped === 1 ? "" : "s"}`,
+      );
+    }
   };
 
-  const move = (i: number, dir: -1 | 1) => {
+  const reorder = (from: number, to: number) => {
     setFiles((prev) => {
+      if (from < 0 || to < 0 || from >= prev.length || to >= prev.length) return prev;
       const next = [...prev];
-      const j = i + dir;
-      if (j < 0 || j >= next.length) return prev;
-      [next[i], next[j]] = [next[j], next[i]];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
       return next;
     });
   };
+
+  const duplicate = (index: number) => {
+    setFiles((prev) => {
+      const source = prev[index];
+      if (!source) return prev;
+      const preview: MergeFile["preview"] =
+        source.preview.kind === "pdf"
+          ? source.preview
+          : {
+              kind: "image",
+              url: URL.createObjectURL(
+                new Blob([source.bytes.slice().buffer as ArrayBuffer], { type: source.kind }),
+              ),
+            };
+      const copy: MergeFile = { ...source, id: nextMergeFileId(), preview };
+      const next = [...prev];
+      next.splice(index + 1, 0, copy);
+      return next;
+    });
+  };
+
+  const remove = (index: number) => {
+    setFiles((prev) => {
+      const removed = prev[index];
+      if (removed?.preview.kind === "image") URL.revokeObjectURL(removed.preview.url);
+      return prev.filter((_, itemIndex) => itemIndex !== index);
+    });
+  };
+
+  const renderMergePreview = (file: MergeFile, view: FileCollectionViewMode) =>
+    file.preview.kind === "pdf" ? (
+      <Thumbnail pdf={file.preview.pdf} pageIndex={0} width={view === "grid" ? 128 : 44} />
+    ) : (
+      <img
+        src={file.preview.url}
+        alt=""
+        className="max-h-full max-w-full rounded object-contain"
+      />
+    );
 
   const doMerge = async (openAfter: boolean) => {
     if (files.length < 1 || (files.length < 2 && files[0].kind === "pdf")) {
@@ -378,45 +522,52 @@ export function MergeScreen() {
   return (
     <ToolShell
       title="Merge PDFs"
+      width="full"
+      showIntro={false}
+      onFilesDropped={addFiles}
       description="Combine PDFs — and PNG/JPG images, each becoming a page — into a single document, in the order listed."
+      headerActions={
+        files.length ? (
+          <>
+            <FileCollectionViewToggle value={collectionView} onValueChange={setCollectionView} />
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              className="h-7"
+              onClick={() => void doMerge(true)}
+            >
+              Merge & open here
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy}
+              className="h-7 gap-1.5"
+              onClick={() => void doMerge(false)}
+            >
+              <Download className="h-3.5 w-3.5" /> Merge & download
+            </Button>
+          </>
+        ) : undefined
+      }
     >
-      <div className="flex flex-col gap-2">
-        {files.map((f, i) => (
-          <div
-            key={`${f.name}-${i}`}
-            className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2 text-sm shadow-sm"
-          >
-            <span className="w-5 text-xs tabular-nums text-muted-foreground">{i + 1}.</span>
-            <span className="flex-1 truncate">{f.name}</span>
-            <span className="text-xs text-muted-foreground">{formatBytes(f.bytes.length)}</span>
-            <IconBtn title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
-              <ArrowUp className="h-3.5 w-3.5" />
-            </IconBtn>
-            <IconBtn title="Move down" disabled={i === files.length - 1} onClick={() => move(i, 1)}>
-              <ArrowDown className="h-3.5 w-3.5" />
-            </IconBtn>
-            <IconBtn title="Remove" onClick={() => setFiles((p) => p.filter((_, j) => j !== i))}>
-              <X className="h-3.5 w-3.5" />
-            </IconBtn>
-          </div>
-        ))}
-      </div>
+      <FileCollectionView
+        items={files}
+        view={collectionView}
+        getKey={(file) => file.id}
+        getName={(file) => file.name}
+        getMeta={(file) => `${formatBytes(file.bytes.length)} · ${file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"}`}
+        renderPreview={renderMergePreview}
+        emptyTitle="Drop PDFs or images here"
+        emptyDescription="Add multiple PDF, PNG, or JPEG files. They will be merged in the order shown."
+        emptyActionLabel="Choose files"
+        addMoreLabel="Add more PDFs or images"
+        onEmptyAction={() => inputRef.current?.click()}
+        onReorder={reorder}
+        onDuplicate={duplicate}
+        onRemove={remove}
+      />
 
-      <div className="flex items-center gap-2 pt-4">
-        <Button variant="outline" className="gap-2" onClick={() => inputRef.current?.click()}>
-          <FolderOpen className="h-4 w-4" /> Add PDFs / images
-        </Button>
-        <Button disabled={busy || files.length < 1} className="gap-2" onClick={() => void doMerge(false)}>
-          <Download className="h-4 w-4" /> Merge & download
-        </Button>
-        <Button
-          variant="secondary"
-          disabled={busy || files.length < 1}
-          onClick={() => void doMerge(true)}
-        >
-          Merge & open here
-        </Button>
-      </div>
       <input
         ref={inputRef}
         type="file"
