@@ -12,6 +12,7 @@ import { useApp } from "../../store";
 import { cn } from "../../lib/utils";
 import type { PdfaFinding, PdfaReport } from "../../lib/pdfa";
 import { isTauri } from "../../lib/tauri";
+import { isPdfFile, useToolFileDrop } from "./useToolFileDrop";
 
 /**
  * PDF/A-2b preflight for the open document. Presents a checklist of rule
@@ -235,8 +236,34 @@ function FindingRow({ finding, muted }: { finding: PdfaFinding; muted?: boolean 
 }
 
 function Shell({ docName, children }: { docName?: string; children: React.ReactNode }) {
+  const app = useApp();
+  const consumeFiles = async (files: File[], handles: Array<Promise<unknown>>) => {
+    const pdfs = files.flatMap((file, index) =>
+      isPdfFile(file) ? [{ file, index }] : [],
+    );
+    if (!pdfs.length) {
+      toast.error("PDF/A check accepts PDF files");
+      return;
+    }
+    if (pdfs.length > 1) {
+      toast.info("PDF/A check works with one PDF at a time; using the first file");
+    }
+    const [{ file, index }] = pdfs;
+    const resolvedHandles = await Promise.all(handles);
+    const handle = resolvedHandles[index] as { kind?: string } | null | undefined;
+    const opened = await app.openFile(file, handle?.kind === "file" ? handle : undefined);
+    if (opened) app.setScreen("pdfa");
+  };
+  const { dragOver, dropHandlers } = useToolFileDrop(consumeFiles);
+
   return (
-    <div className="scrollbar-soft h-full overflow-y-auto p-6">
+    <div
+      {...dropHandlers}
+      className={cn(
+        "scrollbar-soft h-full overflow-y-auto p-6 transition-shadow",
+        dragOver && "ring-2 ring-inset ring-blue-500/60",
+      )}
+    >
       <div className="mx-auto max-w-3xl">
         <div className="flex items-center gap-2">
           <FileCheck2 className="h-5 w-5 text-primary" />

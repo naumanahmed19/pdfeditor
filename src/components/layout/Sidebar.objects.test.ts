@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Annotation } from "../../types";
 import {
   annotationObjectLabel,
+  annotationObjectSecondaryLabel,
   collectAnnotationObjects,
+  groupAnnotationObjectsByPage,
 } from "./Sidebar";
 
 const text = (id: string, x: number, y: number, value: string): Annotation => ({
@@ -47,6 +49,17 @@ describe("Objects sidebar helpers", () => {
     ).toBe("Image");
   });
 
+  it("hides repeated object types but keeps useful secondary labels", () => {
+    expect(annotationObjectSecondaryLabel("Highlight", "Highlight")).toBeNull();
+    expect(annotationObjectSecondaryLabel("drawing", "Drawing")).toBeNull();
+    expect(annotationObjectSecondaryLabel("Agreement title", "Text")).toBe(
+      "Text",
+    );
+    expect(annotationObjectSecondaryLabel("Agreement title", "Text", true)).toBe(
+      "Text · Locked",
+    );
+  });
+
   it("orders objects by page and visual position", () => {
     const rows = collectAnnotationObjects({
       2: [text("late", 10, 50, "Late")],
@@ -56,6 +69,23 @@ describe("Objects sidebar helpers", () => {
       [0, "left"],
       [0, "right"],
       [2, "late"],
+    ]);
+  });
+
+  it("groups ordered objects into page-level sections", () => {
+    const rows = collectAnnotationObjects({
+      2: [text("third", 10, 10, "Third")],
+      0: [text("first", 10, 10, "First"), text("second", 20, 20, "Second")],
+    });
+
+    expect(
+      groupAnnotationObjectsByPage(rows).map(({ page, objects }) => [
+        page,
+        objects.map((object) => object.id),
+      ]),
+    ).toEqual([
+      [0, ["first", "second"]],
+      [2, ["third"]],
     ]);
   });
 });

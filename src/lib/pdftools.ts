@@ -74,6 +74,11 @@ async function load(bytes: Uint8Array): Promise<PDFDocument> {
   return PDFDocument.load(bytes);
 }
 
+const yieldToMainThread = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
 /**
  * Copy document-info metadata (title/author/subject/keywords/creator and the
  * creation date) from `src` into `out`. Producer and modification date are
@@ -218,11 +223,24 @@ export async function mergePdfs(files: Uint8Array[]): Promise<Uint8Array> {
 export async function extractPages(
   bytes: Uint8Array,
   pageIndexes: number[],
+  onProgress?: (progress: SplitPdfProgress) => void,
 ): Promise<Uint8Array> {
   const src = await load(bytes);
   const out = await PDFDocument.create();
-  const pages = await out.copyPages(src, pageIndexes);
-  pages.forEach((p) => out.addPage(p));
+  const pages: PDFPage[] = [];
+  for (let offset = 0; offset < pageIndexes.length; offset += 32) {
+    const chunk = pageIndexes.slice(offset, offset + 32);
+    const copied = await out.copyPages(src, chunk);
+    copied.forEach((page) => {
+      out.addPage(page);
+      pages.push(page);
+    });
+    onProgress?.({
+      completed: Math.min(offset + chunk.length, pageIndexes.length),
+      total: pageIndexes.length,
+    });
+    if (offset + chunk.length < pageIndexes.length) await yieldToMainThread();
+  }
   // Rebuilding via copyPages keeps page content + annotations but drops
   // document-level structures. Restore what we can: info metadata and the
   // AcroForm registration that makes copied form fields interactive again.
@@ -231,6 +249,35 @@ export async function extractPages(
   copyDocMetadata(src, out);
   registerCopiedFormFields(src, out, pages);
   return out.save();
+}
+
+export interface SplitPdfProgress {
+  completed: number;
+  total: number;
+}
+
+/**
+ * Split every page while parsing the source document only once. `onPage` lets
+ * callers add each result directly to a zip instead of building a second
+ * in-memory list, and periodic yields keep large jobs responsive.
+ */
+export async function splitPdfPages(
+  bytes: Uint8Array,
+  onPage: (pageBytes: Uint8Array, pageIndex: number) => void | Promise<void>,
+  onProgress?: (progress: SplitPdfProgress) => void,
+): Promise<void> {
+  const src = await load(bytes);
+  const total = src.getPageCount();
+  for (let pageIndex = 0; pageIndex < total; pageIndex += 1) {
+    const out = await PDFDocument.create();
+    const [page] = await out.copyPages(src, [pageIndex]);
+    out.addPage(page);
+    copyDocMetadata(src, out);
+    registerCopiedFormFields(src, out, [page]);
+    await onPage(await out.save(), pageIndex);
+    onProgress?.({ completed: pageIndex + 1, total });
+    if ((pageIndex + 1) % 8 === 0) await yieldToMainThread();
+  }
 }
 
 /**
@@ -487,6 +534,8 @@ export interface MergeInput {
   bytes: Uint8Array;
   /** "pdf" or an image mime type. */
   kind: "pdf" | "image/png" | "image/jpeg";
+  /** Clockwise rotation applied to every page produced by this input. */
+  rotation?: 0 | 90 | 180 | 270;
 }
 
 /**
@@ -496,21 +545,60 @@ export interface MergeInput {
  * interactive (see registerCopiedFormFields for what can and can't be
  * preserved). Outlines, named destinations and page labels are not merged.
  */
-export async function mergeMixed(inputs: MergeInput[]): Promise<Uint8Array> {
+export interface MergeMixedProgress {
+  inputIndex: number;
+  inputCount: number;
+  completedPages: number;
+  totalPages: number;
+}
+
+export async function mergeMixed(
+  inputs: MergeInput[],
+  onProgress?: (progress: MergeMixedProgress) => void,
+): Promise<Uint8Array> {
   const out = await PDFDocument.create();
   let primary = true;
-  for (const input of inputs) {
+  for (let inputIndex = 0; inputIndex < inputs.length; inputIndex += 1) {
+    const input = inputs[inputIndex];
     if (input.kind === "pdf") {
       const src = await load(input.bytes);
-      const pages = await out.copyPages(src, src.getPageIndices());
-      pages.forEach((p) => out.addPage(p));
+      const pageIndexes = src.getPageIndices();
+      const copiedPages: PDFPage[] = [];
+      for (let offset = 0; offset < pageIndexes.length; offset += 24) {
+        const chunk = pageIndexes.slice(offset, offset + 24);
+        const pages = await out.copyPages(src, chunk);
+        pages.forEach((page) => {
+          if (input.rotation) {
+            page.setRotation(degrees((page.getRotation().angle + input.rotation) % 360));
+          }
+          out.addPage(page);
+          copiedPages.push(page);
+        });
+        onProgress?.({
+          inputIndex,
+          inputCount: inputs.length,
+          completedPages: Math.min(offset + chunk.length, pageIndexes.length),
+          totalPages: pageIndexes.length,
+        });
+        await yieldToMainThread();
+      }
       if (primary) {
         copyDocMetadata(src, out);
         primary = false;
       }
-      registerCopiedFormFields(src, out, pages);
+      registerCopiedFormFields(src, out, copiedPages);
     } else {
       await imagesToPdfPages(out, { bytes: input.bytes, type: input.kind });
+      if (input.rotation) {
+        out.getPage(out.getPageCount() - 1).setRotation(degrees(input.rotation));
+      }
+      onProgress?.({
+        inputIndex,
+        inputCount: inputs.length,
+        completedPages: 1,
+        totalPages: 1,
+      });
+      await yieldToMainThread();
     }
   }
   return out.save();

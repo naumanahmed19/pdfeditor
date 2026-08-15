@@ -32,6 +32,9 @@ function DropZoneImpl() {
     };
     const onDrop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
+      // Tool screens consume their own drops. Do not open the same file again
+      // through this window-level fallback.
+      if (e.defaultPrevented) return;
       e.preventDefault();
 
       const files = Array.from(e.dataTransfer?.files ?? []);

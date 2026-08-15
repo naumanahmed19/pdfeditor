@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   decodePDFRawStream,
+  degrees,
   PDFDocument,
   PDFName,
   PDFRawStream,
@@ -11,9 +12,11 @@ import {
   deletePages,
   extractPages,
   insertBlankPage,
+  mergeMixed,
   mergePdfs,
   movePage,
   setOutline,
+  splitPdfPages,
 } from "./pdftools";
 
 beforeAll(() => {
@@ -325,6 +328,44 @@ describe("extractPages (metadata + interactive form fields)", () => {
   });
 });
 
+describe("large-document page processing", () => {
+  it("splits every page from one source parse and reports progress", async () => {
+    const outputs: Uint8Array[] = [];
+    const progress: number[] = [];
+
+    await splitPdfPages(
+      await structuredPdf(),
+      (bytes) => {
+        outputs.push(bytes);
+      },
+      ({ completed }) => progress.push(completed),
+    );
+
+    expect(outputs).toHaveLength(3);
+    expect(progress).toEqual([1, 2, 3]);
+    expect(await Promise.all(outputs.map(pageSizes))).toEqual([
+      [[300, 400]],
+      [[350, 450]],
+      [[400, 500]],
+    ]);
+    expect((await reload(outputs[0])).getTitle()).toBe("Fixture Title");
+  });
+
+  it("merges large PDFs in responsive page chunks", async () => {
+    const source = await sizedPdf(
+      Array.from({ length: 50 }, (_, index) => [300 + index, 400] as [number, number]),
+    );
+    const progress: number[] = [];
+
+    const out = await mergeMixed([{ bytes: source, kind: "pdf" }], (next) => {
+      progress.push(next.completedPages);
+    });
+
+    expect((await PDFDocument.load(out)).getPageCount()).toBe(50);
+    expect(progress).toEqual([24, 48, 50]);
+  });
+});
+
 describe("mergePdfs (metadata + interactive form fields)", () => {
   it("keeps fields from every source interactive and takes metadata from the first", async () => {
     const other = await PDFDocument.create();
@@ -347,5 +388,28 @@ describe("mergePdfs (metadata + interactive form fields)", () => {
     expect(doc.getForm().getTextField("name_p1").getText()).toBe("hello");
     expect(doc.getForm().getTextField("other_field").getText()).toBe("B");
     expect(doc.getTitle()).toBe("Fixture Title");
+  });
+});
+
+describe("mergeMixed rotation", () => {
+  const redPixelPng = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    ),
+    (char) => char.charCodeAt(0),
+  );
+
+  it("rotates every copied PDF page and an image page clockwise", async () => {
+    const source = await PDFDocument.create();
+    source.addPage([200, 300]).setRotation(degrees(90));
+    source.addPage([300, 400]);
+
+    const out = await mergeMixed([
+      { bytes: await source.save(), kind: "pdf", rotation: 90 },
+      { bytes: redPixelPng, kind: "image/png", rotation: 270 },
+    ]);
+    const merged = await PDFDocument.load(out);
+
+    expect(merged.getPages().map((page) => page.getRotation().angle)).toEqual([180, 90, 270]);
   });
 });

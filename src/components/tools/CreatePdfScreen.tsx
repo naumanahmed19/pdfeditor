@@ -1,12 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowDown,
-  ArrowUp,
   Download,
   FilePlus2,
   FileText,
-  ImagePlus,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../../store";
@@ -15,15 +11,22 @@ import { Select } from "../ui/select";
 import { cn, downloadBytes, formatBytes } from "../../lib/utils";
 import { imagesToPdf, type ImagePageSize } from "../../lib/pdftools";
 import { docxToPdf, textFileToPdf } from "../../lib/createpdf";
-import { Tip } from "../ui/tooltip";
+import { isJpegFile, isPngFile, useToolFileDrop } from "./useToolFileDrop";
+import { FileCollectionView } from "./FileCollectionView";
+import { ToolPageContainer, ToolPageHeader } from "./ToolPageHeader";
+import { ToolFileSidebar, ToolSidebarPortal } from "./ToolFileSidebar";
 
 interface ImageEntry {
+  id: string;
   name: string;
   bytes: Uint8Array;
   type: "image/png" | "image/jpeg";
   /** Object URL for the thumbnail; revoked on removal/unmount. */
   url: string;
 }
+
+let imageEntrySequence = 0;
+const nextImageEntryId = () => `image-file-${++imageEntrySequence}`;
 
 const isDocxName = (name: string) => /\.docx$/i.test(name);
 const isTextName = (name: string) => /\.(txt|md|markdown)$/i.test(name);
@@ -45,9 +48,9 @@ export function DocToPdfScreen() {
 function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
   const app = useApp();
   const [images, setImages] = useState<ImageEntry[]>([]);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<ImagePageSize>("fit");
   const [busy, setBusy] = useState<null | "images" | "doc">(null);
-  const [dragOver, setDragOver] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,31 +69,56 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
     const next: ImageEntry[] = [];
     for (const f of files) {
       const type =
-        f.type === "image/png" ? "image/png" : f.type === "image/jpeg" ? "image/jpeg" : null;
+        isPngFile(f) ? "image/png" : isJpegFile(f) ? "image/jpeg" : null;
       if (!type) continue;
       next.push({
+        id: nextImageEntryId(),
         name: f.name,
         bytes: new Uint8Array(await f.arrayBuffer()),
         type,
         url: URL.createObjectURL(f),
       });
     }
-    if (next.length) setImages((prev) => [...prev, ...next]);
+    if (next.length) {
+      setImages((prev) => [...prev, ...next]);
+      setSelectedImageId((current) => current ?? next[0].id);
+    }
   };
 
   const removeImage = (i: number) => {
+    const removedId = images[i]?.id;
+    if (removedId && removedId === selectedImageId) {
+      setSelectedImageId(images[i + 1]?.id ?? images[i - 1]?.id ?? null);
+    }
     setImages((prev) => {
-      URL.revokeObjectURL(prev[i].url);
+      if (prev[i]) URL.revokeObjectURL(prev[i].url);
       return prev.filter((_, j) => j !== i);
     });
   };
 
-  const moveImage = (i: number, dir: -1 | 1) => {
+  const reorderImage = (from: number, to: number) => {
     setImages((prev) => {
-      const j = i + dir;
-      if (j < 0 || j >= prev.length) return prev;
+      if (from < 0 || to < 0 || from >= prev.length || to >= prev.length) return prev;
       const next = [...prev];
-      [next[i], next[j]] = [next[j], next[i]];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
+  const duplicateImage = (index: number) => {
+    setImages((prev) => {
+      const source = prev[index];
+      if (!source) return prev;
+      const copy: ImageEntry = {
+        ...source,
+        id: nextImageEntryId(),
+        url: URL.createObjectURL(
+          new Blob([source.bytes.slice().buffer as ArrayBuffer], { type: source.type }),
+        ),
+      };
+      const next = [...prev];
+      next.splice(index + 1, 0, copy);
       return next;
     });
   };
@@ -140,142 +168,118 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
   // the list, a document converts immediately, anything else gets a pointer.
   const onDrop = async (files: File[]) => {
     if (mode === "images") {
-      const imgs = files.filter((f) => f.type === "image/png" || f.type === "image/jpeg");
+      const imgs = files.filter((f) => isPngFile(f) || isJpegFile(f));
       if (imgs.length) await addImages(imgs);
-      else toast.error("Drop PNG or JPEG images (PDFs open via File → Open)");
+      else toast.error("Images to PDF accepts PNG and JPEG files");
       return;
     }
     const doc = files.find((f) => isDocxName(f.name) || isTextName(f.name));
     if (doc) await convertDocument(doc);
-    else toast.error("Drop a .docx or .txt file (PDFs open via File → Open)");
+    else toast.error("Word or text to PDF accepts .docx, .txt, and .md files");
   };
+  const { dragOver, dropHandlers } = useToolFileDrop(onDrop);
+  const getImageMeta = (image: ImageEntry) =>
+    `${formatBytes(image.bytes.length)} · ${image.type === "image/png" ? "PNG" : "JPEG"}`;
 
   return (
     <div
+      {...dropHandlers}
+      data-testid="tool-drop-surface"
       className="scrollbar-soft h-full overflow-y-auto p-6"
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        void onDrop(Array.from(e.dataTransfer.files ?? []));
-      }}
     >
-      <div className="mx-auto max-w-3xl">
-        <h1 className="text-lg font-semibold">
-          {mode === "images" ? "Images to PDF" : "Word or text to PDF"}
-        </h1>
-        <p className="pb-5 pt-1 text-sm text-muted-foreground">
-          {mode === "images"
-            ? "Build a new PDF from PNG or JPEG images. Everything is converted locally — files never leave this device."
-            : "Convert a Word document or plain text into a PDF. Everything is converted locally — files never leave this device."}
-        </p>
+      {mode === "images" && (
+        <ToolSidebarPortal>
+          <ToolFileSidebar
+            items={images}
+            getKey={(image) => image.id}
+            getName={(image) => image.name}
+            getMeta={getImageMeta}
+            getFileType={(image) => (image.type === "image/png" ? "png" : "jpeg")}
+            emptyText="No images yet. Add or drop PNG and JPEG files to begin."
+            addLabel="Add images"
+            onAdd={() => imageInputRef.current?.click()}
+            onReorder={reorderImage}
+            onDuplicate={duplicateImage}
+            onRemove={removeImage}
+            selectedKey={selectedImageId}
+            onSelect={(image) => setSelectedImageId(image.id)}
+          />
+        </ToolSidebarPortal>
+      )}
+      <ToolPageContainer width={mode === "images" ? "full" : "standard"}>
+        <ToolPageHeader
+          title={mode === "images" ? "Images to PDF" : "Word or text to PDF"}
+          description={
+            mode === "images"
+              ? "Build a new PDF from PNG or JPEG images. Everything is converted locally — files never leave this device."
+              : "Convert a Word document or plain text into a PDF. Everything is converted locally — files never leave this device."
+          }
+          actions={
+            mode === "images" && images.length > 0 ? (
+              <>
+                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  Page size
+                  <Select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(e.target.value as ImagePageSize)}
+                    aria-label="Page size"
+                    className="h-7 w-36 px-2 text-xs"
+                  >
+                    <option value="fit">Fit to image</option>
+                    <option value="a4">A4 portrait</option>
+                    <option value="letter">Letter portrait</option>
+                  </Select>
+                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!!busy}
+                  className="h-7 gap-1.5"
+                  onClick={() => void createFromImages(false)}
+                >
+                  <Download className="h-3.5 w-3.5" /> Download
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!!busy}
+                  className="h-7 gap-1.5"
+                  onClick={() => void createFromImages(true)}
+                >
+                  <FilePlus2 className="h-3.5 w-3.5" />
+                  {busy === "images" ? "Creating…" : "Create & open"}
+                </Button>
+              </>
+            ) : undefined
+          }
+          showIntro={mode !== "images"}
+        />
 
         {mode === "images" && (
-        <div
-          className={cn(
-            "rounded-xl border bg-card p-4 shadow-shell transition-colors",
-            dragOver && "border-blue-500 ring-1 ring-blue-500/50",
-          )}
-        >
-          <p className="text-sm font-medium">Images to PDF</p>
-          <p className="pb-3 pt-1 text-xs text-muted-foreground">
-            Each PNG or JPEG becomes one page, in the order listed. Drag files anywhere onto this
-            screen or use the button below.
-          </p>
+        <div className={cn(dragOver && "rounded-2xl ring-2 ring-blue-500/50")}>
+          <FileCollectionView
+            items={images}
+            getKey={(image) => image.id}
+            getName={(image) => image.name}
+            getMeta={getImageMeta}
+            renderPreview={(image) => (
+              <img
+                src={image.url}
+                alt=""
+                className="max-h-full max-w-full rounded object-contain"
+              />
+            )}
+            emptyTitle="Drop images here"
+            emptyDescription="Add multiple PNG or JPEG files. Each image becomes one PDF page."
+            emptyActionLabel="Choose images"
+            addMoreLabel="Add more images"
+            onEmptyAction={() => imageInputRef.current?.click()}
+            onReorder={reorderImage}
+            onDuplicate={duplicateImage}
+            onRemove={removeImage}
+            selectedKey={selectedImageId}
+            onSelect={(image) => setSelectedImageId(image.id)}
+          />
 
-          {images.length > 0 && (
-            <div className="flex flex-col gap-2 pb-3">
-              {images.map((img, i) => (
-                <div
-                  key={img.url}
-                  className="flex items-center gap-3 rounded-lg border bg-background/50 px-3 py-2 text-sm"
-                >
-                  <span className="w-5 text-xs tabular-nums text-muted-foreground">{i + 1}.</span>
-                  <img
-                    src={img.url}
-                    alt=""
-                    className="h-12 w-12 rounded border bg-white object-contain"
-                  />
-                  <span className="min-w-0 flex-1 truncate">{img.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatBytes(img.bytes.length)}
-                  </span>
-                  <Tip label="Move up"><Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Move up"
-                    disabled={i === 0}
-                    onClick={() => moveImage(i, -1)}
-                    className="h-6 w-6 rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
-                  >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                  </Button></Tip>
-                  <Tip label="Move down"><Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Move down"
-                    disabled={i === images.length - 1}
-                    onClick={() => moveImage(i, 1)}
-                    className="h-6 w-6 rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
-                  >
-                    <ArrowDown className="h-3.5 w-3.5" />
-                  </Button></Tip>
-                  <Tip label="Remove"><Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Remove"
-                    onClick={() => removeImage(i)}
-                    className="h-6 w-6 rounded text-muted-foreground hover:text-foreground"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button></Tip>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => imageInputRef.current?.click()}
-            >
-              <ImagePlus className="h-4 w-4" /> Add images
-            </Button>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              Page size
-              <Select
-                value={pageSize}
-                onChange={(e) => setPageSize(e.target.value as ImagePageSize)}
-                aria-label="Page size"
-                className="h-8 w-44 px-2 text-xs"
-              >
-                <option value="fit">Fit page to image</option>
-                <option value="a4">A4 (portrait)</option>
-                <option value="letter">Letter (portrait)</option>
-              </Select>
-            </label>
-            <Button
-              disabled={!!busy || images.length === 0}
-              className="gap-2"
-              onClick={() => void createFromImages(true)}
-            >
-              <FilePlus2 className="h-4 w-4" />
-              {busy === "images" ? "Creating…" : "Create & open"}
-            </Button>
-            <Button
-              variant="secondary"
-              disabled={!!busy || images.length === 0}
-              className="gap-2"
-              onClick={() => void createFromImages(false)}
-            >
-              <Download className="h-4 w-4" /> Download
-            </Button>
-          </div>
           <input
             ref={imageInputRef}
             type="file"
@@ -325,7 +329,7 @@ function CreatePdfBase({ mode }: { mode: "images" | "doc" }) {
           />
         </div>
         )}
-      </div>
+      </ToolPageContainer>
     </div>
   );
 }

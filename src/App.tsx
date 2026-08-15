@@ -34,7 +34,7 @@ import { UpdateNotifier } from "./components/layout/UpdateNotifier";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DropZone } from "./components/layout/DropZone";
 import { CommandPalette } from "./components/command/CommandPalette";
-import { Viewer } from "./components/viewer/Viewer";
+import { Viewer, WelcomeScreen } from "./components/viewer/Viewer";
 import { ReaderPane } from "./components/viewer/ReaderPane";
 import { EditorToolbar } from "./components/viewer/Toolbar";
 import { SignatureModal } from "./components/viewer/SignatureModal";
@@ -55,24 +55,21 @@ import { CompareScreen } from "./components/tools/CompareScreen";
 import { DocToPdfScreen, ImagesToPdfScreen } from "./components/tools/CreatePdfScreen";
 import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
+import { TOOL_HEADER_ACTIONS_ID } from "./components/tools/ToolPageHeader";
+import {
+  FILE_SCOPED_TOOL_SCREENS,
+  TOOL_DEFINITIONS,
+} from "./components/tools/toolRegistry";
 import { ChromeExtensionBridge } from "./components/ChromeExtensionBridge";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
+  welcome: "Welcome",
   templates: "New from template",
-  organize: "Organize pages",
-  createimages: "Images to PDF",
-  createdoc: "Word or text to PDF",
-  merge: "Merge PDFs",
-  split: "Split & extract",
-  watermark: "Watermark & numbers",
-  compress: "Compress",
-  crop: "Crop pages",
-  headerfooter: "Headers & footers",
-  export: "Export",
-  compare: "Compare documents",
-  pdfa: "PDF/A check",
   settings: "Settings",
+  ...Object.fromEntries(
+    TOOL_DEFINITIONS.map((tool) => [tool.screen, tool.title]),
+  ),
 };
 
 /**
@@ -80,18 +77,6 @@ const SCREEN_TITLES: Record<string, string> = {
  * `filename › tool` breadcrumb. Screens that stand alone (templates, merge,
  * settings) don't, so no misleading file context is implied.
  */
-const FILE_SCOPED_SCREENS = new Set([
-  "organize",
-  "split",
-  "watermark",
-  "compress",
-  "crop",
-  "headerfooter",
-  "export",
-  "compare",
-  "pdfa",
-]);
-
 function PaneShell({ pane }: { pane: { id: string; docId: string } }) {
   const app = useApp();
   // The editable Viewer is bound to the active document, so only render it
@@ -378,7 +363,7 @@ function ContentHeader() {
   // Other screens (and viewer with nothing open): plain title header.
   return (
     <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-4 backdrop-blur">
-      {app.screen !== "viewer" && (
+      {app.screen !== "viewer" && app.screen !== "welcome" && (
         <button
           onClick={() => app.setScreen("viewer")}
           className="-ml-1 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -387,7 +372,7 @@ function ContentHeader() {
           <ArrowLeft className="h-4 w-4" />
         </button>
       )}
-      {app.screen === "viewer" ? (
+      {app.screen === "viewer" || app.screen === "welcome" ? (
         <>
           <button
             className="-ml-2 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -410,7 +395,7 @@ function ContentHeader() {
             }}
           />
         </>
-      ) : FILE_SCOPED_SCREENS.has(app.screen) && app.docName ? (
+      ) : FILE_SCOPED_TOOL_SCREENS.has(app.screen) && app.docName ? (
         // Breadcrumb: the open document (click to return) › the tool.
         <div className="flex min-w-0 items-center gap-1.5 text-sm">
           <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -425,7 +410,16 @@ function ContentHeader() {
           <span className="shrink-0 font-medium">{SCREEN_TITLES[app.screen]}</span>
         </div>
       ) : (
-        <span className="text-sm font-medium">{SCREEN_TITLES[app.screen]}</span>
+        <span className="shrink-0 whitespace-nowrap text-sm font-medium">
+          {SCREEN_TITLES[app.screen]}
+        </span>
+      )}
+      {app.screen !== "viewer" && app.screen !== "welcome" && (
+        <div
+          id={TOOL_HEADER_ACTIONS_ID}
+          data-testid={TOOL_HEADER_ACTIONS_ID}
+          className="scrollbar-soft ml-auto min-w-0 flex-1 overflow-x-auto"
+        />
       )}
     </div>
   );
@@ -534,6 +528,7 @@ function Shell() {
               ) : (
                 <Viewer key={app.activeTabId ?? "empty"} />
               ))}
+            {app.screen === "welcome" && <WelcomeScreen />}
             {app.screen === "templates" && <TemplatesScreen />}
             {app.screen === "organize" && <OrganizeScreen />}
             {app.screen === "createimages" && <ImagesToPdfScreen />}
