@@ -152,7 +152,7 @@ describe("tool page file drops", () => {
     expect(screen.queryByRole("button", { name: "Merge & download" })).toBeNull();
   });
 
-  it("loads a dropped PDF into a single-document tool and keeps that tool active", async () => {
+  it("loads a dropped PDF into the standalone Split workspace without opening an editor tab", async () => {
     app.screen = "split";
     const file = droppedFile("report.pdf", "application/pdf");
     render(
@@ -166,9 +166,11 @@ describe("tool page file drops", () => {
       dataTransfer: dataTransfer([file]),
     });
 
-    await waitFor(() => expect(app.openFile).toHaveBeenCalledTimes(1));
-    expect(app.openFile).toHaveBeenCalledWith(file, undefined);
-    expect(app.setScreen).toHaveBeenCalledWith("split");
+    await waitFor(() => expect(screen.getByTestId("split-page-grid")).toBeTruthy());
+    expect(screen.getByText("report.pdf")).toBeTruthy();
+    expect(screen.getAllByTestId("split-page-card")).toHaveLength(1);
+    expect(app.openFile).not.toHaveBeenCalled();
+    expect(app.setScreen).not.toHaveBeenCalled();
   });
 
   it("supports select-all, modifier-click ranges, and delete keyboard shortcuts", async () => {

@@ -16,6 +16,7 @@ import {
   mergePdfs,
   movePage,
   setOutline,
+  splitPdfPages,
 } from "./pdftools";
 
 beforeAll(() => {
@@ -324,6 +325,44 @@ describe("extractPages (metadata + interactive form fields)", () => {
     ]);
     expect(fieldNames(doc)).toEqual(["agree_p3", "name_p1"]);
     expect(doc.getForm().getCheckBox("agree_p3").isChecked()).toBe(true);
+  });
+});
+
+describe("large-document page processing", () => {
+  it("splits every page from one source parse and reports progress", async () => {
+    const outputs: Uint8Array[] = [];
+    const progress: number[] = [];
+
+    await splitPdfPages(
+      await structuredPdf(),
+      (bytes) => {
+        outputs.push(bytes);
+      },
+      ({ completed }) => progress.push(completed),
+    );
+
+    expect(outputs).toHaveLength(3);
+    expect(progress).toEqual([1, 2, 3]);
+    expect(await Promise.all(outputs.map(pageSizes))).toEqual([
+      [[300, 400]],
+      [[350, 450]],
+      [[400, 500]],
+    ]);
+    expect((await reload(outputs[0])).getTitle()).toBe("Fixture Title");
+  });
+
+  it("merges large PDFs in responsive page chunks", async () => {
+    const source = await sizedPdf(
+      Array.from({ length: 50 }, (_, index) => [300 + index, 400] as [number, number]),
+    );
+    const progress: number[] = [];
+
+    const out = await mergeMixed([{ bytes: source, kind: "pdf" }], (next) => {
+      progress.push(next.completedPages);
+    });
+
+    expect((await PDFDocument.load(out)).getPageCount()).toBe(50);
+    expect(progress).toEqual([24, 48, 50]);
   });
 });
 

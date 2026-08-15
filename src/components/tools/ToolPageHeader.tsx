@@ -50,7 +50,14 @@ export function ToolPageHeader({
           </div>
         </header>
       )}
-      {actions && actionsHost ? createPortal(actions, actionsHost) : null}
+      {actions && actionsHost
+        ? createPortal(
+            <div className="ml-auto flex w-max items-center gap-1.5 px-px">
+              {actions}
+            </div>,
+            actionsHost,
+          )
+        : null}
     </>
   );
 }

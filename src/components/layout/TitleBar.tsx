@@ -4,29 +4,20 @@ import {
   CaseSensitive,
   ChevronDown,
   ChevronUp,
-  Combine,
   Command as CommandIcon,
-  Crop,
   Download,
-  Droplets,
   FileOutput,
   FilePlus2,
-  FileCheck2,
   FileSignature,
   FileText,
   FolderOpen,
-  GitCompare,
-  Heading,
   Layers2,
-  LayoutGrid,
   Lock,
   LockOpen,
-  Minimize2,
   PanelLeft,
   Printer,
   Save,
   ScanText,
-  Scissors,
   Search,
   Settings,
   SlidersHorizontal,
@@ -65,6 +56,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { PrintModal } from "../viewer/PrintModal";
 import { BrandLogo } from "./BrandLogo";
 import { Tip } from "../ui/tooltip";
+import { CURRENT_PDF_TOOLS, GENERAL_TOOLS } from "../tools/toolRegistry";
 
 // Memoized: it has no props, so it ignores parent (Shell) re-renders and only
 // re-renders when its own selected store fields change.
@@ -398,70 +390,36 @@ function TitleBarImpl() {
 
   const toolsItems = (
     <>
-      <MenuItem onClick={() => app.setScreen("organize")}>
-        <LayoutGrid className="h-4 w-4 text-muted-foreground" />
-        Organize pages
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("createimages")}>
-        <FilePlus2 className="h-4 w-4 text-muted-foreground" />
-        Images to PDF…
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("createdoc")}>
-        <FilePlus2 className="h-4 w-4 text-muted-foreground" />
-        Word or text to PDF…
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("merge")}>
-        <Combine className="h-4 w-4 text-muted-foreground" />
-        Merge PDFs
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("split")}>
-        <Scissors className="h-4 w-4 text-muted-foreground" />
-        Split & extract
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("watermark")}>
-        <Droplets className="h-4 w-4 text-muted-foreground" />
-        Watermark & numbers
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("headerfooter")}>
-        <Heading className="h-4 w-4 text-muted-foreground" />
-        Headers & footers…
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("crop")}>
-        <Crop className="h-4 w-4 text-muted-foreground" />
-        Crop pages…
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("compress")}>
-        <Minimize2 className="h-4 w-4 text-muted-foreground" />
-        Compress…
-      </MenuItem>
+      <MenuGroup aria-label="Current PDF tools">
+        <MenuLabel>Current PDF</MenuLabel>
+        {CURRENT_PDF_TOOLS.map(({ screen, menuLabel, icon: Icon }) => (
+          <MenuItem key={screen} onClick={() => app.setScreen(screen)}>
+            <Icon className="h-4 w-4 text-muted-foreground" />
+            {menuLabel}
+          </MenuItem>
+        ))}
+        <MenuItem
+          disabled={!app.pdf || app.ocrBusy}
+          onClick={() => void app.runOcrText()}
+        >
+          <ScanText className="h-4 w-4 text-muted-foreground" />
+          Make searchable (OCR)
+        </MenuItem>
+        <MenuItem disabled={!app.pdf} onClick={() => void flattenDocument()}>
+          <Layers2 className="h-4 w-4 text-muted-foreground" />
+          Flatten document
+        </MenuItem>
+      </MenuGroup>
       <MenuSeparator />
-      <MenuItem onClick={() => app.setScreen("export")}>
-        <FileOutput className="h-4 w-4 text-muted-foreground" />
-        Export (text / HTML / images)…
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("compare")}>
-        <GitCompare className="h-4 w-4 text-muted-foreground" />
-        Compare documents…
-      </MenuItem>
-      <MenuItem onClick={() => app.setScreen("pdfa")}>
-        <FileCheck2 className="h-4 w-4 text-muted-foreground" />
-        PDF/A check…
-      </MenuItem>
-      <MenuSeparator />
-      <MenuItem
-        disabled={!app.pdf || app.ocrBusy}
-        onClick={() => void app.runOcrText()}
-      >
-        <ScanText className="h-4 w-4 text-muted-foreground" />
-        Make searchable (OCR)
-      </MenuItem>
-      <MenuItem
-        disabled={!app.pdf}
-        onClick={() => void flattenDocument()}
-      >
-        <Layers2 className="h-4 w-4 text-muted-foreground" />
-        Flatten document
-      </MenuItem>
+      <MenuGroup aria-label="General tools">
+        <MenuLabel>General tools</MenuLabel>
+        {GENERAL_TOOLS.map(({ screen, menuLabel, icon: Icon }) => (
+          <MenuItem key={screen} onClick={() => app.setScreen(screen)}>
+            <Icon className="h-4 w-4 text-muted-foreground" />
+            {menuLabel}
+          </MenuItem>
+        ))}
+      </MenuGroup>
     </>
   );
 

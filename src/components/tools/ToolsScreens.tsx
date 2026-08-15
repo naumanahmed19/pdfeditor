@@ -48,11 +48,13 @@ import {
   mergeMixed,
   movePage,
   rotatePage,
+  splitPdfPages,
   type MergeInput,
 } from "../../lib/pdftools";
 import { loadPdf, renderPageToCanvas, type PdfDoc } from "../../lib/pdf";
 import {
   downloadBytes,
+  downloadGeneratedZip,
   downloadZip,
   formatBytes,
   parsePageRanges,
@@ -72,6 +74,9 @@ import {
   type ToolPageWidth,
 } from "./ToolPageHeader";
 import { ToolFileSidebar, ToolSidebarPortal } from "./ToolFileSidebar";
+import { PdfPagePreviewCard } from "./PdfPagePreviewCard";
+import { PdfPageSelectionGrid } from "./PdfPageSelectionGrid";
+import { useMultiSelection } from "./useMultiSelection";
 
 function ToolShell({
   title,
@@ -401,11 +406,21 @@ const nextMergeFileId = () => `merge-file-${++mergeFileSequence}`;
 export function MergeScreen() {
   const app = useApp();
   const [files, setFiles] = useState<MergeFile[]>([]);
-  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const selectionAnchorRef = useRef<string | null>(null);
+  const {
+    allSelected: allFilesSelected,
+    selectedKeys: selectedFileIds,
+    setSelectedKeys: setSelectedFileIds,
+    selectWithModifiers: selectFileWithModifiers,
+    toggle: toggleFileSelection,
+    toggleAll: toggleSelectAll,
+  } = useMultiSelection(
+    files.map((file) => file.id),
+    { onDelete: (ids) => setPendingDeleteIds(new Set(ids)) },
+  );
   const filesRef = useRef(files);
   filesRef.current = files;
   useEffect(
@@ -501,19 +516,8 @@ export function MergeScreen() {
     );
   };
 
-  const selectOnly = (file: MergeFile) => {
-    setSelectedFileIds(new Set([file.id]));
-    selectionAnchorRef.current = file.id;
-  };
-
   const toggleSelection = (file: MergeFile, selected: boolean) => {
-    setSelectedFileIds((current) => {
-      const next = new Set(current);
-      if (selected) next.add(file.id);
-      else next.delete(file.id);
-      return next;
-    });
-    selectionAnchorRef.current = file.id;
+    toggleFileSelection(file.id, selected);
   };
 
   const selectWithModifiers = (
@@ -521,32 +525,7 @@ export function MergeScreen() {
     index: number,
     modifiers: { toggle: boolean; range: boolean },
   ) => {
-    if (modifiers.range && selectionAnchorRef.current) {
-      const anchorIndex = files.findIndex((item) => item.id === selectionAnchorRef.current);
-      if (anchorIndex >= 0) {
-        const start = Math.min(anchorIndex, index);
-        const end = Math.max(anchorIndex, index);
-        setSelectedFileIds((current) => {
-          const next = modifiers.toggle ? new Set(current) : new Set<string>();
-          for (let itemIndex = start; itemIndex <= end; itemIndex++) {
-            next.add(files[itemIndex].id);
-          }
-          return next;
-        });
-        return;
-      }
-    }
-    if (modifiers.toggle) {
-      setSelectedFileIds((current) => {
-        const next = new Set(current);
-        if (next.has(file.id)) next.delete(file.id);
-        else next.add(file.id);
-        return next;
-      });
-      selectionAnchorRef.current = file.id;
-      return;
-    }
-    selectOnly(file);
+    selectFileWithModifiers(file.id, index, modifiers);
   };
 
   const rotateSelected = () => {
@@ -576,9 +555,6 @@ export function MergeScreen() {
       if (!next.size && remaining[0]) next.add(remaining[0].id);
       return next;
     });
-    if (selectionAnchorRef.current && ids.has(selectionAnchorRef.current)) {
-      selectionAnchorRef.current = remaining[0]?.id ?? null;
-    }
   };
 
   const requestRemoveSelected = () => {
@@ -589,39 +565,6 @@ export function MergeScreen() {
     if (pendingDeleteIds) removeFiles(pendingDeleteIds);
     setPendingDeleteIds(null);
   };
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      if (
-        target?.isContentEditable ||
-        target?.matches("input, textarea, select") ||
-        target?.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')
-      ) {
-        return;
-      }
-
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
-        event.preventDefault();
-        setSelectedFileIds(new Set(files.map((file) => file.id)));
-        selectionAnchorRef.current = files[0]?.id ?? null;
-        return;
-      }
-      if (event.key === "Escape" && selectedFileIds.size) {
-        event.preventDefault();
-        setSelectedFileIds(new Set());
-        selectionAnchorRef.current = null;
-        return;
-      }
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedFileIds.size) {
-        event.preventDefault();
-        requestRemoveSelected();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [files, selectedFileIds]);
 
   const requestRemove = (index: number) => {
     const file = files[index];
@@ -643,6 +586,8 @@ export function MergeScreen() {
         <img
           src={file.preview.url}
           alt=""
+          loading="lazy"
+          decoding="async"
           className="max-h-full max-w-full rounded object-contain"
         />
       )}
@@ -652,16 +597,9 @@ export function MergeScreen() {
     `${formatBytes(file.bytes.length)} · ${
       file.kind === "pdf" ? "PDF" : file.kind === "image/png" ? "PNG" : "JPEG"
     }${file.rotation ? ` · ${file.rotation}°` : ""}`;
-  const allFilesSelected = files.length > 0 && selectedFileIds.size === files.length;
   const pendingDeleteFiles = pendingDeleteIds
     ? files.filter((file) => pendingDeleteIds.has(file.id))
     : [];
-  const toggleSelectAll = () => {
-    setSelectedFileIds(
-      allFilesSelected ? new Set() : new Set(files.map((file) => file.id)),
-    );
-    selectionAnchorRef.current = allFilesSelected ? null : (files[0]?.id ?? null);
-  };
 
   const doMerge = async (openAfter: boolean) => {
     if (files.length < 1 || (files.length < 2 && files[0].kind === "pdf")) {
@@ -669,8 +607,14 @@ export function MergeScreen() {
       return;
     }
     setBusy(true);
+    setProgress("Preparing merge…");
     try {
-      const merged = await mergeMixed(files);
+      const merged = await mergeMixed(files, (next) => {
+        setProgress(
+          `File ${next.inputIndex + 1}/${next.inputCount} · page ${next.completedPages}/${next.totalPages}`,
+        );
+      });
+      setProgress("Saving merged PDF…");
       if (openAfter) {
         await app.openBytes(merged, "merged.pdf");
         toast.success("Merged document opened");
@@ -682,6 +626,7 @@ export function MergeScreen() {
       toast.error(`Merge failed: ${err instanceof Error ? err.message : "error"}`);
     } finally {
       setBusy(false);
+      setProgress("");
     }
   };
 
@@ -731,6 +676,11 @@ export function MergeScreen() {
                   </Button>
                 </Tip>
               </>
+            )}
+            {busy && progress && (
+              <span className="hidden px-1 text-[11px] tabular-nums text-muted-foreground lg:inline">
+                {progress}
+              </span>
             )}
             <Button
               variant="ghost"
@@ -844,99 +794,233 @@ export function MergeScreen() {
 
 export function SplitScreen() {
   const app = useApp();
-  const [ranges, setRanges] = useState("");
+  const [source, setSource] = useState<{
+    name: string;
+    bytes: Uint8Array;
+    pdf: PdfDoc;
+  } | null>(() =>
+    app.pdf && app.docBytes
+      ? {
+          name: app.docName ?? "document.pdf",
+          bytes: app.docBytes,
+          pdf: app.pdf,
+        }
+      : null,
+  );
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  if (!app.pdf || !app.docBytes) {
-    return (
-      <ToolShell title="Split & extract" description="Extract page ranges or split into single pages.">
-        <NeedsDocument />
-      </ToolShell>
-    );
-  }
-  const bytes = app.docBytes;
-  const name = (app.docName ?? "document.pdf").replace(/\.pdf$/i, "");
+  const pageCount = source?.pdf.numPages ?? 0;
+  const name = (source?.name ?? "document.pdf").replace(/\.pdf$/i, "");
+  const {
+    allSelected,
+    clear: clearPageSelection,
+    selectedKeys: selectedPages,
+    selectWithModifiers: selectPageWithModifiers,
+    toggle: togglePage,
+    toggleAll: toggleSelectAll,
+  } = useMultiSelection(Array.from({ length: pageCount }, (_, index) => index));
 
-  const extract = async (openAfter: boolean) => {
-    const idx = parsePageRanges(ranges, app.numPages);
-    if (!idx.length) {
-      toast.error(`Enter valid pages, e.g. "1-3, 5" (document has ${app.numPages} pages)`);
+  const loadSource = async (file: File) => {
+    if (!isPdfFile(file)) {
+      toast.error("Split & extract accepts PDF files");
       return;
     }
     setBusy(true);
     try {
-      const out = await extractPages(bytes, idx);
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const pdf = await loadPdf(bytes);
+      setSource({ name: file.name, bytes, pdf });
+      clearPageSelection();
+      toast.success(`${file.name} ready to split`);
+    } catch (err) {
+      toast.error(`Couldn't open that PDF: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setBusy(false);
+      setProgress("");
+    }
+  };
+
+  const addFiles = async (files: File[]) => {
+    const pdfs = files.filter(isPdfFile);
+    if (!pdfs.length) {
+      toast.error("Split & extract accepts PDF files");
+      return;
+    }
+    if (pdfs.length > 1) {
+      toast.info("Split & extract uses one PDF at a time; using the first file");
+    }
+    await loadSource(pdfs[0]);
+  };
+
+  const extract = async (openAfter: boolean) => {
+    if (!source || !selectedPages.size) return;
+    const indexes = [...selectedPages].sort((a, b) => a - b);
+    setBusy(true);
+    setProgress(`Extracting 0/${indexes.length}`);
+    try {
+      const out = await extractPages(source.bytes, indexes, (next) => {
+        setProgress(`Extracting ${next.completed}/${next.total}`);
+      });
+      setProgress("Saving extracted PDF…");
       if (openAfter) {
         await app.openBytes(out, `${name}-extract.pdf`);
         toast.success("Extracted pages opened");
       } else {
         downloadBytes(out, `${name}-pages.pdf`);
-        toast.success(`Extracted ${idx.length} page(s)`);
+        toast.success(`Extracted ${indexes.length} page(s)`);
       }
+    } catch (err) {
+      toast.error(`Extract failed: ${err instanceof Error ? err.message : "error"}`);
     } finally {
       setBusy(false);
+      setProgress("");
     }
   };
 
   const splitAll = async () => {
+    if (!source) return;
     setBusy(true);
+    setProgress(`Splitting 0/${pageCount}`);
     try {
-      const zipFiles: Array<{ name: string; data: Uint8Array }> = [];
-      for (let i = 0; i < app.numPages; i++) {
-        zipFiles.push({
-          name: `${name}-p${i + 1}.pdf`,
-          data: await extractPages(bytes, [i]),
-        });
-      }
-      await downloadZip(zipFiles, `${name}-pages.zip`);
-      toast.success(`Split into ${app.numPages} files (zip)`);
+      await downloadGeneratedZip(
+        `${name}-pages.zip`,
+        async (addFile) => {
+          await splitPdfPages(
+            source.bytes,
+            (pageBytes, pageIndex) => addFile(`${name}-p${pageIndex + 1}.pdf`, pageBytes),
+            (next) => {
+              if (next.completed === next.total || next.completed % 8 === 0) {
+                setProgress(`Splitting ${next.completed}/${next.total}`);
+              }
+            },
+          );
+          setProgress("Creating ZIP…");
+        },
+        (percent) => setProgress(`Creating ZIP ${Math.round(percent)}%`),
+      );
+      toast.success(`Split into ${pageCount} files (zip)`);
+    } catch (err) {
+      toast.error(`Split failed: ${err instanceof Error ? err.message : "error"}`);
     } finally {
       setBusy(false);
+      setProgress("");
     }
   };
 
   return (
     <ToolShell
       title="Split & extract"
-      description={`Extract a selection of pages into a new PDF, or split all ${app.numPages} pages into individual files.`}
+      width="full"
+      showIntro={false}
+      onFilesDropped={addFiles}
+      description="Choose a PDF, select pages visually, or split every page into its own PDF."
+      headerActions={
+        source ? (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7"
+              onClick={() => inputRef.current?.click()}
+            >
+              Change PDF
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={toggleSelectAll}>
+              {allSelected ? "Clear selection" : "Select all"}
+            </Button>
+            {selectedPages.size > 0 && (
+              <>
+                <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
+                  {selectedPages.size} selected
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  className="h-7"
+                  onClick={() => void extract(true)}
+                >
+                  Open selected
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  className="h-7 gap-1.5"
+                  onClick={() => void extract(false)}
+                >
+                  <Download className="h-3.5 w-3.5" /> Extract selected
+                </Button>
+              </>
+            )}
+            {busy && progress && (
+              <span className="hidden px-1 text-[11px] tabular-nums text-muted-foreground lg:inline">
+                {progress}
+              </span>
+            )}
+            <Button
+              size="sm"
+              disabled={busy}
+              className="h-7 gap-1.5"
+              onClick={() => void splitAll()}
+            >
+              <Download className="h-3.5 w-3.5" /> Split all
+            </Button>
+          </>
+        ) : undefined
+      }
     >
-      <div className="rounded-xl border bg-card p-4 shadow-shell">
-        <p className="pb-2 text-sm font-medium">Extract pages</p>
-        <div className="flex gap-2">
-          <Input
-            value={ranges}
-            onChange={(e) => setRanges(e.target.value)}
-            placeholder={`e.g. 1-3, 5, 8-${app.numPages}`}
+      {source ? (
+        <div data-testid="split-workspace">
+          <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="truncate font-medium text-foreground">{source.name}</span>
+            <span>·</span>
+            <span>{pageCount} pages</span>
+          </div>
+          <PdfPageSelectionGrid
+            pdf={source.pdf}
+            pageCount={pageCount}
+            selectedPages={selectedPages}
+            onSelect={(pageIndex, modifiers) =>
+              selectPageWithModifiers(pageIndex, pageIndex, modifiers)
+            }
+            onToggle={togglePage}
           />
-          <Button disabled={busy} onClick={() => void extract(false)}>
-            Download
-          </Button>
-          <Button variant="secondary" disabled={busy} onClick={() => void extract(true)}>
-            Open here
-          </Button>
         </div>
-      </div>
-
-      <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
-        <p className="pb-1 text-sm font-medium">Split into single pages</p>
-        <p className="pb-3 text-xs text-muted-foreground">
-          Downloads a zip with one PDF per page ({app.numPages} files).
-        </p>
-        <Button variant="outline" disabled={busy} onClick={() => void splitAll()}>
-          Split all pages (zip)
-        </Button>
-      </div>
-
-      <div className="mt-4 rounded-xl border border-dashed bg-muted/30 p-4 text-xs text-muted-foreground">
-        Looking to export as images, text or HTML? Use{" "}
+      ) : (
         <button
-          className="font-medium text-foreground underline underline-offset-2"
-          onClick={() => app.setScreen("export")}
+          type="button"
+          data-testid="split-empty"
+          aria-label="Choose a PDF to split"
+          onClick={() => inputRef.current?.click()}
+          className="group mx-auto flex min-h-80 w-full max-w-3xl flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border bg-muted/20 px-6 py-12 text-center transition-all hover:border-primary/45 hover:bg-primary/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-96"
         >
-          Tools → Export
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl border bg-background text-muted-foreground shadow-sm transition-colors group-hover:text-primary">
+            <Import className="h-5 w-5" />
+          </span>
+          <span className="pt-4 text-sm font-semibold text-foreground">Drop a PDF here</span>
+          <span className="max-w-md pt-1 text-xs leading-relaxed text-muted-foreground">
+            Select pages visually to extract them, or split every page into a separate PDF.
+          </span>
+          <span className="mt-4 rounded-lg border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm transition-colors group-hover:border-primary/30">
+            Choose PDF
+          </span>
         </button>
-        .
-      </div>
+      )}
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void loadSource(file);
+        }}
+      />
     </ToolShell>
   );
 }
@@ -945,9 +1029,15 @@ export function SplitScreen() {
 
 export function ExportScreen() {
   const app = useApp();
+  const [previewPage, setPreviewPage] = useState(0);
   const [busy, setBusy] = useState<null | "text" | "html" | "docx" | "png">(null);
 
-  if (!app.pdf || !app.docBytes) {
+  const pdf = app.pdf;
+  const numPages = app.numPages;
+  const page = pdf && previewPage < numPages ? pdf.page(previewPage) : null;
+  const previewScale = page ? Math.min(480 / page.width, 560 / page.height) : 1;
+
+  if (!pdf || !app.docBytes || !page) {
     return (
       <ToolShell title="Export" description="Export the document as text, HTML or page images.">
         <NeedsDocument />
@@ -955,7 +1045,6 @@ export function ExportScreen() {
     );
   }
   const bytes = app.docBytes;
-  const numPages = app.numPages;
   const name = (app.docName ?? "document.pdf").replace(/\.pdf$/i, "");
 
   const exportText = async () => {
@@ -1036,10 +1125,15 @@ export function ExportScreen() {
     onClick: () => void,
     disabled: boolean,
   ) => (
-    <div className="rounded-xl border bg-card p-4 shadow-shell">
+    <div className="rounded-xl border bg-card p-4 text-sm shadow-shell">
       <p className="pb-1 text-sm font-medium">{title}</p>
-      <p className="pb-3 text-xs text-muted-foreground">{desc}</p>
-      <Button variant="outline" disabled={!!busy} className="gap-2" onClick={onClick}>
+      <p className="pb-3 text-xs leading-relaxed text-muted-foreground">{desc}</p>
+      <Button
+        variant="outline"
+        disabled={!!busy}
+        className="w-full gap-2"
+        onClick={onClick}
+      >
         {icon} {disabled ? "Working…" : label}
       </Button>
     </div>
@@ -1050,39 +1144,52 @@ export function ExportScreen() {
       title="Export"
       description="Convert the document to plain text, HTML, a Word document, or page images."
     >
-      <div className="flex flex-col gap-4">
-        {card(
-          "Plain text (.txt)",
-          "Extracts the document's text in reading order, one line per line, pages separated by a form feed.",
-          <FileText className="h-4 w-4" />,
-          "Export text",
-          () => void exportText(),
-          busy === "text",
-        )}
-        {card(
-          "HTML (.html)",
-          "A styled web page with headings and paragraphs detected from font sizes and spacing. Layout is approximate.",
-          <FileCode2 className="h-4 w-4" />,
-          "Export HTML",
-          () => void exportHtml(),
-          busy === "html",
-        )}
-        {card(
-          "Word (.docx)",
-          "An editable Word document with real Heading 1/2 styles and paragraphs detected from font sizes and spacing; source pages separated by page breaks. Layout is approximate.",
-          <FileType2 className="h-4 w-4" />,
-          "Export Word",
-          () => void exportDocx(),
-          busy === "docx",
-        )}
-        {card(
-          "Page images (.png, zip)",
-          "Renders every page as a high-resolution PNG and downloads them as a zip.",
-          <FileImage className="h-4 w-4" />,
-          "Export PNGs (zip)",
-          () => void exportImages(),
-          busy === "png",
-        )}
+      <div className="flex flex-wrap gap-6" data-testid="export-workspace">
+        <PdfPagePreviewCard
+          pdf={pdf}
+          page={page}
+          pageIndex={previewPage}
+          pageCount={numPages}
+          scale={previewScale}
+          docVersion={app.docVersion}
+          onPageChange={setPreviewPage}
+          testId="export-page-preview"
+        />
+
+        <div className="flex min-w-56 flex-1 flex-col gap-3" data-testid="export-controls">
+          {card(
+            "Plain text (.txt)",
+            "Extracts text in reading order, with document pages separated in the output.",
+            <FileText className="h-4 w-4" />,
+            "Export text",
+            () => void exportText(),
+            busy === "text",
+          )}
+          {card(
+            "HTML (.html)",
+            "Creates a styled web page with approximate headings, paragraphs, and spacing.",
+            <FileCode2 className="h-4 w-4" />,
+            "Export HTML",
+            () => void exportHtml(),
+            busy === "html",
+          )}
+          {card(
+            "Word (.docx)",
+            "Creates an editable Word document with detected headings and page breaks.",
+            <FileType2 className="h-4 w-4" />,
+            "Export Word",
+            () => void exportDocx(),
+            busy === "docx",
+          )}
+          {card(
+            "Page images (.png, zip)",
+            "Renders every page as a high-resolution PNG and downloads them together as a zip.",
+            <FileImage className="h-4 w-4" />,
+            "Export PNGs (zip)",
+            () => void exportImages(),
+            busy === "png",
+          )}
+        </div>
       </div>
     </ToolShell>
   );
@@ -1092,6 +1199,7 @@ export function ExportScreen() {
 
 export function WatermarkScreen() {
   const app = useApp();
+  const [previewPage, setPreviewPage] = useState(0);
   const [text, setText] = useState("CONFIDENTIAL");
   const [opacity, setOpacity] = useState(0.15);
   const [size, setSize] = useState(64);
@@ -1100,7 +1208,12 @@ export function WatermarkScreen() {
   const [numSize, setNumSize] = useState(10);
   const [numPos, setNumPos] = useState<"bottom-center" | "bottom-right">("bottom-center");
 
-  if (!app.pdf) {
+  const pdf = app.pdf;
+  const pageCount = app.numPages;
+  const page = pdf && previewPage < pageCount ? pdf.page(previewPage) : null;
+  const previewScale = page ? Math.min(480 / page.width, 560 / page.height) : 1;
+
+  if (!pdf || !page) {
     return (
       <ToolShell title="Watermark & page numbers" description="Stamp every page with a watermark or add page numbers.">
         <NeedsDocument />
@@ -1111,112 +1224,169 @@ export function WatermarkScreen() {
   return (
     <ToolShell
       title="Watermark & page numbers"
-      description="Stamp every page with a watermark or add page numbers. Applies to the open document."
+      description="Preview your watermark and page numbers, then apply them to the open document."
     >
-      <div className="rounded-xl border bg-card p-4 shadow-shell">
-        <p className="pb-3 text-sm font-medium">Text watermark</p>
-        <div className="flex flex-col gap-3">
-          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Watermark text" />
-          <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-            <div className="flex items-center gap-2">
-              Opacity
-              <Slider
-                value={opacity}
-                onValueChange={setOpacity}
-                min={0.05}
-                max={0.6}
-                step={0.05}
-                aria-label="Opacity"
-                className="w-28"
-              />
-              <span className="w-8 tabular-nums">{Math.round(opacity * 100)}%</span>
-            </div>
-            <div className="flex items-center gap-2">
-              Size
-              <Slider
-                value={size}
-                onValueChange={setSize}
-                min={24}
-                max={120}
-                step={4}
-                aria-label="Watermark size"
-                className="w-28"
-              />
-              <span className="w-9 tabular-nums">{size}pt</span>
-            </div>
-            <label className="flex items-center gap-2">
-              Color
-              <ColorSwatch value={color} onChange={setColor} title="Watermark color" />
-            </label>
-            <label className="flex cursor-pointer items-center gap-2">
-              <Checkbox checked={diagonal} onCheckedChange={(v: boolean) => setDiagonal(v)} />
-              Diagonal
-            </label>
-          </div>
-          <div>
-            <Button
-              disabled={!text.trim()}
-              onClick={() =>
-                void app.applyBytesOp(
-                  (b) => addWatermark(b, text.trim(), { opacity, fontSize: size, color, diagonal }),
-                  "Watermark added",
-                )
-              }
+      <div className="flex flex-wrap gap-6" data-testid="watermark-workspace">
+        <PdfPagePreviewCard
+          pdf={pdf}
+          page={page}
+          pageIndex={previewPage}
+          pageCount={pageCount}
+          scale={previewScale}
+          docVersion={app.docVersion}
+          onPageChange={setPreviewPage}
+          testId="watermark-page-preview"
+        >
+          {text.trim() && (
+            <span
+              data-testid="watermark-preview-text"
+              aria-hidden="true"
+              className="pointer-events-none absolute left-1/2 top-1/2 max-w-[90%] whitespace-nowrap font-bold leading-none"
+              style={{
+                color,
+                fontSize: size * previewScale,
+                opacity,
+                transform: `translate(-50%, -50%) rotate(${diagonal ? -45 : 0}deg)`,
+              }}
             >
-              Apply watermark
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
-        <p className="pb-3 text-sm font-medium">Page numbers</p>
-        <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-          <label className="flex items-center gap-2">
-            Size
-            <Select
-              value={numSize}
-              onChange={(e) => setNumSize(Number(e.target.value))}
-              aria-label="Page number size"
-              className="h-7 w-16 px-2 text-xs"
-            >
-              {[8, 9, 10, 11, 12, 14].map((s) => (
-                <option key={s} value={s}>
-                  {s}pt
-                </option>
-              ))}
-            </Select>
-          </label>
-          <label className="flex items-center gap-2">
-            Position
-            <Select
-              value={numPos}
-              onChange={(e) => setNumPos(e.target.value as any)}
-              aria-label="Page number position"
-              className="h-7 w-32 px-2 text-xs"
-            >
-              <option value="bottom-center">Bottom center</option>
-              <option value="bottom-right">Bottom right</option>
-            </Select>
-          </label>
-          <Button
-            size="sm"
-            onClick={() =>
-              void app.applyBytesOp(
-                (b) => addPageNumbers(b, { fontSize: numSize, position: numPos }),
-                "Page numbers added",
-              )
-            }
+              {text.trim()}
+            </span>
+          )}
+          <span
+            data-testid="page-number-preview-text"
+            aria-hidden="true"
+            className="pointer-events-none absolute whitespace-nowrap leading-none text-neutral-500"
+            style={{
+              bottom: 24 * previewScale,
+              fontSize: numSize * previewScale,
+              ...(numPos === "bottom-center"
+                ? { left: "50%", transform: "translateX(-50%)" }
+                : { right: 36 * previewScale }),
+            }}
           >
-            Add page numbers
+            {previewPage + 1} / {pageCount}
+          </span>
+        </PdfPagePreviewCard>
+
+        <div className="flex min-w-56 flex-1 flex-col gap-3" data-testid="watermark-controls">
+          <div className="rounded-xl border bg-card p-4 text-sm shadow-shell">
+            <p className="font-medium">Text watermark</p>
+            <div className="mt-3 flex flex-col gap-4">
+              <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+                Text
+                <Input
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Watermark text"
+                  className="text-foreground"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+                <span className="flex items-center justify-between">
+                  Opacity
+                  <span className="tabular-nums text-foreground">{Math.round(opacity * 100)}%</span>
+                </span>
+                <Slider
+                  value={opacity}
+                  onValueChange={setOpacity}
+                  min={0.05}
+                  max={0.6}
+                  step={0.05}
+                  aria-label="Opacity"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+                <span className="flex items-center justify-between">
+                  Size
+                  <span className="tabular-nums text-foreground">{size} pt</span>
+                </span>
+                <Slider
+                  value={size}
+                  onValueChange={setSize}
+                  min={24}
+                  max={120}
+                  step={4}
+                  aria-label="Watermark size"
+                />
+              </label>
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <label className="flex items-center gap-2">
+                  Color
+                  <ColorSwatch value={color} onChange={setColor} title="Watermark color" />
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-foreground">
+                  <Checkbox
+                    aria-label="Diagonal watermark"
+                    checked={diagonal}
+                    onCheckedChange={(v: boolean) => setDiagonal(v)}
+                  />
+                  Diagonal
+                </label>
+              </div>
+              <Button
+                disabled={!text.trim()}
+                onClick={() =>
+                  void app.applyBytesOp(
+                    (b) => addWatermark(b, text.trim(), { opacity, fontSize: size, color, diagonal }),
+                    "Watermark added",
+                  )
+                }
+              >
+                Apply watermark
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-card p-4 text-sm shadow-shell">
+            <p className="font-medium">Page numbers</p>
+            <div className="mt-3 flex flex-col gap-3">
+              <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+                Size
+                <Select
+                  value={numSize}
+                  onChange={(e) => setNumSize(Number(e.target.value))}
+                  aria-label="Page number size"
+                  className="w-full text-xs text-foreground"
+                >
+                  {[8, 9, 10, 11, 12, 14].map((s) => (
+                    <option key={s} value={s}>
+                      {s} pt
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+                Position
+                <Select
+                  value={numPos}
+                  onChange={(e) =>
+                    setNumPos(e.target.value as "bottom-center" | "bottom-right")
+                  }
+                  aria-label="Page number position"
+                  className="w-full text-xs text-foreground"
+                >
+                  <option value="bottom-center">Bottom center</option>
+                  <option value="bottom-right">Bottom right</option>
+                </Select>
+              </label>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  void app.applyBytesOp(
+                    (b) => addPageNumbers(b, { fontSize: numSize, position: numPos }),
+                    "Page numbers added",
+                  )
+                }
+              >
+                Add page numbers
+              </Button>
+            </div>
+          </div>
+
+          <Button variant="outline" className="gap-2" onClick={() => void app.downloadCurrent()}>
+            <Download className="h-4 w-4" /> Save PDF
           </Button>
         </div>
-      </div>
-
-      <div className="pt-5">
-        <Button variant="outline" className="gap-2" onClick={() => void app.downloadCurrent()}>
-          <Download className="h-4 w-4" /> Save PDF
-        </Button>
       </div>
     </ToolShell>
   );
@@ -1546,6 +1716,7 @@ const HF_TOKEN_HINT = "Tokens: {page} {pages} {date} {bates}";
 
 export function HeaderFooterScreen() {
   const app = useApp();
+  const [previewPage, setPreviewPage] = useState(0);
   const [slots, setSlots] = useState({
     headerLeft: "",
     headerCenter: "",
@@ -1565,14 +1736,43 @@ export function HeaderFooterScreen() {
   const [batesStart, setBatesStart] = useState(1);
   const [batesDigits, setBatesDigits] = useState(6);
 
-  if (!app.pdf || !app.docBytes) {
+  const pdf = app.pdf;
+  const pageCount = app.numPages;
+  const page = pdf && previewPage < pageCount ? pdf.page(previewPage) : null;
+  const previewScale = page ? Math.min(480 / page.width, 560 / page.height) : 1;
+
+  if (!pdf || !app.docBytes || !page) {
     return (
       <ToolShell title="Headers & footers" description="Stamp text, dates, page numbers and Bates numbers.">
         <NeedsDocument />
       </ToolShell>
     );
   }
-  const pageCount = app.numPages;
+  const effectiveSlots = { ...slots };
+  if (batesOn && !Object.values(slots).some((slot) => slot.includes("{bates}"))) {
+    const implicitBatesSlot = !slots.footerRight.trim() ? "footerRight" : "footerLeft";
+    effectiveSlots[implicitBatesSlot] = "{bates}";
+  }
+  const previewTargets = range.trim()
+    ? parsePageRanges(range, pageCount)
+    : Array.from({ length: pageCount }, (_, index) => index);
+  const previewTargetIndex = previewTargets.indexOf(previewPage);
+  const previewIsIncluded = previewTargetIndex >= 0;
+  const previewDate = new Date().toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const previewBates = batesOn
+    ? `${batesPrefix}${String(batesStart + Math.max(0, previewTargetIndex)).padStart(batesDigits, "0")}${batesSuffix}`
+    : "";
+  const expandPreviewText = (template: string) =>
+    template
+      .split("{page}").join(String(previewPage + 1))
+      .split("{pages}").join(String(pageCount))
+      .split("{date}").join(previewDate)
+      .split("{bates}").join(previewBates)
+      .trim();
 
   const apply = () => {
     const anyText = Object.values(slots).some((s) => s.trim());
@@ -1588,16 +1788,10 @@ export function HeaderFooterScreen() {
         return;
       }
     }
-    let effective = { ...slots };
-    if (batesOn && !Object.values(slots).some((s) => s.includes("{bates}"))) {
-      // Bates on but no slot uses it — default it into the emptiest footer corner.
-      const slot = !slots.footerRight.trim() ? "footerRight" : "footerLeft";
-      effective = { ...effective, [slot]: "{bates}" };
-    }
     void app.applyBytesOp(
       (b) =>
         addHeadersFooters(b, {
-          slots: effective,
+          slots: effectiveSlots,
           fontSize,
           color,
           margin,
@@ -1623,12 +1817,73 @@ export function HeaderFooterScreen() {
     </label>
   );
 
+  const previewSlot = (
+    key: keyof typeof slots,
+    vertical: "top" | "bottom",
+    horizontal: "left" | "center" | "right",
+  ) => {
+    const text = previewIsIncluded ? expandPreviewText(effectiveSlots[key]) : "";
+    if (!text) return null;
+    const horizontalStyle =
+      horizontal === "left"
+        ? { left: sideMargin * previewScale, textAlign: "left" as const }
+        : horizontal === "center"
+          ? { left: "50%", textAlign: "center" as const, transform: "translateX(-50%)" }
+          : { right: sideMargin * previewScale, textAlign: "right" as const };
+    return (
+      <span
+        key={key}
+        data-testid={`header-footer-preview-${key}`}
+        aria-hidden="true"
+        className="pointer-events-none absolute max-w-[42%] overflow-hidden text-ellipsis whitespace-nowrap font-sans leading-none"
+        style={{
+          color,
+          fontSize: fontSize * previewScale,
+          ...(vertical === "top"
+            ? { top: margin * previewScale }
+            : { bottom: margin * previewScale }),
+          ...horizontalStyle,
+        }}
+      >
+        {text}
+      </span>
+    );
+  };
+
   return (
     <ToolShell
       title="Headers & footers"
       description="Stamp up to six text slots on every page — free text plus {page}, {pages}, {date} and Bates {bates} tokens."
     >
-      <div className="rounded-xl border bg-card p-4 shadow-shell">
+      <div className="flex flex-wrap gap-6" data-testid="header-footer-workspace">
+        <PdfPagePreviewCard
+          pdf={pdf}
+          page={page}
+          pageIndex={previewPage}
+          pageCount={pageCount}
+          scale={previewScale}
+          docVersion={app.docVersion}
+          onPageChange={setPreviewPage}
+          testId="header-footer-page-preview"
+        >
+          {previewSlot("headerLeft", "top", "left")}
+          {previewSlot("headerCenter", "top", "center")}
+          {previewSlot("headerRight", "top", "right")}
+          {previewSlot("footerLeft", "bottom", "left")}
+          {previewSlot("footerCenter", "bottom", "center")}
+          {previewSlot("footerRight", "bottom", "right")}
+          {range.trim() && !previewIsIncluded && (
+            <span className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full bg-muted/90 px-2 py-1 text-[10px] font-medium text-muted-foreground shadow-sm">
+              Not included in page range
+            </span>
+          )}
+        </PdfPagePreviewCard>
+
+        <div
+          className="flex min-w-56 flex-1 flex-col gap-3"
+          data-testid="header-footer-controls"
+        >
+          <div className="rounded-xl border bg-card p-4 shadow-shell">
         <p className="pb-2 text-sm font-medium">Header</p>
         <div className="grid grid-cols-3 gap-3">
           {slotInput("headerLeft", "Left")}
@@ -1693,11 +1948,15 @@ export function HeaderFooterScreen() {
             />
           </label>
         </div>
-      </div>
+          </div>
 
-      <div className="mt-4 rounded-xl border bg-card p-4 shadow-shell">
+          <div className="rounded-xl border bg-card p-4 shadow-shell">
         <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-          <Checkbox checked={batesOn} onCheckedChange={(v: boolean) => setBatesOn(v)} />
+          <Checkbox
+            aria-label="Enable Bates numbering"
+            checked={batesOn}
+            onCheckedChange={(v: boolean) => setBatesOn(v)}
+          />
           Bates numbering
         </label>
         <p className="pb-3 pt-1 text-xs text-muted-foreground">
@@ -1758,13 +2017,15 @@ export function HeaderFooterScreen() {
             </span>
           </div>
         )}
-      </div>
+          </div>
 
-      <div className="flex items-center gap-2 pt-5">
-        <Button onClick={apply}>Apply to document</Button>
-        <Button variant="outline" className="gap-2" onClick={() => void app.downloadCurrent()}>
-          <Download className="h-4 w-4" /> Save PDF
-        </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button onClick={apply}>Apply to document</Button>
+            <Button variant="outline" className="gap-2" onClick={() => void app.downloadCurrent()}>
+              <Download className="h-4 w-4" /> Save PDF
+            </Button>
+          </div>
+        </div>
       </div>
     </ToolShell>
   );

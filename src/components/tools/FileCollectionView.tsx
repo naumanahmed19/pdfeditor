@@ -180,6 +180,7 @@ export function FileCollectionView<T>({
               role="button"
               tabIndex={0}
               aria-pressed={selected}
+              style={{ contentVisibility: "auto", containIntrinsicSize: "330px 240px" }}
               onClick={(event) => selectItem(item, index, event)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {

@@ -56,24 +56,19 @@ import { DocToPdfScreen, ImagesToPdfScreen } from "./components/tools/CreatePdfS
 import { PdfaScreen } from "./components/tools/PdfaScreen";
 import { TemplatesScreen } from "./components/tools/TemplatesScreen";
 import { TOOL_HEADER_ACTIONS_ID } from "./components/tools/ToolPageHeader";
+import {
+  FILE_SCOPED_TOOL_SCREENS,
+  TOOL_DEFINITIONS,
+} from "./components/tools/toolRegistry";
 import { ChromeExtensionBridge } from "./components/ChromeExtensionBridge";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
   templates: "New from template",
-  organize: "Organize pages",
-  createimages: "Images to PDF",
-  createdoc: "Word or text to PDF",
-  merge: "Merge PDFs",
-  split: "Split & extract",
-  watermark: "Watermark & numbers",
-  compress: "Compress",
-  crop: "Crop pages",
-  headerfooter: "Headers & footers",
-  export: "Export",
-  compare: "Compare documents",
-  pdfa: "PDF/A check",
   settings: "Settings",
+  ...Object.fromEntries(
+    TOOL_DEFINITIONS.map((tool) => [tool.screen, tool.title]),
+  ),
 };
 
 /**
@@ -81,18 +76,6 @@ const SCREEN_TITLES: Record<string, string> = {
  * `filename › tool` breadcrumb. Screens that stand alone (templates, merge,
  * settings) don't, so no misleading file context is implied.
  */
-const FILE_SCOPED_SCREENS = new Set([
-  "organize",
-  "split",
-  "watermark",
-  "compress",
-  "crop",
-  "headerfooter",
-  "export",
-  "compare",
-  "pdfa",
-]);
-
 function PaneShell({ pane }: { pane: { id: string; docId: string } }) {
   const app = useApp();
   // The editable Viewer is bound to the active document, so only render it
@@ -411,7 +394,7 @@ function ContentHeader() {
             }}
           />
         </>
-      ) : FILE_SCOPED_SCREENS.has(app.screen) && app.docName ? (
+      ) : FILE_SCOPED_TOOL_SCREENS.has(app.screen) && app.docName ? (
         // Breadcrumb: the open document (click to return) › the tool.
         <div className="flex min-w-0 items-center gap-1.5 text-sm">
           <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -426,13 +409,15 @@ function ContentHeader() {
           <span className="shrink-0 font-medium">{SCREEN_TITLES[app.screen]}</span>
         </div>
       ) : (
-        <span className="text-sm font-medium">{SCREEN_TITLES[app.screen]}</span>
+        <span className="shrink-0 whitespace-nowrap text-sm font-medium">
+          {SCREEN_TITLES[app.screen]}
+        </span>
       )}
       {app.screen !== "viewer" && (
         <div
           id={TOOL_HEADER_ACTIONS_ID}
           data-testid={TOOL_HEADER_ACTIONS_ID}
-          className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5"
+          className="scrollbar-soft ml-auto min-w-0 flex-1 overflow-x-auto"
         />
       )}
     </div>

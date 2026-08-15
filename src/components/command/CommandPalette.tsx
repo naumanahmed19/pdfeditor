@@ -7,19 +7,12 @@ import {
   Check,
   Circle,
   Cloud,
-  Combine,
-  Crop,
   Download,
-  Droplets,
   Eraser,
-  FileOutput,
-  FileCheck2,
   FilePlus2,
   FileSignature,
   FolderOpen,
   FormInput,
-  GitCompare,
-  Heading,
   Highlighter,
   Image as ImageIcon,
   Info,
@@ -31,7 +24,6 @@ import {
   LockOpen,
   MessageSquare,
   MessageSquareQuote,
-  Minimize2,
   Minus,
   MousePointer2,
   Move,
@@ -46,7 +38,6 @@ import {
   Ruler,
   Save,
   ScanText,
-  Scissors,
   Search,
   Settings,
   Signature,
@@ -77,6 +68,7 @@ import {
   CommandShortcut,
 } from "../ui/command";
 import { Tip } from "../ui/tooltip";
+import { TOOL_DEFINITIONS } from "../tools/toolRegistry";
 
 type CommandGroupId =
   | "global"
@@ -301,103 +293,14 @@ const EDITOR_TOOLS: Array<{
   },
 ];
 
-const DOCUMENT_SCREENS: Array<{
-  screen: Screen;
-  label: string;
-  description: string;
-  icon: LucideIcon;
-  needsPdf?: boolean;
-  aliases?: string[];
-}> = [
-  {
-    screen: "organize",
-    label: "Organize pages",
-    description: "Reorder, rotate, delete, duplicate, or insert pages.",
-    icon: Layers2,
-    needsPdf: true,
-    aliases: ["pages"],
-  },
-  {
-    screen: "createimages",
-    label: "Images to PDF",
-    description: "Build a PDF from PNG or JPEG images, one page each.",
-    icon: FilePlus2,
-    aliases: ["create pdf", "png", "jpeg", "photos", "convert"],
-  },
-  {
-    screen: "createdoc",
-    label: "Word or text to PDF",
-    description: "Convert a .docx or plain-text file into a PDF.",
-    icon: FilePlus2,
-    aliases: ["create pdf", "docx", "word", "text", "convert"],
-  },
-  {
-    screen: "merge",
-    label: "Merge PDFs",
-    description: "Combine PDFs and images into one document.",
-    icon: Combine,
-    aliases: ["combine"],
-  },
-  {
-    screen: "split",
-    label: "Split & extract",
-    description: "Extract page ranges or split into single pages.",
-    icon: Scissors,
-    needsPdf: true,
-  },
-  {
-    screen: "watermark",
-    label: "Watermark & numbers",
-    description: "Add watermark text or page numbers.",
-    icon: Droplets,
-    needsPdf: true,
-  },
-  {
-    screen: "headerfooter",
-    label: "Headers & footers",
-    description: "Add headers, footers, dates, and Bates numbers.",
-    icon: Heading,
-    needsPdf: true,
-    aliases: ["bates"],
-  },
-  {
-    screen: "crop",
-    label: "Crop pages",
-    description: "Trim margins or crop a page region.",
-    icon: Crop,
-    needsPdf: true,
-  },
-  {
-    screen: "compress",
-    label: "Compress",
-    description: "Reduce PDF size by recompressing images.",
-    icon: Minimize2,
-    needsPdf: true,
-  },
-  {
-    screen: "export",
-    label: "Export",
-    description: "Export text, HTML, images, or DOCX.",
-    icon: FileOutput,
-    needsPdf: true,
-  },
-  {
-    screen: "compare",
-    label: "Compare",
-    description: "Compare the open PDF with another document.",
-    icon: GitCompare,
-    needsPdf: true,
-    aliases: ["diff"],
-  },
-  {
-    screen: "pdfa",
-    label: "PDF/A check",
-    description: "Preflight the open PDF against PDF/A-2b rules.",
-    icon: FileCheck2,
-    needsPdf: true,
-    aliases: ["preflight", "archive", "validate"],
-  },
-];
+const DOCUMENT_SCREENS = TOOL_DEFINITIONS.map((tool) => ({
+  screen: tool.screen as Screen,
+  label: tool.commandLabel ?? tool.title,
+  description: tool.description,
+  icon: tool.icon,
+  needsPdf: tool.category === "current",
+  aliases: tool.aliases,
+}));
 
 function normalizeSearch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();

@@ -97,10 +97,29 @@ export async function downloadZip(
   files: Array<{ name: string; data: Uint8Array | Blob }>,
   zipName: string,
 ): Promise<void> {
+  await downloadGeneratedZip(zipName, (addFile) => {
+    for (const file of files) addFile(file.name, file.data);
+  });
+}
+
+/**
+ * Populate and download a zip incrementally. The producer can generate large
+ * file sets one item at a time without retaining a second array of outputs.
+ */
+export async function downloadGeneratedZip(
+  zipName: string,
+  populate: (
+    addFile: (name: string, data: Uint8Array | Blob) => void,
+  ) => void | Promise<void>,
+  onProgress?: (percent: number) => void,
+): Promise<void> {
   const JSZip = (await import("jszip")).default;
   const zip = new JSZip();
-  for (const f of files) zip.file(f.name, f.data);
-  const blob = await zip.generateAsync({ type: "blob" });
+  await populate((name, data) => zip.file(name, data));
+  const blob = await zip.generateAsync(
+    { type: "blob", streamFiles: true },
+    ({ percent }) => onProgress?.(percent),
+  );
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

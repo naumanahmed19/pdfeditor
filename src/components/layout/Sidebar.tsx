@@ -965,6 +965,37 @@ function PageInsertSlot({
   );
 }
 
+type ThumbnailVisibilityCallback = () => void;
+const thumbnailVisibilityCallbacks = new WeakMap<Element, ThumbnailVisibilityCallback>();
+let sharedThumbnailObserver: IntersectionObserver | null = null;
+
+function observeThumbnail(element: Element, callback: ThumbnailVisibilityCallback) {
+  if (typeof IntersectionObserver === "undefined") {
+    callback();
+    return () => {};
+  }
+  if (!sharedThumbnailObserver) {
+    sharedThumbnailObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const visible = thumbnailVisibilityCallbacks.get(entry.target);
+          sharedThumbnailObserver?.unobserve(entry.target);
+          thumbnailVisibilityCallbacks.delete(entry.target);
+          visible?.();
+        }
+      },
+      { rootMargin: "300px" },
+    );
+  }
+  thumbnailVisibilityCallbacks.set(element, callback);
+  sharedThumbnailObserver.observe(element);
+  return () => {
+    sharedThumbnailObserver?.unobserve(element);
+    thumbnailVisibilityCallbacks.delete(element);
+  };
+}
+
 export function Thumbnail({
   pdf,
   pageIndex,
@@ -986,21 +1017,24 @@ export function Thumbnail({
     rendered.current = false;
     const el = wrapRef.current;
     if (!el) return;
-    const obs = new IntersectionObserver(
-      async (entries) => {
-        if (!entries[0].isIntersecting || rendered.current) return;
-        rendered.current = true;
+    let cancelled = false;
+    const unobserve = observeThumbnail(el, () => {
+      if (rendered.current) return;
+      rendered.current = true;
+      void (async () => {
         const page = await pdf.getPage(pageIndex + 1);
+        if (cancelled) return;
         const vp = page.getViewport({ scale: 1 });
         const scale = width / vp.width;
         if (canvasRef.current) {
           await renderPageToCanvas(pdf, pageIndex, canvasRef.current, scale);
         }
-      },
-      { rootMargin: "300px" },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
+      })();
+    });
+    return () => {
+      cancelled = true;
+      unobserve();
+    };
   }, [pdf, pageIndex, width]);
 
   return (
