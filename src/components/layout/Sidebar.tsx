@@ -46,6 +46,7 @@ import type { SignatureInfo } from "../../lib/signatures";
 import type { Annotation, FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Button } from "../ui/button";
+import { EmptyStateMessage } from "../ui/empty-state-message";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
@@ -110,7 +111,7 @@ function SidebarImpl() {
     "attachments" | "signatures"
   >("attachments");
   const [contentPanelTab, setContentPanelTab] = useState<"layers" | "objects">(
-    "layers",
+    "objects",
   );
   const [toolTab, setToolTab] = useState<ToolSidebarTab>("files");
 
@@ -318,14 +319,14 @@ function SidebarImpl() {
                 }}
                 tabs={[
                   {
-                    value: "layers",
-                    label: "Layers",
-                    content: <LayersPanel />,
-                  },
-                  {
                     value: "objects",
                     label: "Objects",
                     content: <ObjectsPanel />,
+                  },
+                  {
+                    value: "layers",
+                    label: "Layers",
+                    content: <LayersPanel />,
                   },
                 ]}
               />
@@ -580,11 +581,11 @@ function CommentsPanel() {
 
   if (!notes.length) {
     return (
-      <p className="px-4 py-3 text-xs text-muted-foreground">
-        No comments yet. Use the comment tool{" "}
-        <MessageSquare className="inline h-3 w-3 align-[-2px]" /> in Edit mode
-        to add one.
-      </p>
+      <EmptyStateMessage
+        icon={MessageSquare}
+        title="No comments yet"
+        description="Use the Comment tool in Edit mode to add notes to this document."
+      />
     );
   }
 
@@ -657,6 +658,17 @@ export function annotationObjectLabel(ann: Annotation): string {
   return detail || OBJECT_KIND_LABEL[ann.kind];
 }
 
+export function annotationObjectSecondaryLabel(
+  label: string,
+  kind: string,
+  locked = false,
+): string | null {
+  if (label.trim().toLocaleLowerCase() === kind.trim().toLocaleLowerCase()) {
+    return null;
+  }
+  return `${kind}${locked ? " · Locked" : ""}`;
+}
+
 export function collectAnnotationObjects(
   annotations: Record<number, Annotation[]> | Record<string, Annotation[]>,
 ): Array<{ page: number; ann: Annotation }> {
@@ -671,6 +683,21 @@ export function collectAnnotationObjects(
         a.ann.x - b.ann.x ||
         a.ann.id.localeCompare(b.ann.id),
     );
+}
+
+export function groupAnnotationObjectsByPage(
+  objects: Array<{ page: number; ann: Annotation }>,
+): Array<{ page: number; objects: Annotation[] }> {
+  const groups: Array<{ page: number; objects: Annotation[] }> = [];
+  for (const { page, ann } of objects) {
+    const current = groups[groups.length - 1];
+    if (!current || current.page !== page) {
+      groups.push({ page, objects: [ann] });
+    } else {
+      current.objects.push(ann);
+    }
+  }
+  return groups;
 }
 
 /** User-added page elements. Locked rows remain selectable here so they can
@@ -691,20 +718,21 @@ function ObjectsPanel() {
     shallowEqual,
   );
   const objects = collectAnnotationObjects(app.annotations);
+  const pageGroups = groupAnnotationObjectsByPage(objects);
+  const [collapsedPages, setCollapsedPages] = useState<Set<number>>(
+    () => new Set(),
+  );
 
   if (!objects.length) {
     return (
-      <div className="px-4 py-4 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">No added objects yet</p>
-        <p className="mt-1 leading-relaxed">
-          Text boxes, images, shapes, comments, and other added elements will
-          appear here. Lock an object to prevent accidental edits.
-        </p>
-      </div>
+      <EmptyStateMessage
+        icon={Layers2}
+        title="No objects yet"
+        description="Text, images, shapes, and other added elements will appear here."
+      />
     );
   }
 
-  let lastPage = -1;
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
       <div className="mb-2 flex items-center justify-between px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -712,75 +740,115 @@ function ObjectsPanel() {
         <span>Lock to protect</span>
       </div>
       <div className="flex flex-col gap-1">
-        {objects.map(({ page, ann }) => {
-          const selected = app.selected?.page === page && app.selected.id === ann.id;
-          const showPage = page !== lastPage;
-          lastPage = page;
-          const label = annotationObjectLabel(ann);
-          const kind = OBJECT_KIND_LABEL[ann.kind];
+        {pageGroups.map(({ page, objects: pageObjects }) => {
+          const collapsed = collapsedPages.has(page);
+          const contentId = `objects-page-${page + 1}`;
           return (
-            <Fragment key={ann.id}>
-              {showPage && (
-                <div className="px-1 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground first:pt-0">
+            <section key={page} className="first:[&>button]:mt-0">
+              <button
+                type="button"
+                aria-controls={contentId}
+                aria-expanded={!collapsed}
+                aria-label={`${collapsed ? "Expand" : "Collapse"} page ${page + 1} objects`}
+                className="mt-1 flex w-full items-center gap-1 rounded-md px-1 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
+                onClick={() => {
+                  setCollapsedPages((current) => {
+                    const next = new Set(current);
+                    if (next.has(page)) next.delete(page);
+                    else next.add(page);
+                    return next;
+                  });
+                }}
+              >
+                {collapsed ? (
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 truncate">
                   Page {page + 1}
                   {page === app.currentPage ? " · Current" : ""}
+                </span>
+                <span className="shrink-0 font-normal normal-case">
+                  {pageObjects.length}
+                </span>
+              </button>
+              {!collapsed && (
+                <div id={contentId} className="flex flex-col gap-1">
+                  {pageObjects.map((ann) => {
+                    const selected =
+                      app.selected?.page === page && app.selected.id === ann.id;
+                    const label = annotationObjectLabel(ann);
+                    const kind = OBJECT_KIND_LABEL[ann.kind];
+                    const secondaryLabel = annotationObjectSecondaryLabel(
+                      label,
+                      kind,
+                      ann.locked,
+                    );
+                    return (
+                      <div
+                        key={`${page}:${ann.id}`}
+                        className={cn(
+                          "group flex items-center gap-2 rounded-md border px-2 py-1.5 transition-colors",
+                          selected
+                            ? "border-primary/50 bg-primary/10"
+                            : "border-transparent hover:border-sidebar-border hover:bg-accent/60",
+                          ann.locked && "bg-muted/40",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          aria-label={`Select ${kind}: ${label}`}
+                          onClick={() => {
+                            app.scrollToPage(page);
+                            app.setMultiSelected(null);
+                            app.setSelected({ page, id: ann.id });
+                            if (app.isMobile) app.setSidebarOpen(false);
+                          }}
+                        >
+                          <span className="block truncate text-xs font-medium">
+                            {label}
+                          </span>
+                          {secondaryLabel && (
+                            <span className="block truncate text-[10px] text-muted-foreground">
+                              {secondaryLabel}
+                            </span>
+                          )}
+                        </button>
+                        <Tip label={ann.locked ? "Unlock object" : "Lock object"}>
+                          <button
+                            type="button"
+                            aria-label={`${ann.locked ? "Unlock" : "Lock"} ${label}`}
+                            aria-pressed={!!ann.locked}
+                            className={cn(
+                              "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
+                              ann.locked
+                                ? "bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
+                                : "text-muted-foreground opacity-70 hover:bg-background hover:text-foreground group-hover:opacity-100",
+                            )}
+                            onClick={() => {
+                              app.updateAnnotation(page, {
+                                ...ann,
+                                locked: ann.locked ? undefined : true,
+                              });
+                              app.setMultiSelected(null);
+                              app.setSelected({ page, id: ann.id });
+                            }}
+                          >
+                            {ann.locked ? (
+                              <Lock className="h-3.5 w-3.5" />
+                            ) : (
+                              <LockOpen className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        </Tip>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-              <div
-                className={cn(
-                  "group flex items-center gap-2 rounded-md border px-2 py-1.5 transition-colors",
-                  selected
-                    ? "border-primary/50 bg-primary/10"
-                    : "border-transparent hover:border-sidebar-border hover:bg-accent/60",
-                  ann.locked && "bg-muted/40",
-                )}
-              >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 text-left"
-                  aria-label={`Select ${kind}: ${label}`}
-                  onClick={() => {
-                    app.scrollToPage(page);
-                    app.setMultiSelected(null);
-                    app.setSelected({ page, id: ann.id });
-                    if (app.isMobile) app.setSidebarOpen(false);
-                  }}
-                >
-                  <span className="block truncate text-xs font-medium">{label}</span>
-                  <span className="block truncate text-[10px] text-muted-foreground">
-                    {kind}
-                    {ann.locked ? " · Locked" : ""}
-                  </span>
-                </button>
-                <Tip label={ann.locked ? "Unlock object" : "Lock object"}>
-                  <button
-                    type="button"
-                    aria-label={`${ann.locked ? "Unlock" : "Lock"} ${label}`}
-                    aria-pressed={!!ann.locked}
-                    className={cn(
-                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
-                      ann.locked
-                        ? "bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
-                        : "text-muted-foreground opacity-70 hover:bg-background hover:text-foreground group-hover:opacity-100",
-                    )}
-                    onClick={() => {
-                      app.updateAnnotation(page, {
-                        ...ann,
-                        locked: ann.locked ? undefined : true,
-                      });
-                      app.setMultiSelected(null);
-                      app.setSelected({ page, id: ann.id });
-                    }}
-                  >
-                    {ann.locked ? (
-                      <Lock className="h-3.5 w-3.5" />
-                    ) : (
-                      <LockOpen className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </Tip>
-              </div>
-            </Fragment>
+            </section>
           );
         })}
       </div>
@@ -1458,9 +1526,12 @@ function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
         </div>
         <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
           {draft.length === 0 ? (
-            <p className="px-2 py-2 text-[11px] text-muted-foreground">
-              No entries. Use + above to add one for the current page.
-            </p>
+            <EmptyStateMessage
+              className="h-full min-h-32"
+              icon={FileText}
+              title="No outline entries"
+              description="Use + above to add an entry for the current page."
+            />
           ) : (
             <OutlineEditorTree nodes={draft} depth={0} onChange={(n) => setDraft(n)} />
           )}
@@ -1498,9 +1569,11 @@ function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
         </Tip>
       </div>
       {!outline.length ? (
-        <p className="px-4 py-1 text-xs text-muted-foreground">
-          This document has no outline. Use Edit to create one.
-        </p>
+        <EmptyStateMessage
+          icon={FileText}
+          title="No outline yet"
+          description="Use Edit to add navigation entries for this document."
+        />
       ) : (
         <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
           <OutlineTree
@@ -1741,10 +1814,12 @@ function AttachmentsPanel() {
         {list === null ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>
         ) : list.length === 0 ? (
-          <p className="px-2 py-2 text-[11px] text-muted-foreground">
-            No embedded files. Use + above to attach one — it travels inside the
-            saved PDF.
-          </p>
+          <EmptyStateMessage
+            className="h-full"
+            icon={Paperclip}
+            title="No attachments"
+            description="Use + above to embed a file in the saved PDF."
+          />
         ) : (
           <div className="flex flex-col gap-0.5">
             {list.map((att) => (
@@ -1865,10 +1940,12 @@ function LayersPanel() {
         {layers === null ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>
         ) : layers.length === 0 ? (
-          <p className="px-2 py-2 text-[11px] text-muted-foreground">
-            No layers in this document. Layers (optional content groups) are
-            typically found in CAD exports and print-production PDFs.
-          </p>
+          <EmptyStateMessage
+            className="h-full"
+            icon={Layers}
+            title="No document layers"
+            description="Layers are usually found in CAD exports and print-production PDFs."
+          />
         ) : (
           <div className="flex flex-col gap-0.5">
             {layers.map((l) => (
@@ -1964,11 +2041,12 @@ function SignaturesPanel() {
         {list === null ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">Verifying…</p>
         ) : list.length === 0 ? (
-          <p className="px-2 py-2 text-[11px] text-muted-foreground">
-            No digital signatures. Use + above to sign with a certificate
-            (.p12/.pfx) — unlike a drawn signature, it proves the document
-            hasn't changed since signing.
-          </p>
+          <EmptyStateMessage
+            className="h-full"
+            icon={ShieldCheck}
+            title="No digital signatures"
+            description="Use + above to sign with a .p12 or .pfx certificate."
+          />
         ) : (
           <div className="flex flex-col gap-1.5">
             {list.map((sig, i) => (
