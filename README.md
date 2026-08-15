@@ -11,6 +11,12 @@ Windows desktop app with a clean, shadcn-style UI.
 Everything runs client-side. Documents never leave your machine except as
 context sent to the AI endpoint you configure (which can be fully local).
 
+> [!IMPORTANT]
+> PickPDF is **source-available, not open source**. This public repository may
+> be viewed for inspection and reference, but it may not be copied, modified,
+> compiled, packaged, redistributed, hosted, or republished without prior
+> written permission. See [License](#license) and [LICENSE](LICENSE).
+
 ---
 
 ## Reader
@@ -315,8 +321,9 @@ a missing update feed before the first release is published.
   search text, outline, links, form-field reading, metadata — and all in-place
   editing (text rewrite, object move/resize/delete, redaction, form appearance
   regeneration). **pdf-lib** (+ fontkit) assembles documents (merge, split,
-  forms, baking annotations on save). **JSZip** for zip exports. (pdf.js has
-  been fully removed.)
+  forms, baking annotations on save). **JSZip** handles zip exports. PDFium is
+  the primary runtime; `pdfjs-dist` remains only as a narrow, lazy font-program
+  recovery fallback for unusual embedded fonts.
 - State in a single React context store; persistence via IndexedDB and
   localStorage. No backend.
 
@@ -334,12 +341,36 @@ a missing update feed before the first release is published.
   subset can't be typed — the editor says so; overlay a correction with the
   Text tool instead.
 
-- **Comments are one-way for now**: saving writes them into the PDF as native
-  popup annotations (visible in Acrobat/Chrome), but PickPDF doesn't yet
-  re-import embedded comments when a file is opened — so they won't reappear in
-  PickPDF's own viewer after a save-and-reopen. Round-trip import is planned.
+- PickPDF re-imports common native annotations for editing, including sticky
+  notes, text markups, ink, square/circle, line/arrow and plain FreeText.
+  Unsupported annotation types remain in the PDF but are not yet converted to
+  editable PickPDF overlays.
 - OCR fetches its language model once from a CDN (cached); the recognition
   itself runs locally, so your document is never uploaded.
 
-See [TODO.md](TODO.md) for the roadmap (a full form-builder UX, richer search
-options, and a two-page spread view).
+See [TODO.md](TODO.md) for the current roadmap, prioritized around real-document
+compatibility, security completion, signature depth, OCR/conversion fidelity,
+desktop automation and accessibility.
+
+## License
+
+PickPDF is proprietary **source-available** software. It is not licensed under
+MIT, Apache, GPL, AGPL, or another open-source license.
+
+You may view this public repository as permitted by GitHub's Terms of Service.
+Without prior written permission from the PickPDF copyright holder, you may
+not:
+
+- copy, modify, translate, or create derivative works from the PickPDF source;
+- compile, build, package, or publish PickPDF from this repository;
+- distribute, host, deploy, sublicense, sell, or republish the source or any
+  compiled build; or
+- use the source to operate a hosted service or competing product.
+
+Official PickPDF applications may be used under the end-user terms supplied
+through official distribution channels. Third-party dependencies and bundled
+fonts remain governed by their own licenses.
+
+See [LICENSE](LICENSE) for the complete terms. Contact PickPDF through
+[pickpdf.app](https://pickpdf.app/) for commercial licensing or written
+permission.

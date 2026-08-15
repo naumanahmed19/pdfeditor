@@ -3,11 +3,26 @@ import {
   CURRENT_PDF_TOOLS,
   FILE_SCOPED_TOOL_SCREENS,
   GENERAL_TOOLS,
+  matchesToolSearch,
   TOOL_BY_SCREEN,
   TOOL_DEFINITIONS,
 } from "./toolRegistry";
 
 describe("tool registry", () => {
+  it("matches sidebar searches against labels, descriptions, and aliases", () => {
+    const compare = TOOL_DEFINITIONS.find((tool) => tool.screen === "compare")!;
+    const fields = [
+      compare.title,
+      compare.commandLabel,
+      compare.description,
+      ...(compare.aliases ?? []),
+    ];
+
+    expect(matchesToolSearch("  DIFF ", fields)).toBe(true);
+    expect(matchesToolSearch("another document", fields)).toBe(true);
+    expect(matchesToolSearch("watermark", fields)).toBe(false);
+  });
+
   it("contains one definition per tool screen", () => {
     const screens = TOOL_DEFINITIONS.map((tool) => tool.screen);
 

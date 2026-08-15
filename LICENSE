@@ -1,0 +1,43 @@
+PickPDF Proprietary Source License
+
+Copyright (c) 2026 PickPDF. All rights reserved.
+
+This repository and its contents, including the PickPDF source code,
+documentation, artwork, and original assets (collectively, the "Software"),
+are proprietary and are made publicly visible for inspection and reference
+only. The Software is not open-source software.
+
+GitHub's Terms of Service may permit users of GitHub to view and fork a public
+repository through GitHub's platform. Those platform permissions do not grant
+you a copyright license to use the Software outside that limited scope.
+
+Unless you have prior written permission from the copyright holder, you may
+not:
+
+1. copy, modify, translate, adapt, or create derivative works of the Software;
+2. compile, build, package, or create executable or installable versions of
+   the Software;
+3. distribute, publish, sublicense, sell, rent, host, deploy, or otherwise make
+   the Software, its source code, or compiled builds available to any person;
+4. use the Software or its source code to provide a hosted service or to create
+   or operate a competing product; or
+5. remove or alter copyright, trademark, attribution, or proprietary notices.
+
+Official PickPDF applications and services distributed by the copyright
+holder are governed by any end-user terms supplied with those applications or
+services. This source license does not grant permission to redistribute
+official PickPDF builds.
+
+Third-party libraries, fonts, and other components included with or used by
+PickPDF remain subject to their respective licenses. This license applies only
+to the original PickPDF code, documentation, artwork, and assets for which the
+PickPDF copyright holder owns the applicable rights.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT
+PERMITTED BY LAW, THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+
+For commercial licensing, redistribution, partnership, or other permissions,
+contact PickPDF through https://pickpdf.app/.

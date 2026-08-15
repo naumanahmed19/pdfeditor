@@ -1,28 +1,37 @@
 # TODO
 
-## Priorities — path to "best PDF editor" (gap analysis 2026-07-10)
+## Priorities — path to "best PDF editor" (gap analysis 2026-08-15)
 
-Feature *breadth* is already competitive; the gaps are depth on flagship
-features, trust infrastructure, and the native perks the Pro pricing pitch
-depends on. Ranked order of attack:
+Feature *breadth* is already competitive. Paragraph reflow, image replacement,
+annotation import/round-trip, multi-language OCR, layers, measurements,
+PDF/A validation, a command palette and grouped searchable editor tools have
+shipped. The remaining gap is industry-grade reliability, interoperability,
+compliance and automation. Ranked order of attack:
 
-1. **Digital signatures** — ✅ shipped (sign with .p12/.pfx + verify + sidebar
-   Signatures panel; see "Other deferred items"). Remaining depth: warn on
-   edits that invalidate a signed doc, incremental saves so signatures survive
-   edits, OS cert store / ECDSA / timestamps.
-2. **Save-path test harness** — one test file (`pdfium.redact.test.ts`) guards
-   an app that rewrites content streams, re-encrypts and destructively
-   redacts. Corpus of tricky PDFs + round-trip tests (open → edit → save →
-   reopen → assert text/forms/encryption/tags intact) in CI.
-3. **Paragraph reflow** for in-place text editing (Content editing below) —
-   the #1 "can it really edit PDFs?" perception gap vs Acrobat/Foxit.
-4. **Annotation round-trip** (new section below) — reopening a saved file must
-   yield editable annotations, ours or Acrobat's; today comments are
-   write-only and markups bake one-way.
-5. **Batch + native desktop perks in Tauri** (new section below) — the Pro
-   tier is sold on these and the Rust backend is currently empty.
-6. **PDF/A validation + multi-language OCR** — widest market expansion per
-   unit of effort (gov/legal/archival buyers; non-English scans).
+1. **Real-PDF compatibility corpus and save-path harness** — add versioned
+   Office exports, scans, signed/tagged PDFs, CAD/layered files, malformed PDFs,
+   unusual fonts and 50–500 MB documents. In CI, run open → edit → save →
+   reopen assertions for text, images, annotations, forms, encryption,
+   signatures, layers, attachments and tags. Add an external-viewer release
+   checklist for Acrobat, Foxit/PDF-XChange, Chrome and macOS Preview.
+2. **Security completion** — add search/pattern redaction, a reviewed PII
+   suggestion flow, document sanitization (metadata, annotations, attachments,
+   hidden layers and embedded content), and a pre-export inspection report.
+3. **Digital-signature depth** — warn before every operation that invalidates
+   a signature, then add incremental saves, OS certificate/smartcard access,
+   ECDSA verification/signing and RFC 3161 timestamps.
+4. **OCR and conversion fidelity** — add OCR confidence review plus
+   deskew/despeckle/rotation correction; improve PDF→DOCX layout fidelity and
+   add table extraction before broadening to more weak conversion formats.
+5. **Native desktop automation** — batch queues, file associations, a CLI,
+   reliable disk save and recovery for large documents, then optional native
+   PDFium rendering.
+6. **Accessibility and archival compliance** — preserve and validate tagged
+   PDF structure, expose reading-order checks/repair, add accessibility reports,
+   then move from PDF/A validation to conversion where safe.
+
+Do not prioritize more annotation shapes or more AI chat actions until the
+reliability, security and workflow gaps above have objective release evidence.
 
 ## Proper form builder (priority)
 
@@ -91,9 +100,10 @@ depends on. Ranked order of attack:
 
 ## PDFium engine (@embedpdf/pdfium)
 
-> **Migration complete** — pdf.js has been removed entirely; PDFium
-> (`src/lib/engine.ts`) now handles rendering, text layer geometry, search
-> text, annotations and forms behind a pdf.js-compatible API surface. See
+> **Primary migration complete** — PDFium (`src/lib/engine.ts`) handles
+> rendering, text geometry, search, annotations and forms. `pdfjs-dist` remains
+> as a narrow lazy fallback in `lib/fontcompile.ts` for recovering embedded
+> font programs that PDFium exposes in formats fontkit cannot parse. See
 > [PDFIUM_EXPERIMENT.md](PDFIUM_EXPERIMENT.md) for the original evaluation.
 
 - [x] Proof-of-concept: lazy-loaded PDFium engine (`getPdfium`), page
@@ -104,11 +114,11 @@ depends on. Ranked order of attack:
 - [x] Wire `redactRegions` behind a **Redact tool** — draw black boxes with the
       Redact tool, then **Apply redactions** destructively strips the covered
       text/content (also enforced on save, so nothing leaks under an un-applied
-      box). Image-only regions are covered but the underlying image object isn't
-      yet removed — text redaction is fully destructive.
-- [x] Full migration off pdf.js: rendering, text layer, search, annotations and
-      forms all run on PDFium (`engine.ts` exposes pdf.js-shaped APIs so
-      callers didn't change); `pdfjs-dist` dependency removed
+      box). Image objects and fully covered vector paths are removed through the
+      verified object-removal pass described below.
+- [x] Primary viewer migration off pdf.js: rendering, text layer, search,
+      annotations and forms all run on PDFium (`engine.ts` exposes the
+      compatibility API); pdf.js is not part of normal viewing/editing
 - [x] Redaction: remove the underlying image object for image-only regions —
       shipped (`removeObjectsInRects` drops overlapping images and fully
       covered vector paths, with post-apply verification that re-opens the
@@ -118,7 +128,7 @@ depends on. Ranked order of attack:
 - [ ] Desktop build alternative: pdfium-render (Rust) on the Tauri backend for
       native-speed rasterization without WASM bundle cost
 
-## Other deferred items
+## Security, OCR and signatures
 
 - [x] OCR for scanned PDFs (tesseract.js) — adds an invisible searchable text
       layer so search/select/edit/AI work on scans (Tools → Make searchable)
@@ -158,11 +168,25 @@ depends on. Ranked order of attack:
         report "not verifiable", never a false verdict)
 - [x] Search options — case / whole-word / regex / preserve-case shipped
       (`lib/search.ts`), scoped to PDF text + annotations + form values
+- [ ] Search/pattern redaction — reuse document search to collect reviewable
+      redaction marks for selected terms, regex patterns and page ranges before
+      applying destructive removal
+- [ ] Reviewed PII suggestions — local detection may propose email, phone,
+      account and identity patterns, but the user must review every mark before
+      applying; never silently redact from an AI result
+- [ ] Sanitize document — inventory and optionally remove metadata, comments,
+      attachments, hidden layers, embedded files and other hidden content, then
+      produce a clear pre-export report
+- [ ] OCR quality review — surface low-confidence words for correction before
+      committing the invisible text layer
+- [ ] Scan cleanup — deskew, orientation correction, despeckle/contrast cleanup
+      and selected-page OCR; keep all preprocessing on-device
 
-## Feature gaps (not yet started)
+## Capability status and remaining gaps
 
-Absent capabilities users coming from Acrobat / PDF-XChange / Sejda expect,
-plus a few differentiators. Roughly ordered by effort-to-value within each group.
+Shipped capabilities and the remaining depth users coming from Acrobat, Foxit,
+Nitro or PDF-XChange expect. Roughly ordered by effort-to-value within each
+group.
 
 ### Annotation quick wins (cheap — the annotation pipeline already exists)
 
@@ -181,37 +205,40 @@ plus a few differentiators. Roughly ordered by effort-to-value within each group
       applies to text boxes, images/stamps, shapes, lines, arrows, ink and
       whiteout; baked via a content-stream rotation about the box center
       (`rotation` on `BaseAnnotation`)
-- [ ] General annotation alignment / snapping / distribute — the guides,
-      align and distribute tooling already built for the form builder
-      (`lib/formbuilder.ts`, `snapGuides` in `store.tsx`) is scoped to form
-      fields only; wire the same math up for regular annotations
-- [ ] Polygon / polyline / cloud shapes — only rect/ellipse/line/arrow exist
-- [ ] Measure / dimension tools (distance, perimeter, area with scale
-      calibration) — with polygon/cloud, this is the door into the
-      AEC/construction niche (Bluebeam territory)
+- [x] General annotation alignment / snapping / distribute — shared geometry
+      lives in `lib/snap.ts`; regular annotations and form fields use alignment
+      guides, and multi-selection exposes align/distribute controls
+- [x] Polygon / polyline / cloud shapes — vertex-based creation with closed,
+      open and scalloped-cloud rendering
+- [x] Measure / dimension tools — calibrated distance, perimeter and area
+      measurements with live readouts and persisted scale/unit
 
-### Annotation interop / round-trip (new — reopening must not be one-way)
+### Annotation interop / round-trip
 
-- [ ] Re-import annotations on reopen — comments save as native /Text popups
-      but are NOT read back (write-only round-trip); highlights/shapes bake
-      one-way. Reopening our own saved file should yield editable
-      annotations, not frozen content
-- [ ] Import annotations authored elsewhere (Acrobat/Foxit markups) into the
-      editable overlay model
+- [x] Re-import supported native annotations on reopen — highlight, underline,
+      strikeout, squiggly, ink, square, circle, line/arrow, sticky note and
+      plain FreeText annotations round-trip into the editable overlay model
+      (`lib/annotimport.ts`, guarded by `lib/annotroundtrip.test.ts`)
+- [x] Import supported Acrobat/Foxit-authored standard markups into the editable
+      overlay model; signed documents remain untouched so import cannot break
+      their byte ranges
+- [ ] Expand annotation import to unsupported native types: stamps, polygons,
+      file-attachment annotations and richer FreeText appearance/style data
 - [ ] XFDF import/export (and comments-summary export) for review workflows
 - [ ] Reconcile authored links vs the read-only `LinkLayer` (existing
       document links and our `LinkAnnotation`s live in separate worlds)
 
 ### Content editing (biggest gap vs Acrobat / Foxit / PDF-XChange)
 
-The pro desktop editors all offer true content editing; our inline text edit
-now works at LINE level with font fidelity (see shipped items below) — the
-remaining gap to the pros is paragraph reflow and image objects.
+The pro desktop editors all offer true content editing. PickPDF now edits
+line/paragraph scopes with real font data and can replace existing images. The
+remaining gap is predictable fidelity across mixed-style, unusual-font and
+complex-layout PDFs.
 
-- [ ] Paragraph-level text editing with reflow — detect the paragraph block
-      around the edited run (text-layer geometry already gives line boxes),
-      re-wrap lines on insert/delete instead of overflowing or gapping a
-      single run, rewrite the affected content-stream text objects
+- [x] Paragraph-level text editing with reflow — column-aware paragraph
+      collection, soft wrapping, width resize, line creation/removal, glyph
+      coverage checks and overlap/page-boundary warnings. Mixed face/size
+      paragraphs deliberately block structural reflow rather than lose styling
 - [x] Font matching for edited text — in-place edits ALWAYS keep the
       document's embedded face (`FPDFText_SetText`); toolbar shows the real
       font name with replacement as an explicit "Replace:" choice; the
@@ -226,13 +253,11 @@ remaining gap to the pros is paragraph reflow and image objects.
       baseline shear); un-bold/un-italic recreates with a matched face.
       Whole visual line is edited as one string (runs grouped by baseline,
       diff mapped back per run). Remaining: arbitrary sub-line selections
-- [ ] Image object editing — remaining piece is **replace in place**: move /
-      resize / delete / recolor of existing page images shipped (`editobject`
-      tool, `objectlayer.tsx`, `transformObject`/`removeObject`), but
-      swapping an image's bitmap still means delete + insert overlay. The
-      Compress tool already re-encodes image objects
-      (`EPDFImageObj_SetJpeg/SetPng`), so the plumbing exists. Also unblocks
-      the redaction image-removal item above.
+- [x] Image object editing — move, resize, delete and replace existing page
+      image objects in place (`replaceImageObject` via PDFium JPEG/PNG setters)
+- [ ] Content-editing compatibility matrix — add fixtures and golden checks for
+      mixed-style paragraphs, Type1/CFF/CID subsets, vertical/RTL text,
+      transparency groups, rotated/skewed objects and clipped content
 
 ### Document tools
 
@@ -274,10 +299,14 @@ remaining gap to the pros is paragraph reflow and image objects.
 
 ### Create PDF from anything (import side — top acquisition funnel)
 
-- [ ] Standalone image→PDF screen — nearly free: `imagesToPdfPages` already
-      exists but is only reachable through Merge
-- [ ] DOCX→PDF import — the valuable hard one (client-side layout engine, or
-      native converter on the Tauri side as a Pro perk)
+- [x] Standalone image→PDF screen — ordered PNG/JPEG file collection with page
+      creation, previews and tool-aware drag/drop
+- [x] Basic DOCX/text→PDF import — standalone Word or text screen with local
+      conversion; appropriate for ordinary flowing documents
+- [ ] High-fidelity DOCX→PDF import — preserve complex pagination, tables,
+      floating images, headers/footers, sections and Office layout semantics;
+      likely requires a native converter for desktop rather than promising
+      browser-perfect Office rendering
 - [ ] HTML→PDF (print-to-PDF pipeline could bootstrap this)
 
 ### AI differentiators
@@ -297,11 +326,11 @@ remaining gap to the pros is paragraph reflow and image objects.
 
 ### Enterprise / market unlocks
 
-- [ ] Multi-language OCR — Tesseract worker is hardcoded to `eng`
-      (`lib/ocr.ts`); a language picker is cheap and instantly widens the
-      market, and pairs with the translation AI story
-- [ ] Layers (OCG / optional content) panel — show/toggle layers; expected by
-      CAD/print/engineering users, PDFium supports it
+- [x] Multi-language OCR — searchable language picker with 30+ curated
+      Tesseract languages, per-language cached model download and on-device
+      recognition (`lib/ocrLanguages.ts`)
+- [x] Layers (OCG / optional content) panel — list nested optional-content
+      groups and toggle individual/all layer visibility (`lib/ocg.ts`)
 - [ ] Incremental (append) saves — all saves are full rewrites today
       (pdf-lib `save()` / PDFium `saveAsCopy`); required before digital
       signatures can survive an edit, and enables faster saves on large docs
@@ -311,9 +340,10 @@ remaining gap to the pros is paragraph reflow and image objects.
 ### Native desktop perks (monetization-critical — Pro is SOLD on these)
 
 The Pro one-time-purchase pitch differentiates on native perks, not feature
-locks (see docs in pickpdf-web) — but the Tauri Rust backend is essentially
-empty (`src-tauri/src/lib.rs` only sets up logging). These must exist before
-launch:
+locks (see docs in pickpdf-web). The Tauri backend currently covers native
+menus, system-font matching, veraPDF validation, updates, filesystem/SQL and
+process integration, but not document-processing automation. These remain the
+monetization-critical native workflows:
 
 - [ ] Batch processing — run merge/compress/OCR/watermark/convert over a
       folder or file list; nothing today operates on more than the open doc
@@ -337,49 +367,52 @@ launch:
       subset+scaled PDF (`buildPrintDoc`, pdf-lib `embedPages`) then prints via
       the existing iframe path; annotations are baked first
 
-### Toolbar / UX organization (come back to this)
+### Toolbar / UX organization
 
-The editor toolbar's first row shows ~19 annotation tools in one flat,
-horizontally-scrolling strip plus Insert image / Form / Stamp / Sign controls —
-overwhelming at a glance. The tools already carry a `group` number (0–4) in the
-`TOOLS` array (`components/viewer/Toolbar.tsx`) that today only draws divider
-lines. Explored ways to reduce the clutter (Photoshop-style):
-
-- [ ] Flyout grouping — collapse each `group` into ONE toolbar slot showing the
-      group's last-used tool + a caret; click opens a small menu with the rest
-      (Select / Text / Markup / Shapes / Erase & redact), plus fold image /
-      form / stamp / signature into a single **Insert** flyout. 19 icons → ~6
-      slots. Prototyped and reverted (worked: type-checked, flyouts open via the
-      existing `Menu` primitive — remember `MenuLabel` must be wrapped in
-      `MenuGroup` or Base UI throws). Reverted pending the broader direction
-      below.
-- [ ] Mode tabs (ribbon-lite) — top-level tabs (View / Annotate / Draw / Insert /
-      Review) that swap the whole toolset by task; would also pull the buried
-      Tools menu (merge/split/watermark/…) into a Pages/Document tab. Biggest
-      single declutter; the flyout grouping nests under each tab. **Recommended
-      next** — needs a decision on the exact tab set before building.
-- [ ] Contextual floating bar — a small toolbar next to the current selection
-      with just that object's actions (selection state already exists via
-      `selectedAnn`); keeps the top bar calm. Good complement, not a replacement.
-- [ ] Command palette (⌘K) — searchable fast-lane for every tool/action; makes
-      all tools discoverable by name. Additive, lower priority.
-- [ ] (Skip for now) Left vertical tool rail — the literal Photoshop layout, but
-      it competes with the existing left sidebar for the same edge.
+- [x] Replace the flat 19-tool strip with a calm default toolbar and a grouped,
+      searchable **Editor tools** sidebar covering Basic, Text, Markup, Shapes,
+      Measure and Cleanup tools (`components/viewer/EditorToolsPanel.tsx`)
+- [x] Add the left activity rail for recent files, pages, outline, comments,
+      attachments/signatures, layers/objects, forms, editor tools and document
+      tools; panels can collapse without removing the rail
+- [x] Add a command palette (⌘/Ctrl+K) as the searchable fast lane for editor,
+      document, navigation, AI and settings actions
+- [x] Add contextual controls near selected objects, including inline lock,
+      resize/rotate affordances and multi-selection align/distribute
+- [ ] First-run focus pass — decide whether the AI panel should open by default,
+      verify the editor remains comfortable at common laptop widths, and test
+      keyboard-only discovery of the activity rail/tool panels
+- [ ] Mobile/compact refinement — keep the complete workbench usable without
+      crowding when panels become drawers or documents use split view
 
 ### Housekeeping
 
 - [ ] Internationalization (i18n) — English-only today
-- [ ] Autosave / backup / file versioning
-- [ ] Test infrastructure — **elevated to priority #2** (see Priorities at
-      top): only `pdfium.redact.test.ts` exists; need a tricky-PDF corpus +
-      save-path round-trip tests in CI
-- [ ] PDF/A conversion or validation — matters for government/legal/archival
-      buyers; start with validation (report violations: unembedded fonts,
-      encryption, transparency) before attempting conversion
+- [x] Session autosave / crash recovery for documents up to 80 MB, with an
+      explicit warning when a document is too large to persist
+- [ ] Durable backups and user-visible file version history; lift the 80 MB
+      recovery limit through native path-backed persistence
+- [x] Automated unit/integration coverage — 74 test files / 467 tests as of
+      2026-08-15, including redaction, encryption, signatures, PDFium edits,
+      annotation round-trip, forms, coordinates, persistence and tool flows
+- [ ] Real-document test infrastructure — build the tricky-PDF corpus and
+      save/reopen compatibility matrix described in priority 1; add extension
+      and packaged-desktop end-to-end tests
+- [x] PDF/A validation — built-in PDF/A-2b structural preflight plus optional
+      full veraPDF validation in the desktop app
+- [ ] PDF/A conversion — repair or convert only with explicit, verifiable
+      preservation rules; never label a file conforming from structural checks
+      alone
 - [ ] Accessibility: tagged-PDF support, reading order — enterprise/public-
       sector requirement (Section 508 / EN 301 549); minimum viable: preserve
       existing tags through save (verify we don't strip them today), then a
       reading-order checker
+- [ ] Bundle/startup performance — split the ~2.4 MB minified application chunk,
+      avoid static imports that defeat lazy loading, and decide whether the
+      ~23.6 MB ONNX Runtime WASM belongs in every distribution
+- [ ] Maintainability — split high-churn modules (`store.tsx`, `pdftools.ts`,
+      `annotations.tsx`, `Sidebar.tsx`, `ToolsScreens.tsx`) behind narrower
+      feature boundaries before adding another major workflow family
 
 ### Chrome extension — post-MVP
 

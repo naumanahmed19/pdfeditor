@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TOOL_SIDEBAR_ACTIVITIES } from "./Sidebar";
+import { SIDEBAR_ACTIVITIES, TOOL_SIDEBAR_ACTIVITIES } from "./Sidebar";
 
 describe("tool sidebar activities", () => {
   it("keeps Recent available before tool-specific views", () => {
@@ -8,5 +8,9 @@ describe("tool sidebar activities", () => {
       "files",
       "tools",
     ]);
+  });
+
+  it("offers the editor tool catalog from the document activity rail", () => {
+    expect(SIDEBAR_ACTIVITIES.map((item) => item.key)).toContain("editor-tools");
   });
 });
