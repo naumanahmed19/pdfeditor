@@ -46,6 +46,7 @@ function Capture() {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   persistence.docs = [
     {
       id: "recent-a",
@@ -68,6 +69,34 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("recent history removal", () => {
+  it("collapses the startup sidebar when there are no recent documents", async () => {
+    persistence.docs = [];
+    localStorage.setItem("pickpdf-sidebar-open", "1");
+
+    render(
+      <AppProvider>
+        <Capture />
+      </AppProvider>,
+    );
+
+    await waitFor(() => expect(store.sessionRestoring).toBe(false));
+    expect(store.sidebarOpen).toBe(false);
+    expect(localStorage.getItem("pickpdf-sidebar-open")).toBe("1");
+  });
+
+  it("keeps the saved sidebar preference when recent documents exist", async () => {
+    localStorage.setItem("pickpdf-sidebar-open", "1");
+
+    render(
+      <AppProvider>
+        <Capture />
+      </AppProvider>,
+    );
+
+    await waitFor(() => expect(store.sessionRestoring).toBe(false));
+    expect(store.sidebarOpen).toBe(true);
+  });
+
   it("exposes startup restoration until the active-document lookup settles", async () => {
     render(
       <AppProvider>

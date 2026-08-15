@@ -2541,6 +2541,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const stored = await listStoredDocs();
+        // An empty Recent panel adds no value on the welcome screen. Collapse
+        // it for this startup only, without overwriting the user's saved
+        // preference; the activity rail stays available to reopen it.
+        if (stored.length === 0) setSidebarOpenState(false);
       // Metadata is cheap: render the complete session immediately. Reading
       // and parsing the active PDF happens afterward and must not hold the
       // sidebar in its loading state.
@@ -2567,6 +2571,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // A damaged/unavailable recent-files database must not leave the whole
         // application in a permanent startup state.
         console.error("Could not restore the previous session:", error);
+        setSidebarOpenState(false);
         setRecentLoading(false);
       } finally {
         // AiPanel is keyed by activeTabId to keep chats document-scoped. Do not
