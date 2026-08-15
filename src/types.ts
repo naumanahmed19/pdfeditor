@@ -443,6 +443,7 @@ export interface FolderNode {
 
 export type Screen =
   | "viewer"
+  | "welcome"
   | "templates"
   | "organize"
   | "createimages"

@@ -17,3 +17,14 @@ export const isMacOS =
   );
 
 export const isTauriMacOS = isTauri && isMacOS;
+
+/** Open a URL in the user's real browser. A plain `window.open` is a no-op in
+ *  the Tauri WKWebView, so the desktop shell hands off to the opener plugin. */
+export async function openExternal(url: string): Promise<void> {
+  if (isTauri) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, X } from "lucide-react";
+import { ExternalLink, RefreshCw, X } from "lucide-react";
 import packageInfo from "../../../package.json";
-import { isTauri } from "../../lib/tauri";
+import { isTauri, openExternal } from "../../lib/tauri";
 import { isAppUpdaterEnabled, requestAppUpdateCheck } from "../../lib/updater";
 import { Button } from "../ui/button";
 import { BrandLogo } from "./BrandLogo";
@@ -13,6 +13,10 @@ interface Props {
 
 const APP_TAGLINE =
   "A local-first PDF reader, editor, form designer and organizer with a built-in local-AI assistant.";
+
+/** Public listing for the macOS build. */
+export const MAC_APP_STORE_URL =
+  "https://apps.apple.com/us/app/pickpdf/id6792760089?mt=12";
 
 export function AboutModal({ open, onClose }: Props) {
   const [version, setVersion] = useState(packageInfo.version);
@@ -58,20 +62,30 @@ export function AboutModal({ open, onClose }: Props) {
           {isTauri ? " - Desktop" : " - Web"}
         </p>
 
-        {isAppUpdaterEnabled() && (
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          {isAppUpdaterEnabled() && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                requestAppUpdateCheck();
+                onClose();
+              }}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Check for updates
+            </Button>
+          )}
+
           <Button
             variant="outline"
             size="sm"
-            className="mx-auto mt-4"
-            onClick={() => {
-              requestAppUpdateCheck();
-              onClose();
-            }}
+            onClick={() => void openExternal(MAC_APP_STORE_URL)}
           >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Check for updates
+            <ExternalLink className="h-3.5 w-3.5" />
+            Mac App Store
           </Button>
-        )}
+        </div>
 
         <p className="px-2 pt-3 text-sm text-muted-foreground">{APP_TAGLINE}</p>
 

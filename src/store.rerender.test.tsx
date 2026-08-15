@@ -100,12 +100,43 @@ function SelectorActionProbe() {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   counts.capture = counts.tool = counts.sidebar = counts.selSidebar = counts.selAction = 0;
   counts.parent = counts.memoProbe = counts.plainProbe = 0;
 });
 afterEach(() => cleanup());
 
 describe("store re-render isolation", () => {
+  it("restores the saved sidebar and Copilot visibility preferences", () => {
+    localStorage.setItem("pickpdf-sidebar-open", "0");
+    localStorage.setItem("pickpdf-ai-open", "0");
+
+    render(
+      <AppProvider>
+        <Capture />
+      </AppProvider>,
+    );
+
+    expect(store.sidebarOpen).toBe(false);
+    expect(store.aiOpen).toBe(false);
+  });
+
+  it("saves sidebar and Copilot visibility changes", () => {
+    render(
+      <AppProvider>
+        <Capture />
+      </AppProvider>,
+    );
+
+    act(() => {
+      store.setSidebarOpen(false);
+      store.setAiOpen(false);
+    });
+
+    expect(localStorage.getItem("pickpdf-sidebar-open")).toBe("0");
+    expect(localStorage.getItem("pickpdf-ai-open")).toBe("0");
+  });
+
   it("changing the active tool does not re-render a chrome-only consumer", () => {
     render(
       <AppProvider>

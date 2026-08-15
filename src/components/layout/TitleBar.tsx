@@ -11,13 +11,11 @@ import {
   FileSignature,
   FileText,
   FolderOpen,
-  Layers2,
   Lock,
   LockOpen,
   PanelLeft,
   Printer,
   Save,
-  ScanText,
   Search,
   Settings,
   SlidersHorizontal,
@@ -56,7 +54,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { PrintModal } from "../viewer/PrintModal";
 import { BrandLogo } from "./BrandLogo";
 import { Tip } from "../ui/tooltip";
-import { CURRENT_PDF_TOOLS, GENERAL_TOOLS } from "../tools/toolRegistry";
+import { ToolsMenuItems } from "../tools/ToolsMenuItems";
 
 // Memoized: it has no props, so it ignores parent (Shell) re-renders and only
 // re-renders when its own selected store fields change.
@@ -389,38 +387,13 @@ function TitleBarImpl() {
   );
 
   const toolsItems = (
-    <>
-      <MenuGroup aria-label="Current PDF tools">
-        <MenuLabel>Current PDF</MenuLabel>
-        {CURRENT_PDF_TOOLS.map(({ screen, menuLabel, icon: Icon }) => (
-          <MenuItem key={screen} onClick={() => app.setScreen(screen)}>
-            <Icon className="h-4 w-4 text-muted-foreground" />
-            {menuLabel}
-          </MenuItem>
-        ))}
-        <MenuItem
-          disabled={!app.pdf || app.ocrBusy}
-          onClick={() => void app.runOcrText()}
-        >
-          <ScanText className="h-4 w-4 text-muted-foreground" />
-          Make searchable (OCR)
-        </MenuItem>
-        <MenuItem disabled={!app.pdf} onClick={() => void flattenDocument()}>
-          <Layers2 className="h-4 w-4 text-muted-foreground" />
-          Flatten document
-        </MenuItem>
-      </MenuGroup>
-      <MenuSeparator />
-      <MenuGroup aria-label="General tools">
-        <MenuLabel>General tools</MenuLabel>
-        {GENERAL_TOOLS.map(({ screen, menuLabel, icon: Icon }) => (
-          <MenuItem key={screen} onClick={() => app.setScreen(screen)}>
-            <Icon className="h-4 w-4 text-muted-foreground" />
-            {menuLabel}
-          </MenuItem>
-        ))}
-      </MenuGroup>
-    </>
+    <ToolsMenuItems
+      hasPdf={Boolean(app.pdf)}
+      ocrBusy={app.ocrBusy}
+      onFlatten={() => void flattenDocument()}
+      onRunOcr={() => void app.runOcrText()}
+      onSelectScreen={app.setScreen}
+    />
   );
 
   const triggerCls =
@@ -430,33 +403,59 @@ function TitleBarImpl() {
     <header
       data-tauri-drag-region
       className={cn(
-        "relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar px-2 text-sidebar-foreground sm:gap-2 sm:px-3",
+        "relative flex h-[42px] shrink-0 items-center gap-1.5 bg-sidebar pr-2 text-sidebar-foreground sm:gap-2 sm:pr-3",
         isTauri && !isTauriMacOS && "pr-0 sm:pr-0",
-        isTauriMacOS && "pl-[76px] sm:pl-[76px]",
+        isTauriMacOS && "pl-[76px]",
       )}
     >
-      <Tip label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          aria-label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-          onClick={() => {
-            const next = !app.sidebarOpen;
-            app.setSidebarOpen(next);
-            if (next && app.isMobile) app.setAiOpen(false);
-          }}
-        >
-          <PanelLeft className="h-4 w-4" />
-        </Button>
-      </Tip>
+      <div
+        className={cn(
+          "flex h-full w-12 shrink-0 items-center justify-center",
+          app.sidebarOpen && "lg:border-r lg:border-sidebar-border/60",
+        )}
+      >
+        <Tip label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 lg:hidden"
+            aria-label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+            onClick={() => {
+              const next = !app.sidebarOpen;
+              app.setSidebarOpen(next);
+              if (next && app.isMobile) app.setAiOpen(false);
+            }}
+          >
+            <PanelLeft className="h-4 w-4" />
+          </Button>
+        </Tip>
+        {!isTauriMacOS && (
+          <button
+            type="button"
+            className="hidden h-full w-full items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring lg:flex"
+            aria-label="Open welcome page"
+            title="Welcome"
+            onClick={() => app.setScreen("welcome")}
+          >
+            <BrandLogo showWordmark={false} markClassName="h-7 w-7" />
+          </button>
+        )}
+      </div>
 
       {!isTauriMacOS && (
-        <BrandLogo
-          className="mr-1 hidden min-w-0 sm:flex"
-          markClassName="h-7 w-7"
-          wordmarkClassName="mt-[5px] text-[24px]"
-        />
+        <button
+          type="button"
+          className="mr-1 hidden min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring sm:block"
+          aria-label="Open welcome page"
+          title="Welcome"
+          onClick={() => app.setScreen("welcome")}
+        >
+          <BrandLogo
+            className="min-w-0"
+            markClassName="h-7 w-7 lg:hidden"
+            wordmarkClassName="mt-[5px] text-[24px]"
+          />
+        </button>
       )}
 
       {/* File / Tools — icon-only on mobile, text on desktop */}
