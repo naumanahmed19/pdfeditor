@@ -476,19 +476,6 @@ function TitleBarImpl() {
           </Menu>
         </>
       )}
-      <Tip label="Command palette">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          aria-label="Command palette"
-          onClick={() =>
-            window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
-          }
-        >
-          <CommandIcon className="h-4 w-4" />
-        </Button>
-      </Tip>
       <input
         ref={fileRef}
         id="global-open-input"
@@ -504,11 +491,12 @@ function TitleBarImpl() {
         }}
       />
 
-      <form
-        ref={searchFormRef}
-        onSubmit={submitSearch}
-        className="mx-auto hidden h-7 w-full max-w-md items-center gap-1 rounded-md border border-sidebar-border bg-background/70 px-2 sm:flex"
-      >
+      <div className="mx-auto hidden min-w-0 flex-1 items-center justify-center gap-1 sm:flex">
+        <form
+          ref={searchFormRef}
+          onSubmit={submitSearch}
+          className="flex h-7 w-full max-w-md items-center gap-1 rounded-md border border-sidebar-border bg-background/70 px-2"
+        >
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
           id="doc-search-input"
@@ -723,7 +711,22 @@ function TitleBarImpl() {
             </Tip>
           </div>
         )}
-      </form>
+        </form>
+
+        <Tip label="Command palette">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            aria-label="Command palette"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
+            }
+          >
+            <CommandIcon className="h-4 w-4" />
+          </Button>
+        </Tip>
+      </div>
 
       <Tip label="Search">
         <Button
@@ -735,6 +738,20 @@ function TitleBarImpl() {
           onClick={() => setMobileSearch(true)}
         >
           <Search className="h-4 w-4" />
+        </Button>
+      </Tip>
+
+      <Tip label="Command palette">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 sm:hidden"
+          aria-label="Command palette"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("pdfwb:open-command-palette"))
+          }
+        >
+          <CommandIcon className="h-4 w-4" />
         </Button>
       </Tip>
 
