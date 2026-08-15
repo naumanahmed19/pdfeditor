@@ -12,43 +12,34 @@ import {
   Check,
   ChevronDown,
   Circle,
-  Cloud,
   Copy,
   Eraser,
   FormInput,
-  Hand,
   Highlighter,
   Image as ImageIcon,
   Italic,
-  LandPlot,
   Link2,
   Lock,
   LockOpen,
   MessageSquare,
   MessageSquareQuote,
   Minus,
-  MousePointer2,
-  Move,
   MoveUpRight,
   PaintBucket,
   Pencil,
   Pentagon,
+  PencilRuler,
   Redo2,
   RotateCw,
-  Route,
   Ruler,
-  Signature,
   Spline,
   SquareSlash,
   Square,
-  Stamp,
-  Strikethrough,
   TextCursorInput,
   Trash2,
   Type,
   Underline,
   Undo2,
-  Waves,
   X,
 } from "lucide-react";
 import { useApp, type EditTextScope } from "../../store";
@@ -72,7 +63,6 @@ import { activeBlockEditor } from "../../lib/activeBlockEditor";
 import { activeInlineEdit } from "../../lib/activeInlineEdit";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
-import { Menu, MenuContent, MenuGroup, MenuItem, MenuLabel, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { LinkProperties } from "./LinkProperties";
 import { hasLinkTarget } from "../../lib/linktarget";
@@ -81,7 +71,12 @@ import { Tip, TooltipProvider } from "../ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn, ROTATABLE_KINDS } from "../../lib/utils";
 import { formatScale } from "../../lib/measure";
-import { STAMPS, makeStamp } from "../../lib/stamps";
+import {
+  BASIC_EDITOR_TOOLS,
+  EDITOR_TOOLS,
+  findEditorTool,
+  selectEditorTool,
+} from "./editorToolRegistry";
 import type {
   Annotation,
   FontFamilyKind,
@@ -92,122 +87,6 @@ import type {
   TextAnnotation,
   ToolKind,
 } from "../../types";
-
-type ToolbarTool = {
-  key: ToolKind;
-  icon: typeof Type;
-  name: string;
-  desc: string;
-  shortcut?: string;
-};
-
-/** Tools in historical display order; groups below decide top-level placement. */
-const TOOLS: Array<ToolbarTool & { group: number }> = [
-  { key: "read", icon: MousePointer2, name: "Read", desc: "Select & copy text, follow links", group: 0, shortcut: "V" },
-  { key: "pan", icon: Hand, name: "Pan", desc: "Drag to scroll the page", group: 0 },
-  { key: "select", icon: Move, name: "Move / select", desc: "Click to select, drag to move, and double-click text or fields to edit. Switch to Read to fill forms", group: 0, shortcut: "M" },
-  { key: "text", icon: Type, name: "Add text", desc: "Click the page to place a text box", group: 1, shortcut: "T" },
-  { key: "highlight", icon: Highlighter, name: "Highlight", desc: "Text mode: drag over text. Area mode: drag a box over any region. Click a highlight to recolor or delete it", group: 2, shortcut: "H" },
-  { key: "underline", icon: Underline, name: "Underline text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "U" },
-  { key: "strikeout", icon: Strikethrough, name: "Strike through text", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2, shortcut: "S" },
-  { key: "squiggly", icon: Waves, name: "Squiggly underline", desc: "Drag over text to mark it; click a mark to recolor or delete it", group: 2 },
-  { key: "note", icon: MessageSquare, name: "Comment", desc: "Click the page to add a sticky note", group: 2, shortcut: "C" },
-  { key: "ink", icon: Pencil, name: "Draw freehand", desc: "Pen strokes in the chosen color & size", group: 2, shortcut: "D" },
-  { key: "mark", icon: Check, name: "Check / cross", desc: "Stamp a ✓ or ✗ — click to drop one, drag to size it. For ticking printed or scanned forms", group: 2, shortcut: "Y" },
-  { key: "link", icon: Link2, name: "Link", desc: "Drag a box to make a clickable link — to a URL, email, phone number or another page", group: 2, shortcut: "N" },
-  { key: "rect", icon: Square, name: "Rectangle", desc: "Drag to draw; fill optional", group: 3, shortcut: "R" },
-  { key: "ellipse", icon: Circle, name: "Ellipse", desc: "Drag to draw; fill optional", group: 3, shortcut: "O" },
-  { key: "line", icon: Minus, name: "Line", desc: "Drag from start to end", group: 3, shortcut: "L" },
-  { key: "arrow", icon: MoveUpRight, name: "Arrow", desc: "Drag from tail to head", group: 3, shortcut: "A" },
-  { key: "polygon", icon: Pentagon, name: "Polygon", desc: "Click to place corners; click the first corner, double-click or press Enter to close. Esc cancels", group: 3, shortcut: "P" },
-  { key: "polyline", icon: Spline, name: "Polyline", desc: "Click to place points; double-click or press Enter to finish. Esc cancels", group: 3 },
-  { key: "cloud", icon: Cloud, name: "Cloud", desc: "Review cloud — a polygon with a scalloped border. Click to place corners; double-click or Enter closes", group: 3 },
-  { key: "callout", icon: MessageSquareQuote, name: "Callout", desc: "Drag from the target to where the note should sit", group: 3, shortcut: "K" },
-  { key: "measuredist", icon: Ruler, name: "Distance", desc: "Measure a straight-line distance: click two points or drag. Calibrate first for real-world units", group: 5 },
-  { key: "measureperim", icon: Route, name: "Perimeter", desc: "Measure along a path: click to place points; double-click or Enter finishes. Esc cancels", group: 5 },
-  { key: "measurearea", icon: LandPlot, name: "Area", desc: "Measure an enclosed area: click to place corners; click the first corner, double-click or Enter closes. Esc cancels", group: 5 },
-  { key: "whiteout", icon: PaintBucket, name: "Whiteout", desc: "Cover page content with a filled box (hides, does not remove)", group: 4, shortcut: "W" },
-  { key: "eraser", icon: Eraser, name: "Eraser", desc: "Click or drag across an annotation you added to delete it" , group: 4 },
-  { key: "redact", icon: SquareSlash, name: "Redact", desc: "Deletes text and images under the box, then paints it black (annotations and metadata are not removed) — draw boxes, then Apply", group: 4, shortcut: "X" },
-];
-
-/**
- * "Edit existing content" sub-tools, surfaced through a single dropdown button
- * (not the toggle row). Both edit the real document — retyping text runs, or
- * moving/resizing existing text & images — so they're grouped apart from the
- * annotation tools. Shortcuts stay live via the same handler as TOOLS.
- */
-const EDIT_TOOLS: ToolbarTool[] = [
-  { key: "edittext", icon: TextCursorInput, name: "Edit text", desc: "Click a line of the document to retype it, or change its font, size and color", shortcut: "E" },
-];
-
-const ALL_TOOLS: ToolbarTool[] = [...TOOLS, ...EDIT_TOOLS];
-const BASIC_TOOLS = TOOLS.filter((t) => t.group === 0);
-
-type ToolFlyoutId = "text" | "markup" | "shapes" | "measure" | "cleanup";
-
-const TOOL_FLYOUTS: Array<{
-  id: ToolFlyoutId;
-  label: string;
-  desc: string;
-  defaultTool: ToolKind;
-  tools: ToolKind[];
-}> = [
-  {
-    id: "text",
-    label: "Text",
-    desc: "Add text or edit existing page content",
-    defaultTool: "text",
-    tools: ["text", "edittext"],
-  },
-  {
-    id: "markup",
-    label: "Markup",
-    desc: "Highlights, comments, ink, marks and links",
-    defaultTool: "highlight",
-    tools: ["highlight", "underline", "strikeout", "squiggly", "note", "ink", "mark", "link"],
-  },
-  {
-    id: "shapes",
-    label: "Shapes",
-    desc: "Draw rectangles, ellipses, lines, arrows, polygons, clouds and callouts",
-    defaultTool: "rect",
-    tools: ["rect", "ellipse", "line", "arrow", "polygon", "polyline", "cloud", "callout"],
-  },
-  {
-    id: "measure",
-    label: "Measure",
-    desc: "Measure distances, perimeters and areas — calibrate against a known length for real-world units",
-    defaultTool: "measuredist",
-    tools: ["measuredist", "measureperim", "measurearea"],
-  },
-  {
-    id: "cleanup",
-    label: "Cleanup",
-    desc: "Hide, erase or permanently redact content",
-    defaultTool: "whiteout",
-    tools: ["whiteout", "eraser", "redact"],
-  },
-];
-
-const INITIAL_LAST_TOOL_BY_GROUP: Record<ToolFlyoutId, ToolKind> = {
-  text: "text",
-  markup: "highlight",
-  shapes: "rect",
-  measure: "measuredist",
-  cleanup: "whiteout",
-};
-
-const TOOL_FLYOUT_BY_KEY = new Map<ToolKind, ToolFlyoutId>(
-  TOOL_FLYOUTS.flatMap((group) => group.tools.map((key) => [key, group.id] as const)),
-);
-type ToolFlyoutConfig = (typeof TOOL_FLYOUTS)[number];
-
-function getTool(key: ToolKind): ToolbarTool {
-  const tool = ALL_TOOLS.find((t) => t.key === key);
-  if (!tool) throw new Error(`Unknown toolbar tool: ${key}`);
-  return tool;
-}
 
 /**
  * Horizontally scrollable row: instead of wrapping onto a second line when it
@@ -314,122 +193,6 @@ function NativeSelect({
   );
 }
 
-/** Row item used inside grouped toolbar flyout menus. */
-function ToolMenuItem({
-  tool,
-  active,
-  onSelect,
-}: {
-  tool: ToolbarTool;
-  active: boolean;
-  onSelect: (key: ToolKind) => void;
-}) {
-  const Icon = tool.icon;
-  return (
-    <MenuItem onClick={() => onSelect(tool.key)} className="items-start py-2">
-      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-center gap-1.5 font-medium">
-          {tool.name}
-          {tool.shortcut && (
-            <kbd className="rounded border bg-muted px-1 text-[10px] font-normal text-muted-foreground">
-              {tool.shortcut}
-            </kbd>
-          )}
-        </span>
-        <span className="text-[11px] leading-snug text-muted-foreground">
-          {tool.desc}
-        </span>
-      </span>
-      {active && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
-    </MenuItem>
-  );
-}
-
-function ActionMenuItem({
-  icon: Icon,
-  name,
-  desc,
-  active,
-  onClick,
-}: {
-  icon: typeof Type;
-  name: string;
-  desc: string;
-  active?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <MenuItem onClick={onClick} className="items-start py-2">
-      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="font-medium">{name}</span>
-        <span className="text-[11px] leading-snug text-muted-foreground">
-          {desc}
-        </span>
-      </span>
-      {active && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
-    </MenuItem>
-  );
-}
-
-function ToolFlyoutButton({
-  group,
-  activeTool,
-  lastTool,
-  onSelect,
-}: {
-  group: ToolFlyoutConfig;
-  activeTool?: ToolKind;
-  lastTool: ToolKind;
-  onSelect: (key: ToolKind) => void;
-}) {
-  const active = !!activeTool;
-  const displayTool = getTool(activeTool ?? lastTool ?? group.defaultTool);
-  const Icon = displayTool.icon;
-
-  return (
-    <Menu>
-      <Tip
-        label={active ? displayTool.name : group.label}
-        desc={active ? displayTool.desc : group.desc}
-        shortcut={active ? displayTool.shortcut : undefined}
-      >
-        <MenuTrigger
-          aria-label={group.label}
-          aria-pressed={active}
-          className={cn(
-            "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
-            active
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          <Icon className="h-4 w-4" />
-          <span className="hidden sm:inline">{group.label}</span>
-          <ChevronDown className="h-3 w-3 opacity-70" />
-        </MenuTrigger>
-      </Tip>
-      <MenuContent className="min-w-64">
-        <MenuGroup>
-          <MenuLabel>{group.label}</MenuLabel>
-          {group.tools.map((key) => {
-            const tool = getTool(key);
-            return (
-              <ToolMenuItem
-                key={key}
-                tool={tool}
-                active={activeTool === key}
-                onSelect={onSelect}
-              />
-            );
-          })}
-        </MenuGroup>
-      </MenuContent>
-    </Menu>
-  );
-}
-
 /** Contextual control for turning a selected text box into a clickable link —
  *  a toggle button opening the shared "Link properties" picker. */
 function TextLinkControl({
@@ -485,16 +248,6 @@ function TextLinkControl({
 
 export function EditorToolbar() {
   const app = useApp();
-  const imageRef = useRef<HTMLInputElement>(null);
-  const [lastToolByGroup, setLastToolByGroup] = useState(INITIAL_LAST_TOOL_BY_GROUP);
-
-  useEffect(() => {
-    const groupId = TOOL_FLYOUT_BY_KEY.get(app.tool);
-    if (!groupId) return;
-    setLastToolByGroup((prev) =>
-      prev[groupId] === app.tool ? prev : { ...prev, [groupId]: app.tool },
-    );
-  }, [app.tool]);
 
   // Leaving the distance tool aborts a pending calibration — otherwise the
   // NEXT distance drawn (much later) would silently become the reference line.
@@ -524,8 +277,16 @@ export function EditorToolbar() {
 
   // Single-key tool shortcuts (V/M/T/E/G/H/C/D/R/O/L/W/X) — ignored while
   // typing anywhere (inputs, selects, the rich text editor).
-  const setToolRef = useRef(app.setTool);
-  setToolRef.current = app.setTool;
+  const toolActionsRef = useRef({
+    setPendingStamp: app.setPendingStamp,
+    setSelected: app.setSelected,
+    setTool: app.setTool,
+  });
+  toolActionsRef.current = {
+    setPendingStamp: app.setPendingStamp,
+    setSelected: app.setSelected,
+    setTool: app.setTool,
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -540,12 +301,12 @@ export function EditorToolbar() {
         return;
       }
       if (activeTextEditor.current) return;
-      const tool = [...TOOLS, ...EDIT_TOOLS].find(
+      const tool = EDITOR_TOOLS.find(
         (x) => x.shortcut?.toLowerCase() === e.key.toLowerCase(),
       );
       if (tool) {
         e.preventDefault();
-        setToolRef.current(tool.key);
+        selectEditorTool(toolActionsRef.current, tool.key);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -557,30 +318,12 @@ export function EditorToolbar() {
   // The visible basics stay a single-select toggle group. Creation/edit tools
   // live in flyouts below, but still route through the same selection logic.
   const basicToolValue =
-    !app.pendingStamp && BASIC_TOOLS.some((t) => t.key === app.tool) ? [app.tool] : [];
+    !app.pendingStamp && BASIC_EDITOR_TOOLS.some((t) => t.key === app.tool)
+      ? [app.tool]
+      : [];
 
   const selectTool = (key: ToolKind) => {
-    if (
-      key === "highlight" ||
-      key === "underline" ||
-      key === "strikeout" ||
-      key === "squiggly"
-    ) {
-      const sel = window.getSelection();
-      if (
-        sel &&
-        !sel.isCollapsed &&
-        sel.anchorNode?.parentElement?.closest(".textLayer")
-      ) {
-        window.dispatchEvent(
-          new CustomEvent("pdfwb:highlight-selection", { detail: { style: key } }),
-        );
-        return;
-      }
-    }
-    app.setTool(key);
-    app.setPendingStamp(null);
-    if (key !== "select") app.setSelected(null);
+    selectEditorTool(app, key);
   };
 
   const handleToolChange = (values: string[]) => {
@@ -797,13 +540,21 @@ export function EditorToolbar() {
     !!selectedFormField ||
     !!app.selectedField ||
     !!selectedAnn;
-  const insertActive = !!app.pendingStamp || app.formBuilder || app.tool.startsWith("form");
-  const InsertIcon =
-    app.formBuilder || app.tool.startsWith("form")
-      ? FormInput
-      : app.pendingStamp
-        ? Stamp
-        : ImageIcon;
+  const activeEditorTool = findEditorTool(app.tool);
+  const activeToolIsBasic = BASIC_EDITOR_TOOLS.some(
+    (tool) => tool.key === app.tool,
+  );
+  const ActiveToolIcon =
+    activeToolIsBasic || !activeEditorTool ? PencilRuler : activeEditorTool.icon;
+  const activeToolLabel =
+    activeToolIsBasic || !activeEditorTool ? "Editor tools" : activeEditorTool.name;
+  const openEditorTools = () => {
+    window.dispatchEvent(
+      new CustomEvent("pdfwb:open-sidebar-panel", {
+        detail: { panel: "editor-tools" },
+      }),
+    );
+  };
 
   return (
     // data-ann-controls: pressing toolbar controls must not deselect the
@@ -826,7 +577,7 @@ export function EditorToolbar() {
           className="flex items-center gap-1 bg-transparent p-0"
           aria-label="Basic tools"
         >
-          {BASIC_TOOLS.map((t) => {
+          {BASIC_EDITOR_TOOLS.map((t) => {
             const Icon = t.icon;
             return (
               <div
@@ -836,7 +587,7 @@ export function EditorToolbar() {
                   t.key === "pan" && "hidden sm:flex",
                 )}
               >
-                <Tip label={t.name} desc={t.desc} shortcut={t.shortcut}>
+                <Tip label={t.name} desc={t.description} shortcut={t.shortcut}>
                   <ToggleGroupItem
                     value={t.key}
                     aria-label={t.name}
@@ -850,121 +601,33 @@ export function EditorToolbar() {
           })}
         </ToggleGroup>
         <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />
-        {TOOL_FLYOUTS.map((group) => {
-          const activeTool =
-            app.pendingStamp ? undefined : group.tools.find((key) => key === app.tool);
-          return (
-            <ToolFlyoutButton
-              key={group.id}
-              group={group}
-              activeTool={activeTool}
-              lastTool={lastToolByGroup[group.id]}
-              onSelect={selectTool}
-            />
-          );
-        })}
-        <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />
-        <Menu>
-          <Tip label="Insert" desc="Images, fillable forms and stamps">
-            <MenuTrigger
-              aria-label="Insert"
-              aria-pressed={insertActive}
-              className={cn(
-                "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
-                insertActive
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              <InsertIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Insert</span>
-              <ChevronDown className="h-3 w-3 opacity-70" />
-            </MenuTrigger>
-          </Tip>
-          <MenuContent className="min-w-64">
-            <MenuGroup>
-              <MenuLabel>Insert</MenuLabel>
-              <ActionMenuItem
-                icon={ImageIcon}
-                name="Image"
-                desc="PNG or JPEG, placed as a stamp"
-                onClick={() => imageRef.current?.click()}
-              />
-              <ActionMenuItem
-                icon={FormInput}
-                name="Form builder"
-                desc="Design fillable forms: palette, tab order, validation"
-                active={app.formBuilder || app.tool.startsWith("form")}
-                onClick={() => app.setFormBuilder(!app.formBuilder)}
-              />
-            </MenuGroup>
-            <MenuGroup className="mt-1 border-t pt-1">
-              <MenuLabel>Stamps</MenuLabel>
-              {STAMPS.map((s) => (
-                <MenuItem
-                  key={s.label}
-                  onClick={() => {
-                    const { dataUrl, aspect } = makeStamp(s);
-                    app.setPendingStamp({ dataUrl, aspect });
-                  }}
-                  className="py-2"
-                >
-                  <Stamp className="h-4 w-4 shrink-0" />
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span
-                      className="rounded border-2 px-1.5 py-0.5 text-[10px] font-bold italic"
-                      style={{ borderColor: s.color, color: s.color }}
-                    >
-                      {s.label}
-                    </span>
-                    {s.withDate && (
-                      <span className="text-[10px] text-muted-foreground">+ date</span>
-                    )}
-                  </span>
-                </MenuItem>
-              ))}
-            </MenuGroup>
-          </MenuContent>
-        </Menu>
-        <Tip label="Insert signature" desc="Draw, type or upload; saved for reuse">
+        <Tip
+          label={activeToolLabel}
+          desc={
+            activeToolIsBasic
+              ? "Browse editing, markup, shape, measure, cleanup, and insert tools"
+              : activeEditorTool?.description
+          }
+          shortcut={activeToolIsBasic ? undefined : activeEditorTool?.shortcut}
+        >
           <button
-            onClick={() => app.setSignatureModalOpen(true)}
+            type="button"
+            aria-label={activeToolLabel}
+            aria-pressed={!activeToolIsBasic && !!activeEditorTool}
+            onClick={openEditorTools}
             className={cn(
               "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
-              app.pendingStamp
+              !activeToolIsBasic && activeEditorTool
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
-            <Signature className="h-4 w-4" />
-            <span className="hidden sm:inline">Sign</span>
+            <ActiveToolIcon className="h-4 w-4" />
+            <span>{activeToolLabel}</span>
+            <ChevronDown className="h-3 w-3 -rotate-90 opacity-70" />
           </button>
         </Tip>
       </DragScroll>
-      <input
-        ref={imageRef}
-        type="file"
-        accept="image/png,image/jpeg"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (!f) return;
-          const reader = new FileReader();
-          reader.onload = () => {
-            const dataUrl = reader.result as string;
-            const img = new Image();
-            img.onload = () => {
-              app.setPendingStamp({
-                dataUrl,
-                aspect: img.height / img.width || 1,
-              });
-            };
-            img.src = dataUrl;
-          };
-          reader.readAsDataURL(f);
-          e.target.value = "";
-        }}
-      />
 
       {/* pinned right — always reachable, never scrolls off */}
       <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />

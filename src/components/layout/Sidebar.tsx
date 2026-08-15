@@ -24,6 +24,7 @@ import {
   Paperclip,
   PanelLeft,
   Pencil,
+  PencilRuler,
   Plus,
   ScanText,
   Settings,
@@ -59,6 +60,7 @@ import {
   type ToolScreen,
 } from "../tools/toolRegistry";
 import { ActivityBar, type ActivityBarItem } from "./ActivityBar";
+import { EditorToolsPanel } from "../viewer/EditorToolsPanel";
 
 type SidebarTab =
   | "pages"
@@ -69,18 +71,20 @@ type SidebarTab =
   | "layers"
   | "objects"
   | "form"
+  | "editor-tools"
   | "tools"
   | "recent";
 
 type ToolSidebarTab = "recent" | "files" | "tools";
 
-const SIDEBAR_ACTIVITIES = [
+export const SIDEBAR_ACTIVITIES = [
   { key: "recent", label: "Recent", icon: History },
   { key: "pages", label: "Pages & outline", icon: Files },
   { key: "comments", label: "Comments", icon: MessageSquare },
   { key: "attachments", label: "Attachments & signatures", icon: Paperclip },
   { key: "layers", label: "Layers & objects", icon: Layers },
   { key: "form", label: "Form builder", icon: FormInput },
+  { key: "editor-tools", label: "Editor tools", icon: PencilRuler },
   { key: "tools", label: "Tools", icon: Wrench },
 ] satisfies readonly ActivityBarItem<SidebarTab>[];
 
@@ -136,6 +140,7 @@ function SidebarImpl() {
         panel !== "layers" &&
         panel !== "objects" &&
         panel !== "form" &&
+        panel !== "editor-tools" &&
         panel !== "tools"
       ) {
         return;
@@ -365,6 +370,8 @@ function SidebarImpl() {
                 <SidebarPanelHeader>{activeLabel}</SidebarPanelHeader>
                 {activeTab === "tools" ? (
                   <ToolsPanel onSelectScreen={openTool} />
+                ) : app.pdf && activeTab === "editor-tools" ? (
+                  <EditorToolsPanel />
                 ) : app.pdf && activeTab === "comments" ? (
                   <CommentsPanel />
                 ) : app.pdf && activeTab === "form" ? (
