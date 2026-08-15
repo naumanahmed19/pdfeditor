@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.7.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.6.0...v0.7.0) (2026-08-15)
+
+
+### Features
+
+* **editor:** add grouped tools sidebar ([ff04605](https://github.com/naumanahmed19/pdfeditor/commit/ff04605cf41d9ed2dad955be8ceed4bde413aff4))
+* **editor:** add searchable tools sidebars ([4fd3f9f](https://github.com/naumanahmed19/pdfeditor/commit/4fd3f9f8358a0931f9162f88b198d1518c3cf8e9))
+* **navigation:** add activity sidebar and welcome route ([9a53cc3](https://github.com/naumanahmed19/pdfeditor/commit/9a53cc35ccbdb050898f422ba09d56567a6b3492))
+* **navigation:** add activity sidebar and welcome route ([c2ffcfd](https://github.com/naumanahmed19/pdfeditor/commit/c2ffcfdcaf9731d6bd186071c1971aaf158e1b10))
+* **navigation:** move settings to the activity rail ([7b5f142](https://github.com/naumanahmed19/pdfeditor/commit/7b5f1420c287b38802b409dc5dca6e91b477975c))
+* **sidebar:** add recent navigation to tool pages ([e359353](https://github.com/naumanahmed19/pdfeditor/commit/e35935316a74fcd82496a4e1826e546f9bd26f58))
+* **sidebar:** add searchable PDF tool actions ([2d7750b](https://github.com/naumanahmed19/pdfeditor/commit/2d7750bc413867c67fff90f50792d4de8bf8852e))
+* **sidebar:** refine object groups and empty states ([b2ba31e](https://github.com/naumanahmed19/pdfeditor/commit/b2ba31ec5ed68eb36bab2d91ad5f7f9c5590d2ec))
+* **tools:** add bulk merge actions ([0545f04](https://github.com/naumanahmed19/pdfeditor/commit/0545f04c555da7a7181ac7fefca6c5c15716ba32))
+* **tools:** add contextual file sidebars ([b411df5](https://github.com/naumanahmed19/pdfeditor/commit/b411df5036cedebfc0fb3f942cb193ebdcbf5828))
+* **tools:** add reusable multi-file workflows ([8732eef](https://github.com/naumanahmed19/pdfeditor/commit/8732eef28f347bde9c70c7f2a3c0c6675ffc1633))
+* **tools:** add reusable multi-file workflows ([96a34a1](https://github.com/naumanahmed19/pdfeditor/commit/96a34a1c880e7b3717c72cbe33eeefb7858e68fa))
+* **tools:** confirm merge file removal ([c6aa079](https://github.com/naumanahmed19/pdfeditor/commit/c6aa079b1cb787e71743b450c70f2af45766bd23))
+* **tools:** optimize large document workflows ([28d68b6](https://github.com/naumanahmed19/pdfeditor/commit/28d68b61d0d4b71e54f6ab7c6613f09bf6aaa74f))
+* **tools:** rotate merge inputs ([ae19bba](https://github.com/naumanahmed19/pdfeditor/commit/ae19bba2eea5de081ae804bcc23064f4cfd7046f))
+* **tools:** show file type icons in sidebars ([6ae38f8](https://github.com/naumanahmed19/pdfeditor/commit/6ae38f851f09733775528fd0be8944d27d3950ca))
+
+
+### Bug Fixes
+
+* **navigation:** center command palette by search ([113adcd](https://github.com/naumanahmed19/pdfeditor/commit/113adcdeef1de280c50ba40752ce05967d401ecf))
+* **sidebar:** collapse empty startup panel ([b1a46a6](https://github.com/naumanahmed19/pdfeditor/commit/b1a46a6b31f24f680fd213e2a5eb39f8e5e1cb79))
+* **tools:** support merge selection shortcuts ([1784aed](https://github.com/naumanahmed19/pdfeditor/commit/1784aedccad9ec39cefc487b927a049e916c0d8d))
+* **tools:** synchronize file selection highlights ([f6fa5d8](https://github.com/naumanahmed19/pdfeditor/commit/f6fa5d8c721768bf04b44e2594d685348675c04d))
+
 ## [0.6.0](https://github.com/naumanahmed19/pdfeditor/compare/v0.5.3...v0.6.0) (2026-08-09)
 
 
