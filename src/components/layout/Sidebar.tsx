@@ -2,9 +2,6 @@ import { Fragment, memo, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
-  BookOpen,
-  Boxes,
-  Check,
   ChevronDown,
   ChevronRight,
   Columns2,
@@ -12,28 +9,32 @@ import {
   Eye,
   EyeOff,
   Files,
-  FileSignature,
   FileText,
   Folder,
   FolderOpen,
   FormInput,
   History,
   Layers,
+  Layers2,
   Lock,
   LockOpen,
   Loader2,
   MessageSquare,
   MoreVertical,
   Paperclip,
+  PanelLeft,
   Pencil,
   Plus,
+  ScanText,
+  Settings,
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
   Trash2,
+  Wrench,
   X,
+  type LucideIcon,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import type { PdfDoc } from "../../lib/pdf";
 import { useAppSelector, shallowEqual, type RecentFile } from "../../store";
@@ -46,10 +47,48 @@ import type { SignatureInfo } from "../../lib/signatures";
 import type { Annotation, FolderNode, NoteAnnotation, OutlineNode } from "../../types";
 import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Button } from "../ui/button";
+import { EmptyStateMessage } from "../ui/empty-state-message";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Tip } from "../ui/tooltip";
 import { TOOL_SIDEBAR_CONTENT_ID } from "../tools/ToolFileSidebar";
+import {
+  CURRENT_PDF_TOOLS,
+  GENERAL_TOOLS,
+  type ToolScreen,
+} from "../tools/toolRegistry";
+import { ActivityBar, type ActivityBarItem } from "./ActivityBar";
+
+type SidebarTab =
+  | "pages"
+  | "outline"
+  | "comments"
+  | "attachments"
+  | "signatures"
+  | "layers"
+  | "objects"
+  | "form"
+  | "tools"
+  | "recent";
+
+type ToolSidebarTab = "recent" | "files" | "tools";
+
+const SIDEBAR_ACTIVITIES = [
+  { key: "recent", label: "Recent", icon: History },
+  { key: "pages", label: "Pages & outline", icon: Files },
+  { key: "comments", label: "Comments", icon: MessageSquare },
+  { key: "attachments", label: "Attachments & signatures", icon: Paperclip },
+  { key: "layers", label: "Layers & objects", icon: Layers },
+  { key: "form", label: "Form builder", icon: FormInput },
+  { key: "tools", label: "Tools", icon: Wrench },
+] satisfies readonly ActivityBarItem<SidebarTab>[];
+
+export const TOOL_SIDEBAR_ACTIVITIES = [
+  { key: "recent", label: "Recent", icon: History },
+  { key: "files", label: "Files", icon: Files },
+  { key: "tools", label: "Tools", icon: Wrench },
+] satisfies readonly ActivityBarItem<ToolSidebarTab>[];
 
 // Memoized: no props, so parent (Shell) re-renders don't touch it; it and its
 // panels track their own store slices via useAppSelector.
@@ -57,16 +96,33 @@ export const Sidebar = memo(SidebarImpl);
 
 function SidebarImpl() {
   const app = useAppSelector(
-    (s) => ({ formBuilder: s.formBuilder, pdf: s.pdf, screen: s.screen, sidebarOpen: s.sidebarOpen, setFormBuilder: s.setFormBuilder }),
+    (s) => ({
+      formBuilder: s.formBuilder,
+      pdf: s.pdf,
+      screen: s.screen,
+      sidebarOpen: s.sidebarOpen,
+      setFormBuilder: s.setFormBuilder,
+      setScreen: s.setScreen,
+      setSidebarOpen: s.setSidebarOpen,
+    }),
     shallowEqual,
   );
   const [tab, setTab] = useState<SidebarTab>("recent");
+  const [pagePanelTab, setPagePanelTab] = useState<"pages" | "outline">("pages");
+  const [documentPanelTab, setDocumentPanelTab] = useState<
+    "attachments" | "signatures"
+  >("attachments");
+  const [contentPanelTab, setContentPanelTab] = useState<"layers" | "objects">(
+    "objects",
+  );
+  const [toolTab, setToolTab] = useState<ToolSidebarTab>("files");
 
   // Entering the form builder brings its palette into view; leaving it
   // (via Done) returns to the Recent list by default.
   useEffect(() => {
     setTab((t) => (app.formBuilder ? "form" : t === "form" ? "recent" : t));
-  }, [app.formBuilder]);
+    if (app.formBuilder) app.setSidebarOpen(true);
+  }, [app.formBuilder, app.setSidebarOpen]);
 
   useEffect(() => {
     const openPanel = (event: Event) => {
@@ -79,12 +135,19 @@ function SidebarImpl() {
         panel !== "signatures" &&
         panel !== "layers" &&
         panel !== "objects" &&
-        panel !== "form"
+        panel !== "form" &&
+        panel !== "tools"
       ) {
         return;
       }
 
       setTab(panel);
+      if (panel === "pages" || panel === "outline") setPagePanelTab(panel);
+      if (panel === "attachments" || panel === "signatures") {
+        setDocumentPanelTab(panel);
+      }
+      if (panel === "layers" || panel === "objects") setContentPanelTab(panel);
+      app.setSidebarOpen(true);
       if (panel === "form") {
         if (!app.formBuilder) app.setFormBuilder(true);
       } else if (app.formBuilder) {
@@ -94,95 +157,441 @@ function SidebarImpl() {
 
     window.addEventListener("pdfwb:open-sidebar-panel", openPanel);
     return () => window.removeEventListener("pdfwb:open-sidebar-panel", openPanel);
-  }, [app.formBuilder, app.setFormBuilder]);
+  }, [app.formBuilder, app.setFormBuilder, app.setSidebarOpen]);
 
   // Pages/Outline only apply to an open document; fall back to Recent otherwise.
-  const activeTab = app.pdf ? tab : "recent";
+  const activeTab = app.pdf || tab === "tools" ? tab : "recent";
+  const activeActivityTab =
+    activeTab === "outline"
+      ? "pages"
+      : activeTab === "signatures"
+        ? "attachments"
+        : activeTab === "objects"
+          ? "layers"
+          : activeTab;
   const hasToolSidebar = app.screen === "merge" || app.screen === "createimages";
+  const activities = SIDEBAR_ACTIVITIES.map((item) => ({
+    ...item,
+    disabled: item.key !== "recent" && item.key !== "tools" && !app.pdf,
+  }));
+  const activeLabel =
+    SIDEBAR_ACTIVITIES.find((item) => item.key === activeTab)?.label ?? "Recent";
+
+  const selectActivity = (next: SidebarTab) => {
+    if (next === activeActivityTab && app.sidebarOpen) {
+      app.setSidebarOpen(false);
+      return;
+    }
+    setTab(
+      next === "pages"
+        ? pagePanelTab
+        : next === "attachments"
+          ? documentPanelTab
+          : next === "layers"
+            ? contentPanelTab
+            : next,
+    );
+    app.setSidebarOpen(true);
+    if (next === "form") {
+      if (!app.formBuilder) app.setFormBuilder(true);
+    } else if (app.formBuilder) {
+      app.setFormBuilder(false);
+    }
+  };
+
+  const selectToolActivity = (next: ToolSidebarTab) => {
+    if (next === toolTab && app.sidebarOpen) {
+      app.setSidebarOpen(false);
+      return;
+    }
+    setToolTab(next);
+    if (next === "recent") setTab("recent");
+    app.setSidebarOpen(true);
+  };
+
+  const openTool = (screen: ToolScreen) => {
+    setTab("tools");
+    setToolTab(screen === "merge" || screen === "createimages" ? "files" : "tools");
+    app.setScreen(screen);
+  };
+
+  const sidebarToggle = (
+    <Tip label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"} side="right">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        aria-label={app.sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+        onClick={() => app.setSidebarOpen(!app.sidebarOpen)}
+      >
+        <PanelLeft className="h-[18px] w-[18px]" />
+      </Button>
+    </Tip>
+  );
+
+  const activityFooter = (
+    <div className="flex flex-col items-center gap-0.5">
+      <Tip label="Settings" side="right">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Settings"
+          data-active={app.screen === "settings" || undefined}
+          className={cn(
+            "h-9 w-9 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            app.screen === "settings" &&
+              "bg-[#ff5a52]/10 text-[#df4942] hover:bg-[#ff5a52]/15 hover:text-[#df4942] dark:bg-[#ff5a52]/15 dark:text-[#ff746d] dark:hover:bg-[#ff5a52]/20 dark:hover:text-[#ff746d]",
+          )}
+          onClick={() => app.setScreen("settings")}
+        >
+          <Settings className="h-[18px] w-[18px]" />
+        </Button>
+      </Tip>
+      {sidebarToggle}
+    </div>
+  );
 
   return (
     <aside
       className={cn(
         // Mobile: fixed slide-over drawer below the title bar.
-        "fixed bottom-0 left-0 top-[42px] z-50 flex w-[280px] max-w-[85vw] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-transform duration-200 ease-out",
-        // Desktop: static column.
-        "lg:static lg:z-auto lg:w-[288px] lg:max-w-none lg:translate-x-0 lg:border-r-0 lg:shadow-none lg:transition-none",
-        app.sidebarOpen ? "translate-x-0" : "-translate-x-full lg:hidden",
+        "fixed bottom-0 left-0 top-[42px] z-50 flex w-[280px] max-w-[85vw] overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-transform duration-200 ease-out",
+        // Desktop: the activity rail remains visible when its panel is closed.
+        "lg:static lg:z-auto lg:w-auto lg:max-w-none lg:translate-x-0 lg:border-r-0 lg:shadow-none",
+        app.sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
       )}
     >
-      <div className="flex min-h-0 flex-1 flex-col">
-        {hasToolSidebar ? (
-          <>
-            <div className="flex items-center gap-1 px-3 pt-2">
-              <div className="flex items-center gap-1.5 rounded-md bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-sm">
-                <Files className="h-3.5 w-3.5" />
-                Files
-              </div>
-            </div>
-            <div
-              id={TOOL_SIDEBAR_CONTENT_ID}
-              data-testid={TOOL_SIDEBAR_CONTENT_ID}
-              className="flex min-h-0 flex-1 flex-col"
-            />
-          </>
-        ) : (
-          <>
-            <div className="flex items-center gap-1 px-3 pt-2">
-          <TabButton
-            active={activeTab === "recent"}
-            onClick={() => setTab("recent")}
-            icon={<History className="h-3.5 w-3.5" />}
-            label="Recent"
-          />
-          {app.pdf && (
-            <div className="ml-auto flex items-center gap-1">
-              <TabButton
-                active={activeTab === "pages"}
-                onClick={() => {
-                  setTab("pages");
-                  if (app.formBuilder) app.setFormBuilder(false);
-                }}
-                icon={<Files className="h-4 w-4" />}
-                label="Pages"
-                iconOnly
-              />
-              <TabButton
-                active={activeTab === "outline"}
-                onClick={() => {
-                  setTab("outline");
-                  if (app.formBuilder) app.setFormBuilder(false);
-                }}
-                icon={<BookOpen className="h-4 w-4" />}
-                label="Outline"
-                iconOnly
-              />
-              <MoreTabsMenu activeTab={activeTab} setTab={setTab} />
-            </div>
-          )}
-            </div>
-            {app.pdf && activeTab === "pages" ? (
-          <ThumbnailList />
-        ) : app.pdf && activeTab === "outline" ? (
-          <OutlinePanel pdf={app.pdf} />
-        ) : app.pdf && activeTab === "comments" ? (
-          <CommentsPanel />
-        ) : app.pdf && activeTab === "attachments" ? (
-          <AttachmentsPanel />
-        ) : app.pdf && activeTab === "signatures" ? (
-          <SignaturesPanel />
-        ) : app.pdf && activeTab === "layers" ? (
-          <LayersPanel />
-        ) : app.pdf && activeTab === "objects" ? (
-          <ObjectsPanel />
-        ) : app.pdf && activeTab === "form" ? (
-          <FormBuilderSidebar />
-        ) : (
-              <RecentList />
-            )}
-          </>
+      {hasToolSidebar ? (
+        <ActivityBar
+          items={TOOL_SIDEBAR_ACTIVITIES}
+          activeItem={toolTab}
+          panelOpen={app.sidebarOpen}
+          onSelect={selectToolActivity}
+          footer={activityFooter}
+        />
+      ) : (
+        <ActivityBar
+          items={activities}
+          activeItem={activeActivityTab}
+          panelOpen={app.sidebarOpen}
+          onSelect={selectActivity}
+          footer={activityFooter}
+        />
+      )}
+
+      <div
+        aria-hidden={!app.sidebarOpen}
+        className={cn(
+          "min-w-0 overflow-hidden transition-[width,opacity] duration-200 ease-out",
+          app.sidebarOpen
+            ? "w-[232px] opacity-100 lg:w-[240px]"
+            : "pointer-events-none invisible w-0 opacity-0",
         )}
+      >
+        <div className="flex h-full w-[232px] min-w-0 flex-col lg:w-[240px]">
+          {hasToolSidebar ? (
+            toolTab === "tools" ? (
+              <>
+                <SidebarPanelHeader>Tools</SidebarPanelHeader>
+                <ToolsPanel onSelectScreen={openTool} />
+              </>
+            ) : toolTab === "recent" ? (
+              <>
+                <SidebarPanelHeader>Recent</SidebarPanelHeader>
+                <RecentList />
+              </>
+            ) : (
+              <div
+                id={TOOL_SIDEBAR_CONTENT_ID}
+                data-testid={TOOL_SIDEBAR_CONTENT_ID}
+                className="flex min-h-0 flex-1 flex-col"
+              />
+            )
+          ) : (
+            app.pdf && (activeTab === "pages" || activeTab === "outline") ? (
+              <PageOutlinePanel
+                pdf={app.pdf}
+                value={activeTab}
+                onChange={(next) => {
+                  setPagePanelTab(next);
+                  setTab(next);
+                }}
+              />
+            ) : app.pdf &&
+              (activeTab === "attachments" || activeTab === "signatures") ? (
+              <SidebarTabsPanel
+                ariaLabel="Document data"
+                value={activeTab}
+                onChange={(next) => {
+                  setDocumentPanelTab(next);
+                  setTab(next);
+                }}
+                tabs={[
+                  {
+                    value: "attachments",
+                    label: "Attachments",
+                    content: <AttachmentsPanel />,
+                  },
+                  {
+                    value: "signatures",
+                    label: "Signatures",
+                    content: <SignaturesPanel />,
+                  },
+                ]}
+              />
+            ) : app.pdf && (activeTab === "layers" || activeTab === "objects") ? (
+              <SidebarTabsPanel
+                ariaLabel="Document content"
+                value={activeTab}
+                onChange={(next) => {
+                  setContentPanelTab(next);
+                  setTab(next);
+                }}
+                tabs={[
+                  {
+                    value: "objects",
+                    label: "Objects",
+                    content: <ObjectsPanel />,
+                  },
+                  {
+                    value: "layers",
+                    label: "Layers",
+                    content: <LayersPanel />,
+                  },
+                ]}
+              />
+            ) : (
+              <>
+                <SidebarPanelHeader>{activeLabel}</SidebarPanelHeader>
+                {activeTab === "tools" ? (
+                  <ToolsPanel onSelectScreen={openTool} />
+                ) : app.pdf && activeTab === "comments" ? (
+                  <CommentsPanel />
+                ) : app.pdf && activeTab === "form" ? (
+                  <FormBuilderSidebar />
+                ) : (
+                  <RecentList />
+                )}
+              </>
+            )
+          )}
+        </div>
       </div>
     </aside>
+  );
+}
+
+function SidebarPanelHeader({ children }: { children: string }) {
+  return (
+    <div className="flex h-9 shrink-0 items-center border-b border-sidebar-border px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+function PageOutlinePanel({
+  onChange,
+  pdf,
+  value,
+}: {
+  onChange: (value: "pages" | "outline") => void;
+  pdf: PdfDoc;
+  value: "pages" | "outline";
+}) {
+  return (
+    <SidebarTabsPanel
+      ariaLabel="Document navigation"
+      value={value}
+      onChange={onChange}
+      tabs={[
+        { value: "pages", label: "Pages", content: <ThumbnailList /> },
+        { value: "outline", label: "Outline", content: <OutlinePanel pdf={pdf} /> },
+      ]}
+    />
+  );
+}
+
+function SidebarTabsPanel<Value extends string>({
+  ariaLabel,
+  onChange,
+  tabs,
+  value,
+}: {
+  ariaLabel: string;
+  onChange: (value: Value) => void;
+  tabs: ReadonlyArray<{
+    content: React.ReactNode;
+    label: string;
+    value: Value;
+  }>;
+  value: Value;
+}) {
+  return (
+    <Tabs
+      value={value}
+      onValueChange={(next) => {
+        const selected = tabs.find((tab) => tab.value === next);
+        if (selected) onChange(selected.value);
+      }}
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+    >
+      <TabsList
+        aria-label={ariaLabel}
+        className="mx-2 mt-1 h-8 w-fit shrink-0 justify-start bg-sidebar-foreground/[0.055]"
+      >
+        {tabs.map((tab) => (
+          <TabsTrigger
+            key={tab.value}
+            value={tab.value}
+            className="h-6 min-w-0 flex-none px-2.5 py-0 text-[11px] focus-visible:ring-[#ff5a52]/35 data-[active]:bg-sidebar data-[active]:text-[#df4942] dark:data-[active]:text-[#ff746d]"
+          >
+            {tab.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {tabs.map((tab) => (
+        <TabsContent
+          key={tab.value}
+          value={tab.value}
+          className="m-0 flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
+          {tab.content}
+        </TabsContent>
+      ))}
+    </Tabs>
+  );
+}
+
+function ToolsPanel({
+  onSelectScreen,
+}: {
+  onSelectScreen: (screen: ToolScreen) => void;
+}) {
+  const app = useAppSelector(
+    (s) => ({
+      applyBytesOp: s.applyBytesOp,
+      isMobile: s.isMobile,
+      ocrBusy: s.ocrBusy,
+      pdf: s.pdf,
+      requestConfirm: s.requestConfirm,
+      runOcrText: s.runOcrText,
+      setSidebarOpen: s.setSidebarOpen,
+    }),
+    shallowEqual,
+  );
+
+  const flattenDocument = async () => {
+    if (!app.pdf) return;
+    const ok = await app.requestConfirm({
+      title: "Flatten the document?",
+      message:
+        "All annotations and form fields are baked permanently into the page content and stop being editable or fillable. This cannot be undone after saving.",
+      confirmLabel: "Flatten",
+    });
+    if (!ok) return;
+    await app.applyBytesOp(async (bytes) => {
+      const { flattenPdf } = await import("../../lib/pdfium");
+      return flattenPdf(bytes);
+    }, "Document flattened");
+  };
+
+  const selectScreen = (screen: ToolScreen) => {
+    onSelectScreen(screen);
+    if (app.isMobile) app.setSidebarOpen(false);
+  };
+
+  return (
+    <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto p-2">
+      <ToolTileGroup label="Current PDF">
+        {CURRENT_PDF_TOOLS.map((tool) => (
+          <ToolTile
+            key={tool.screen}
+            icon={tool.icon}
+            title={tool.title}
+            description={tool.description}
+            onClick={() => selectScreen(tool.screen)}
+          />
+        ))}
+        <ToolTile
+          icon={ScanText}
+          title="Make searchable"
+          description="Add a searchable text layer to scanned pages."
+          disabled={!app.pdf || app.ocrBusy}
+          onClick={() => void app.runOcrText()}
+        />
+        <ToolTile
+          icon={Layers2}
+          title="Flatten document"
+          description="Bake annotations and form fields into page content."
+          disabled={!app.pdf}
+          onClick={() => void flattenDocument()}
+        />
+      </ToolTileGroup>
+
+      <ToolTileGroup label="General tools">
+        {GENERAL_TOOLS.map((tool) => (
+          <ToolTile
+            key={tool.screen}
+            icon={tool.icon}
+            title={tool.title}
+            description={tool.description}
+            onClick={() => selectScreen(tool.screen)}
+          />
+        ))}
+      </ToolTileGroup>
+    </div>
+  );
+}
+
+function ToolTileGroup({
+  children,
+  label,
+}: {
+  children: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <section className="pb-3 last:pb-0">
+      <h3 className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </h3>
+      <div className="flex flex-col gap-1.5">{children}</div>
+    </section>
+  );
+}
+
+function ToolTile({
+  description,
+  disabled = false,
+  icon: Icon,
+  onClick,
+  title,
+}: {
+  description: string;
+  disabled?: boolean;
+  icon: LucideIcon;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex w-full items-start gap-2.5 rounded-lg border border-sidebar-border bg-background p-2.5 text-left shadow-sm transition-colors hover:border-foreground/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-sidebar-border disabled:hover:bg-background"
+    >
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <Icon className="h-4 w-4" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs font-medium leading-tight text-foreground">
+          {title}
+        </span>
+        <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
+          {description}
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -202,11 +611,11 @@ function CommentsPanel() {
 
   if (!notes.length) {
     return (
-      <p className="px-4 py-3 text-xs text-muted-foreground">
-        No comments yet. Use the comment tool{" "}
-        <MessageSquare className="inline h-3 w-3 align-[-2px]" /> in Edit mode
-        to add one.
-      </p>
+      <EmptyStateMessage
+        icon={MessageSquare}
+        title="No comments yet"
+        description="Use the Comment tool in Edit mode to add notes to this document."
+      />
     );
   }
 
@@ -279,6 +688,17 @@ export function annotationObjectLabel(ann: Annotation): string {
   return detail || OBJECT_KIND_LABEL[ann.kind];
 }
 
+export function annotationObjectSecondaryLabel(
+  label: string,
+  kind: string,
+  locked = false,
+): string | null {
+  if (label.trim().toLocaleLowerCase() === kind.trim().toLocaleLowerCase()) {
+    return null;
+  }
+  return `${kind}${locked ? " · Locked" : ""}`;
+}
+
 export function collectAnnotationObjects(
   annotations: Record<number, Annotation[]> | Record<string, Annotation[]>,
 ): Array<{ page: number; ann: Annotation }> {
@@ -293,6 +713,21 @@ export function collectAnnotationObjects(
         a.ann.x - b.ann.x ||
         a.ann.id.localeCompare(b.ann.id),
     );
+}
+
+export function groupAnnotationObjectsByPage(
+  objects: Array<{ page: number; ann: Annotation }>,
+): Array<{ page: number; objects: Annotation[] }> {
+  const groups: Array<{ page: number; objects: Annotation[] }> = [];
+  for (const { page, ann } of objects) {
+    const current = groups[groups.length - 1];
+    if (!current || current.page !== page) {
+      groups.push({ page, objects: [ann] });
+    } else {
+      current.objects.push(ann);
+    }
+  }
+  return groups;
 }
 
 /** User-added page elements. Locked rows remain selectable here so they can
@@ -313,20 +748,21 @@ function ObjectsPanel() {
     shallowEqual,
   );
   const objects = collectAnnotationObjects(app.annotations);
+  const pageGroups = groupAnnotationObjectsByPage(objects);
+  const [collapsedPages, setCollapsedPages] = useState<Set<number>>(
+    () => new Set(),
+  );
 
   if (!objects.length) {
     return (
-      <div className="px-4 py-4 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">No added objects yet</p>
-        <p className="mt-1 leading-relaxed">
-          Text boxes, images, shapes, comments, and other added elements will
-          appear here. Lock an object to prevent accidental edits.
-        </p>
-      </div>
+      <EmptyStateMessage
+        icon={Layers2}
+        title="No objects yet"
+        description="Text, images, shapes, and other added elements will appear here."
+      />
     );
   }
 
-  let lastPage = -1;
   return (
     <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-2">
       <div className="mb-2 flex items-center justify-between px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -334,75 +770,115 @@ function ObjectsPanel() {
         <span>Lock to protect</span>
       </div>
       <div className="flex flex-col gap-1">
-        {objects.map(({ page, ann }) => {
-          const selected = app.selected?.page === page && app.selected.id === ann.id;
-          const showPage = page !== lastPage;
-          lastPage = page;
-          const label = annotationObjectLabel(ann);
-          const kind = OBJECT_KIND_LABEL[ann.kind];
+        {pageGroups.map(({ page, objects: pageObjects }) => {
+          const collapsed = collapsedPages.has(page);
+          const contentId = `objects-page-${page + 1}`;
           return (
-            <Fragment key={ann.id}>
-              {showPage && (
-                <div className="px-1 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground first:pt-0">
+            <section key={page} className="first:[&>button]:mt-0">
+              <button
+                type="button"
+                aria-controls={contentId}
+                aria-expanded={!collapsed}
+                aria-label={`${collapsed ? "Expand" : "Collapse"} page ${page + 1} objects`}
+                className="mt-1 flex w-full items-center gap-1 rounded-md px-1 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
+                onClick={() => {
+                  setCollapsedPages((current) => {
+                    const next = new Set(current);
+                    if (next.has(page)) next.delete(page);
+                    else next.add(page);
+                    return next;
+                  });
+                }}
+              >
+                {collapsed ? (
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 truncate">
                   Page {page + 1}
                   {page === app.currentPage ? " · Current" : ""}
+                </span>
+                <span className="shrink-0 font-normal normal-case">
+                  {pageObjects.length}
+                </span>
+              </button>
+              {!collapsed && (
+                <div id={contentId} className="flex flex-col gap-1">
+                  {pageObjects.map((ann) => {
+                    const selected =
+                      app.selected?.page === page && app.selected.id === ann.id;
+                    const label = annotationObjectLabel(ann);
+                    const kind = OBJECT_KIND_LABEL[ann.kind];
+                    const secondaryLabel = annotationObjectSecondaryLabel(
+                      label,
+                      kind,
+                      ann.locked,
+                    );
+                    return (
+                      <div
+                        key={`${page}:${ann.id}`}
+                        className={cn(
+                          "group flex items-center gap-2 rounded-md border px-2 py-1.5 transition-colors",
+                          selected
+                            ? "border-primary/50 bg-primary/10"
+                            : "border-transparent hover:border-sidebar-border hover:bg-accent/60",
+                          ann.locked && "bg-muted/40",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          aria-label={`Select ${kind}: ${label}`}
+                          onClick={() => {
+                            app.scrollToPage(page);
+                            app.setMultiSelected(null);
+                            app.setSelected({ page, id: ann.id });
+                            if (app.isMobile) app.setSidebarOpen(false);
+                          }}
+                        >
+                          <span className="block truncate text-xs font-medium">
+                            {label}
+                          </span>
+                          {secondaryLabel && (
+                            <span className="block truncate text-[10px] text-muted-foreground">
+                              {secondaryLabel}
+                            </span>
+                          )}
+                        </button>
+                        <Tip label={ann.locked ? "Unlock object" : "Lock object"}>
+                          <button
+                            type="button"
+                            aria-label={`${ann.locked ? "Unlock" : "Lock"} ${label}`}
+                            aria-pressed={!!ann.locked}
+                            className={cn(
+                              "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
+                              ann.locked
+                                ? "bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
+                                : "text-muted-foreground opacity-70 hover:bg-background hover:text-foreground group-hover:opacity-100",
+                            )}
+                            onClick={() => {
+                              app.updateAnnotation(page, {
+                                ...ann,
+                                locked: ann.locked ? undefined : true,
+                              });
+                              app.setMultiSelected(null);
+                              app.setSelected({ page, id: ann.id });
+                            }}
+                          >
+                            {ann.locked ? (
+                              <Lock className="h-3.5 w-3.5" />
+                            ) : (
+                              <LockOpen className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        </Tip>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-              <div
-                className={cn(
-                  "group flex items-center gap-2 rounded-md border px-2 py-1.5 transition-colors",
-                  selected
-                    ? "border-primary/50 bg-primary/10"
-                    : "border-transparent hover:border-sidebar-border hover:bg-accent/60",
-                  ann.locked && "bg-muted/40",
-                )}
-              >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 text-left"
-                  aria-label={`Select ${kind}: ${label}`}
-                  onClick={() => {
-                    app.scrollToPage(page);
-                    app.setMultiSelected(null);
-                    app.setSelected({ page, id: ann.id });
-                    if (app.isMobile) app.setSidebarOpen(false);
-                  }}
-                >
-                  <span className="block truncate text-xs font-medium">{label}</span>
-                  <span className="block truncate text-[10px] text-muted-foreground">
-                    {kind}
-                    {ann.locked ? " · Locked" : ""}
-                  </span>
-                </button>
-                <Tip label={ann.locked ? "Unlock object" : "Lock object"}>
-                  <button
-                    type="button"
-                    aria-label={`${ann.locked ? "Unlock" : "Lock"} ${label}`}
-                    aria-pressed={!!ann.locked}
-                    className={cn(
-                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
-                      ann.locked
-                        ? "bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
-                        : "text-muted-foreground opacity-70 hover:bg-background hover:text-foreground group-hover:opacity-100",
-                    )}
-                    onClick={() => {
-                      app.updateAnnotation(page, {
-                        ...ann,
-                        locked: ann.locked ? undefined : true,
-                      });
-                      app.setMultiSelected(null);
-                      app.setSelected({ page, id: ann.id });
-                    }}
-                  >
-                    {ann.locked ? (
-                      <Lock className="h-3.5 w-3.5" />
-                    ) : (
-                      <LockOpen className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </Tip>
-              </div>
-            </Fragment>
+            </section>
           );
         })}
       </div>
@@ -739,122 +1215,6 @@ function RecentRow({ r }: { r: RecentFile }) {
       )}
     </div>
   );
-}
-
-type SidebarTab =
-  | "pages"
-  | "outline"
-  | "comments"
-  | "attachments"
-  | "signatures"
-  | "layers"
-  | "objects"
-  | "form"
-  | "recent";
-
-const MORE_TABS: Array<{
-  key: Exclude<SidebarTab, "pages" | "outline" | "recent">;
-  label: string;
-  icon: LucideIcon;
-}> = [
-  { key: "comments", label: "Comments", icon: MessageSquare },
-  { key: "attachments", label: "Attachments", icon: Paperclip },
-  { key: "signatures", label: "Signatures", icon: FileSignature },
-  { key: "layers", label: "Layers", icon: Layers },
-  { key: "objects", label: "Objects", icon: Boxes },
-  { key: "form", label: "Form builder", icon: FormInput },
-];
-
-/** Overflow menu collecting the less-frequent panels (Outline, Comments,
- *  Attachments, Form) behind one trigger so the tab row stays uncluttered.
- *  The trigger reflects the active hidden panel when one is selected. */
-function MoreTabsMenu({
-  activeTab,
-  setTab,
-}: {
-  activeTab: SidebarTab;
-  setTab: (t: SidebarTab) => void;
-}) {
-  const app = useAppSelector(
-    (s) => ({ formBuilder: s.formBuilder, setFormBuilder: s.setFormBuilder }),
-    shallowEqual,
-  );
-  const active = MORE_TABS.find((t) => t.key === activeTab);
-  const TriggerIcon = active?.icon ?? MoreVertical;
-
-  const choose = (key: (typeof MORE_TABS)[number]["key"]) => {
-    setTab(key);
-    // The Form panel IS the builder — entering/leaving it toggles the mode.
-    if (key === "form") {
-      if (!app.formBuilder) app.setFormBuilder(true);
-    } else if (app.formBuilder) {
-      app.setFormBuilder(false);
-    }
-  };
-
-  return (
-    <Menu>
-      <Tip label={active ? active.label : "More panels"}>
-        <MenuTrigger
-          aria-label="More panels"
-          className={cn(
-            "flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium transition-colors",
-            active
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <TriggerIcon className="h-4 w-4" />
-          {active && <ChevronDown className="h-3 w-3 opacity-60" />}
-        </MenuTrigger>
-      </Tip>
-      <MenuContent align="end" className="min-w-40">
-        {MORE_TABS.map((t) => (
-          <MenuItem
-            key={t.key}
-            onClick={() => choose(t.key)}
-            className={cn(activeTab === t.key && "bg-accent/60")}
-          >
-            <t.icon className="h-4 w-4 text-muted-foreground" />
-            {t.label}
-            {activeTab === t.key && <Check className="ml-auto h-3.5 w-3.5" />}
-          </MenuItem>
-        ))}
-      </MenuContent>
-    </Menu>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-  iconOnly,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  iconOnly?: boolean;
-}) {
-  const button = (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md text-xs font-medium transition-colors",
-        iconOnly ? "h-7 w-7 justify-center" : "px-2.5 py-1",
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {icon}
-      {!iconOnly && label}
-    </button>
-  );
-  return iconOnly ? <Tip label={label}>{button}</Tip> : button;
 }
 
 function SectionToggle({
@@ -1196,9 +1556,12 @@ function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
         </div>
         <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
           {draft.length === 0 ? (
-            <p className="px-2 py-2 text-[11px] text-muted-foreground">
-              No entries. Use + above to add one for the current page.
-            </p>
+            <EmptyStateMessage
+              className="h-full min-h-32"
+              icon={FileText}
+              title="No outline entries"
+              description="Use + above to add an entry for the current page."
+            />
           ) : (
             <OutlineEditorTree nodes={draft} depth={0} onChange={(n) => setDraft(n)} />
           )}
@@ -1236,9 +1599,11 @@ function OutlinePanel({ pdf }: { pdf: PdfDoc }) {
         </Tip>
       </div>
       {!outline.length ? (
-        <p className="px-4 py-1 text-xs text-muted-foreground">
-          This document has no outline. Use Edit to create one.
-        </p>
+        <EmptyStateMessage
+          icon={FileText}
+          title="No outline yet"
+          description="Use Edit to add navigation entries for this document."
+        />
       ) : (
         <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 py-1">
           <OutlineTree
@@ -1479,10 +1844,12 @@ function AttachmentsPanel() {
         {list === null ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>
         ) : list.length === 0 ? (
-          <p className="px-2 py-2 text-[11px] text-muted-foreground">
-            No embedded files. Use + above to attach one — it travels inside the
-            saved PDF.
-          </p>
+          <EmptyStateMessage
+            className="h-full"
+            icon={Paperclip}
+            title="No attachments"
+            description="Use + above to embed a file in the saved PDF."
+          />
         ) : (
           <div className="flex flex-col gap-0.5">
             {list.map((att) => (
@@ -1603,10 +1970,12 @@ function LayersPanel() {
         {layers === null ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>
         ) : layers.length === 0 ? (
-          <p className="px-2 py-2 text-[11px] text-muted-foreground">
-            No layers in this document. Layers (optional content groups) are
-            typically found in CAD exports and print-production PDFs.
-          </p>
+          <EmptyStateMessage
+            className="h-full"
+            icon={Layers}
+            title="No document layers"
+            description="Layers are usually found in CAD exports and print-production PDFs."
+          />
         ) : (
           <div className="flex flex-col gap-0.5">
             {layers.map((l) => (
@@ -1702,11 +2071,12 @@ function SignaturesPanel() {
         {list === null ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">Verifying…</p>
         ) : list.length === 0 ? (
-          <p className="px-2 py-2 text-[11px] text-muted-foreground">
-            No digital signatures. Use + above to sign with a certificate
-            (.p12/.pfx) — unlike a drawn signature, it proves the document
-            hasn't changed since signing.
-          </p>
+          <EmptyStateMessage
+            className="h-full"
+            icon={ShieldCheck}
+            title="No digital signatures"
+            description="Use + above to sign with a .p12 or .pfx certificate."
+          />
         ) : (
           <div className="flex flex-col gap-1.5">
             {list.map((sig, i) => (

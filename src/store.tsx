@@ -95,6 +95,8 @@ const API_KEY_SESSION_KEY = "pickpdf-api-key-session";
 const SIGNATURES_KEY = "pickpdf-signatures";
 const THEME_KEY = "pickpdf-theme";
 const ACCENT_KEY = "pickpdf-accent";
+const SIDEBAR_OPEN_KEY = "pickpdf-sidebar-open";
+const AI_OPEN_KEY = "pickpdf-ai-open";
 
 export interface PendingStamp {
   dataUrl: string;
@@ -850,6 +852,13 @@ function loadJson<T>(key: string, fallback: T): T {
   }
 }
 
+function loadBooleanPreference(key: string, fallback: boolean): boolean {
+  const stored = localStorage.getItem(key);
+  if (stored === "1") return true;
+  if (stored === "0") return false;
+  return fallback;
+}
+
 /**
  * THE document-integrity gate: any unsaved change, overlay OR byte-level.
  * Byte-level commits (page ops, OCR, in-place text edits, redactions…) clear
@@ -1246,16 +1255,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeMatch, setActiveMatch] = useState(0);
   const [searchError, setSearchError] = useState<string | null>(null);
 
-  // AI panel opens by default on desktop, stays closed on mobile.
+  // Panel visibility follows the user's last choice. First-time users still
+  // get the viewport-aware defaults: open on desktop and closed on mobile.
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 1024,
   );
-  const [aiOpen, setAiOpen] = useState(
-    () => typeof window === "undefined" || window.innerWidth >= 1024,
+  const [aiOpen, setAiOpenState] = useState(() =>
+    loadBooleanPreference(
+      AI_OPEN_KEY,
+      typeof window === "undefined" || window.innerWidth >= 1024,
+    ),
   );
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => typeof window !== "undefined" && window.innerWidth >= 1024,
+  const setAiOpen = useCallback((v: boolean) => {
+    setAiOpenState(v);
+    localStorage.setItem(AI_OPEN_KEY, v ? "1" : "0");
+  }, []);
+  const [sidebarOpen, setSidebarOpenState] = useState(() =>
+    loadBooleanPreference(
+      SIDEBAR_OPEN_KEY,
+      typeof window !== "undefined" && window.innerWidth >= 1024,
+    ),
   );
+  const setSidebarOpen = useCallback((v: boolean) => {
+    setSidebarOpenState(v);
+    localStorage.setItem(SIDEBAR_OPEN_KEY, v ? "1" : "0");
+  }, []);
 
   const [aiAsk, setAiAsk] = useState<{ id: string; prompt: string } | null>(null);
   const askAi = useCallback(
@@ -1274,7 +1298,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setIsMobile(w < 1024);
       // Crossing from desktop into the mobile breakpoint auto-closes the left
       // sidebar so the page keeps its room; it can still be reopened manually.
-      if (w < 1024 && prevWidth >= 1024) setSidebarOpen(false);
+      if (w < 1024 && prevWidth >= 1024) setSidebarOpenState(false);
       prevWidth = w;
     };
     window.addEventListener("resize", onResize);

@@ -34,7 +34,7 @@ import { UpdateNotifier } from "./components/layout/UpdateNotifier";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DropZone } from "./components/layout/DropZone";
 import { CommandPalette } from "./components/command/CommandPalette";
-import { Viewer } from "./components/viewer/Viewer";
+import { Viewer, WelcomeScreen } from "./components/viewer/Viewer";
 import { ReaderPane } from "./components/viewer/ReaderPane";
 import { EditorToolbar } from "./components/viewer/Toolbar";
 import { SignatureModal } from "./components/viewer/SignatureModal";
@@ -64,6 +64,7 @@ import { ChromeExtensionBridge } from "./components/ChromeExtensionBridge";
 
 const SCREEN_TITLES: Record<string, string> = {
   viewer: "Viewer & Editor",
+  welcome: "Welcome",
   templates: "New from template",
   settings: "Settings",
   ...Object.fromEntries(
@@ -362,7 +363,7 @@ function ContentHeader() {
   // Other screens (and viewer with nothing open): plain title header.
   return (
     <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 rounded-tl-lg border-b bg-background/95 px-4 backdrop-blur">
-      {app.screen !== "viewer" && (
+      {app.screen !== "viewer" && app.screen !== "welcome" && (
         <button
           onClick={() => app.setScreen("viewer")}
           className="-ml-1 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -371,7 +372,7 @@ function ContentHeader() {
           <ArrowLeft className="h-4 w-4" />
         </button>
       )}
-      {app.screen === "viewer" ? (
+      {app.screen === "viewer" || app.screen === "welcome" ? (
         <>
           <button
             className="-ml-2 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -413,7 +414,7 @@ function ContentHeader() {
           {SCREEN_TITLES[app.screen]}
         </span>
       )}
-      {app.screen !== "viewer" && (
+      {app.screen !== "viewer" && app.screen !== "welcome" && (
         <div
           id={TOOL_HEADER_ACTIONS_ID}
           data-testid={TOOL_HEADER_ACTIONS_ID}
@@ -527,6 +528,7 @@ function Shell() {
               ) : (
                 <Viewer key={app.activeTabId ?? "empty"} />
               ))}
+            {app.screen === "welcome" && <WelcomeScreen />}
             {app.screen === "templates" && <TemplatesScreen />}
             {app.screen === "organize" && <OrganizeScreen />}
             {app.screen === "createimages" && <ImagesToPdfScreen />}

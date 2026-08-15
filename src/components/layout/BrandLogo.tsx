@@ -4,6 +4,8 @@ type BrandLogoProps = {
   className?: string;
   imageClassName?: string;
   markClassName?: string;
+  showMark?: boolean;
+  showWordmark?: boolean;
   variant?: "inline" | "asset";
   wordmarkClassName?: string;
 };
@@ -12,6 +14,8 @@ export function BrandLogo({
   className,
   imageClassName,
   markClassName,
+  showMark = true,
+  showWordmark = true,
   variant = "inline",
   wordmarkClassName,
 }: BrandLogoProps) {
@@ -49,29 +53,33 @@ export function BrandLogo({
 
   return (
     <div className={cn("flex items-center gap-2", className)} aria-label="PickPDF">
-      <span className={markWrapperCls} aria-hidden="true">
-        <img
-          src="/pickpdf-mark-light.svg"
-          alt=""
-          className={cn(markCls, "dark:hidden")}
-        />
-        <img
-          src="/pickpdf-mark.svg"
-          alt=""
-          className={cn(markCls, "hidden dark:block")}
-        />
-      </span>
-      <span
-        style={{
-          fontFamily: '"Dongle", Inter, ui-sans-serif, system-ui, sans-serif',
-        }}
-        className={cn(
-          "whitespace-nowrap text-[1.35rem] font-bold leading-[0.72] text-foreground",
-          wordmarkClassName,
-        )}
-      >
-        Pick<span className="font-bold text-[#ff5a52]">PDF</span>
-      </span>
+      {showMark && (
+        <span className={markWrapperCls} aria-hidden="true">
+          <img
+            src="/pickpdf-mark-light.svg"
+            alt=""
+            className={cn(markCls, "dark:hidden")}
+          />
+          <img
+            src="/pickpdf-mark.svg"
+            alt=""
+            className={cn(markCls, "hidden dark:block")}
+          />
+        </span>
+      )}
+      {showWordmark && (
+        <span
+          style={{
+            fontFamily: '"Dongle", Inter, ui-sans-serif, system-ui, sans-serif',
+          }}
+          className={cn(
+            "whitespace-nowrap text-[1.35rem] font-bold leading-[0.72] text-foreground",
+            wordmarkClassName,
+          )}
+        >
+          Pick<span className="font-bold text-[#ff5a52]">PDF</span>
+        </span>
+      )}
     </div>
   );
 }

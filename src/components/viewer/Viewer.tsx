@@ -507,7 +507,7 @@ function ViewerImpl() {
     return () => window.removeEventListener("keydown", onKey);
   }, [app]);
 
-  if (!pdf) return <EmptyState />;
+  if (!pdf) return <WelcomeScreen />;
 
   // Pan tool: drag the scroll surface. Ignored on interactive descendants so
   // it never fights the pointer with a control the user meant to click.
@@ -650,7 +650,7 @@ function StartAction({
 // Welcome screen shown when no document is open — a VS Code-style landing with a
 // "Start" column (open / create), a "Recent" list, and the tools as a
 // walkthrough-like column. A PDF can still be dropped anywhere on the page.
-function EmptyState() {
+export function WelcomeScreen() {
   const app = useAppSelector(
     (s) => ({
       openFile: s.openFile,
