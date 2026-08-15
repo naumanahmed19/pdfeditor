@@ -166,3 +166,12 @@ export const TOOL_BY_SCREEN = Object.fromEntries(
 export const FILE_SCOPED_TOOL_SCREENS = new Set<Screen>(
   CURRENT_PDF_TOOLS.map((tool) => tool.screen),
 );
+
+export function matchesToolSearch(
+  query: string,
+  fields: ReadonlyArray<string | undefined>,
+): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return fields.some((field) => field?.toLowerCase().includes(normalizedQuery));
+}

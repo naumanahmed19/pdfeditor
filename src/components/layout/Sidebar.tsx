@@ -10,6 +10,7 @@ import {
   EyeOff,
   Files,
   FileText,
+  FileSignature,
   Folder,
   FolderOpen,
   FormInput,
@@ -27,6 +28,7 @@ import {
   PencilRuler,
   Plus,
   ScanText,
+  Search,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -49,6 +51,7 @@ import type { Annotation, FolderNode, NoteAnnotation, OutlineNode } from "../../
 import { FormBuilderSidebar } from "../form/FormBuilderPanel";
 import { Button } from "../ui/button";
 import { EmptyStateMessage } from "../ui/empty-state-message";
+import { Input } from "../ui/input";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
@@ -57,6 +60,7 @@ import { TOOL_SIDEBAR_CONTENT_ID } from "../tools/ToolFileSidebar";
 import {
   CURRENT_PDF_TOOLS,
   GENERAL_TOOLS,
+  matchesToolSearch,
   type ToolScreen,
 } from "../tools/toolRegistry";
 import { ActivityBar, type ActivityBarItem } from "./ActivityBar";
@@ -474,14 +478,18 @@ function ToolsPanel({
 }: {
   onSelectScreen: (screen: ToolScreen) => void;
 }) {
+  const [query, setQuery] = useState("");
   const app = useAppSelector(
     (s) => ({
       applyBytesOp: s.applyBytesOp,
+      activeProtected: s.activeProtected,
       isMobile: s.isMobile,
       ocrBusy: s.ocrBusy,
       pdf: s.pdf,
       requestConfirm: s.requestConfirm,
       runOcrText: s.runOcrText,
+      setSecurityModalOpen: s.setSecurityModalOpen,
+      setSignModalOpen: s.setSignModalOpen,
       setSidebarOpen: s.setSidebarOpen,
     }),
     shallowEqual,
@@ -507,45 +515,149 @@ function ToolsPanel({
     if (app.isMobile) app.setSidebarOpen(false);
   };
 
-  return (
-    <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto p-2">
-      <ToolTileGroup label="Current PDF">
-        {CURRENT_PDF_TOOLS.map((tool) => (
-          <ToolTile
-            key={tool.screen}
-            icon={tool.icon}
-            title={tool.title}
-            description={tool.description}
-            onClick={() => selectScreen(tool.screen)}
-          />
-        ))}
-        <ToolTile
-          icon={ScanText}
-          title="Make searchable"
-          description="Add a searchable text layer to scanned pages."
-          disabled={!app.pdf || app.ocrBusy}
-          onClick={() => void app.runOcrText()}
-        />
-        <ToolTile
-          icon={Layers2}
-          title="Flatten document"
-          description="Bake annotations and form fields into page content."
-          disabled={!app.pdf}
-          onClick={() => void flattenDocument()}
-        />
-      </ToolTileGroup>
+  const matchesDefinition = (tool: (typeof CURRENT_PDF_TOOLS)[number]) =>
+    matchesToolSearch(query, [
+      tool.title,
+      tool.commandLabel,
+      tool.menuLabel,
+      tool.description,
+      ...(tool.aliases ?? []),
+    ]);
+  const visibleCurrentTools = CURRENT_PDF_TOOLS.filter(matchesDefinition);
+  const visibleGeneralTools = GENERAL_TOOLS.filter(matchesDefinition);
+  const showOcr = matchesToolSearch(query, [
+    "Make searchable",
+    "Add a searchable text layer to scanned pages",
+    "OCR",
+    "scan",
+  ]);
+  const showFlatten = matchesToolSearch(query, [
+    "Flatten document",
+    "Bake annotations and form fields into page content",
+    "annotations",
+    "forms",
+  ]);
+  const showSecurity = matchesToolSearch(query, [
+    app.activeProtected ? "Document security" : "Protect document",
+    "Add, review, change, or remove PDF password protection",
+    "password",
+    "permissions",
+    "encrypt",
+    "unlock",
+  ]);
+  const showCertificateSigning = matchesToolSearch(query, [
+    "Sign with certificate",
+    "Digitally sign this PDF with a P12 or PFX certificate",
+    "digital signature",
+    "certificate",
+    "p12",
+    "pfx",
+  ]);
+  const hasResults =
+    visibleCurrentTools.length > 0 ||
+    visibleGeneralTools.length > 0 ||
+    showOcr ||
+    showFlatten ||
+    showSecurity ||
+    showCertificateSigning;
 
-      <ToolTileGroup label="General tools">
-        {GENERAL_TOOLS.map((tool) => (
-          <ToolTile
-            key={tool.screen}
-            icon={tool.icon}
-            title={tool.title}
-            description={tool.description}
-            onClick={() => selectScreen(tool.screen)}
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 px-3 pb-2 pt-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search tools"
+            aria-label="Search tools"
+            className="h-8 bg-background pl-8 text-xs"
           />
-        ))}
-      </ToolTileGroup>
+        </div>
+      </div>
+
+      <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {!hasResults ? (
+          <EmptyStateMessage
+            icon={Search}
+            title="No tools found"
+            description={`No tools match “${query.trim()}”.`}
+            className="min-h-56"
+          />
+        ) : (
+          <>
+            {(visibleCurrentTools.length > 0 ||
+              showOcr ||
+              showFlatten ||
+              showSecurity ||
+              showCertificateSigning) && (
+              <ToolTileGroup label="Current PDF">
+                {visibleCurrentTools.map((tool) => (
+                  <ToolTile
+                    key={tool.screen}
+                    icon={tool.icon}
+                    title={tool.title}
+                    description={tool.description}
+                    onClick={() => selectScreen(tool.screen)}
+                  />
+                ))}
+                {showOcr && (
+                  <ToolTile
+                    icon={ScanText}
+                    title="Make searchable"
+                    description="Add a searchable text layer to scanned pages."
+                    disabled={!app.pdf || app.ocrBusy}
+                    onClick={() => void app.runOcrText()}
+                  />
+                )}
+                {showFlatten && (
+                  <ToolTile
+                    icon={Layers2}
+                    title="Flatten document"
+                    description="Bake annotations and form fields into page content."
+                    disabled={!app.pdf}
+                    onClick={() => void flattenDocument()}
+                  />
+                )}
+                {showSecurity && (
+                  <ToolTile
+                    icon={app.activeProtected ? LockOpen : Lock}
+                    title={
+                      app.activeProtected ? "Document security" : "Protect document"
+                    }
+                    description="Add, review, change, or remove PDF password protection."
+                    disabled={!app.pdf}
+                    onClick={() => app.setSecurityModalOpen(true)}
+                  />
+                )}
+                {showCertificateSigning && (
+                  <ToolTile
+                    icon={FileSignature}
+                    title="Sign with certificate"
+                    description="Digitally sign this PDF with a .p12 or .pfx certificate."
+                    disabled={!app.pdf}
+                    onClick={() => app.setSignModalOpen(true)}
+                  />
+                )}
+              </ToolTileGroup>
+            )}
+
+            {visibleGeneralTools.length > 0 && (
+              <ToolTileGroup label="General tools">
+                {visibleGeneralTools.map((tool) => (
+                  <ToolTile
+                    key={tool.screen}
+                    icon={tool.icon}
+                    title={tool.title}
+                    description={tool.description}
+                    onClick={() => selectScreen(tool.screen)}
+                  />
+                ))}
+              </ToolTileGroup>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
