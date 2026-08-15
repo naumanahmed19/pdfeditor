@@ -26,6 +26,7 @@ import {
   Pencil,
   Plus,
   ScanText,
+  Settings,
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
@@ -228,6 +229,28 @@ function SidebarImpl() {
     </Tip>
   );
 
+  const activityFooter = (
+    <div className="flex flex-col items-center gap-0.5">
+      <Tip label="Settings" side="right">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Settings"
+          data-active={app.screen === "settings" || undefined}
+          className={cn(
+            "h-9 w-9 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            app.screen === "settings" &&
+              "bg-[#ff5a52]/10 text-[#df4942] hover:bg-[#ff5a52]/15 hover:text-[#df4942] dark:bg-[#ff5a52]/15 dark:text-[#ff746d] dark:hover:bg-[#ff5a52]/20 dark:hover:text-[#ff746d]",
+          )}
+          onClick={() => app.setScreen("settings")}
+        >
+          <Settings className="h-[18px] w-[18px]" />
+        </Button>
+      </Tip>
+      {sidebarToggle}
+    </div>
+  );
+
   return (
     <aside
       className={cn(
@@ -244,7 +267,7 @@ function SidebarImpl() {
           activeItem={toolTab}
           panelOpen={app.sidebarOpen}
           onSelect={selectToolActivity}
-          footer={sidebarToggle}
+          footer={activityFooter}
         />
       ) : (
         <ActivityBar
@@ -252,7 +275,7 @@ function SidebarImpl() {
           activeItem={activeActivityTab}
           panelOpen={app.sidebarOpen}
           onSelect={selectActivity}
-          footer={sidebarToggle}
+          footer={activityFooter}
         />
       )}
 

@@ -17,7 +17,6 @@ import {
   Printer,
   Save,
   Search,
-  Settings,
   SlidersHorizontal,
   SquarePen,
   Regex,
@@ -757,21 +756,6 @@ function TitleBarImpl() {
           <Bot className="h-4 w-4" />
         </Button>
       </Tip>
-      <Tip label="Settings">
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn(
-            "h-7 w-7",
-            app.screen === "settings" && "bg-background text-foreground shadow-sm hover:bg-background",
-          )}
-          aria-label="Settings"
-          onClick={() => app.setScreen("settings")}
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-      </Tip>
-
       {/* Frameless-window controls — desktop shell only */}
       {isTauri && !isTauriMacOS && <WindowControls />}
 
