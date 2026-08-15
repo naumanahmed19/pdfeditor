@@ -71,7 +71,7 @@ type SidebarTab =
   | "tools"
   | "recent";
 
-type ToolSidebarTab = "files" | "tools";
+type ToolSidebarTab = "recent" | "files" | "tools";
 
 const SIDEBAR_ACTIVITIES = [
   { key: "recent", label: "Recent", icon: History },
@@ -83,7 +83,8 @@ const SIDEBAR_ACTIVITIES = [
   { key: "tools", label: "Tools", icon: Wrench },
 ] satisfies readonly ActivityBarItem<SidebarTab>[];
 
-const TOOL_SIDEBAR_ACTIVITIES = [
+export const TOOL_SIDEBAR_ACTIVITIES = [
+  { key: "recent", label: "Recent", icon: History },
   { key: "files", label: "Files", icon: Files },
   { key: "tools", label: "Tools", icon: Wrench },
 ] satisfies readonly ActivityBarItem<ToolSidebarTab>[];
@@ -203,6 +204,7 @@ function SidebarImpl() {
       return;
     }
     setToolTab(next);
+    if (next === "recent") setTab("recent");
     app.setSidebarOpen(true);
   };
 
@@ -269,6 +271,11 @@ function SidebarImpl() {
               <>
                 <SidebarPanelHeader>Tools</SidebarPanelHeader>
                 <ToolsPanel onSelectScreen={openTool} />
+              </>
+            ) : toolTab === "recent" ? (
+              <>
+                <SidebarPanelHeader>Recent</SidebarPanelHeader>
+                <RecentList />
               </>
             ) : (
               <div
